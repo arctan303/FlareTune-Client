@@ -204,6 +204,56 @@ class ClientUiTest {
         rule.onNodeWithTag("home_page").assertExists()
     }
 
+    @Test fun translationSwitchAndGenerationRemainSeparateAndMiniPlayerObeysSwitch() {
+        val state = mutableStateOf(
+            fixture().copy(
+                lyricState = LyricState(
+                    songId = songs[0].id,
+                    status = LyricStatus.READY,
+                    lines = listOf(LyricLine("Hello world", translation = "你好世界", timeSeconds = 0.0)),
+                    activeLyricIndex = 0,
+                    translationState = LyricTranslationStatus.IDLE,
+                    translationSupported = true,
+                ),
+                translationEnabled = false,
+            ),
+        )
+        actions.onSetTranslationEnabled = { enabled -> state.value = state.value.copy(translationEnabled = enabled) }
+        val loader = fixtureLoader()
+        rule.setContent { FlareTuneTheme { ClientApp(state.value, actions, loader) } }
+
+        // Mini player hides translation while translationEnabled == false.
+        rule.onNodeWithTag("mini_player").assertIsDisplayed()
+        rule.onAllNodesWithText("你好世界").assertCountEquals(0)
+
+        // Open full player, toggle display via shared action without triggering generation.
+        rule.onNodeWithTag("mini_player").performClick()
+        rule.onNodeWithTag("player_lyrics_toggle").performScrollTo().performClick()
+        rule.onAllNodesWithText("你好世界").assertCountEquals(0)
+        rule.onNodeWithTag("player_translate_button").performClick()
+        rule.runOnIdle {
+            assertEquals(true, actions.lastTranslationEnabled)
+            assertEquals(0, actions.lyricTranslationRequests)
+        }
+        rule.onNodeWithText("你好世界").assertIsDisplayed()
+
+        // Generate button invokes requestLyricTranslation independently.
+        rule.onNodeWithTag("player_generate_translation").performClick()
+        rule.runOnIdle { assertEquals(1, actions.lyricTranslationRequests) }
+
+        // Close full player; mini player now reflects translationEnabled == true.
+        rule.onNodeWithTag("player_close").performClick()
+        rule.onNodeWithText("你好世界").assertIsDisplayed()
+    }
+
+    @Test fun queuePanelTriggersRemoveQueueItemAction() {
+        render(fixture())
+        rule.onNodeWithTag("mini_player").performClick()
+        rule.onNodeWithTag("open_queue").performScrollTo().performClick()
+        rule.onNodeWithTag("queue_item_0").performTouchInput { swipeLeft() }
+        rule.runOnIdle { assertEquals(listOf(0), actions.removedQueueIndices) }
+    }
+
     private fun fixtureLoader(): coil.ImageLoader {
         val palettes = listOf(0xFF174C59.toInt(), 0xFF614676.toInt(), 0xFFAF7047.toInt(),
             0xFF335B72.toInt(), 0xFF9D3F54.toInt(), 0xFF8D7D48.toInt())
@@ -258,6 +308,10 @@ private class RecordingActions : ClientActions {
     var seekPosition = -1L
     var lastVolume = -1f
     var queueIndex = -1
+    val removedQueueIndices = mutableListOf<Int>()
+    val movedQueuePairs = mutableListOf<Pair<Int, Int>>()
+    var lastTranslationEnabled: Boolean? = null
+    var lyricTranslationRequests = 0
     var passwordChanges = 0
     var tab = LibraryTab.CATALOG
     var destination = MainDestination.HOME
@@ -266,6 +320,7 @@ private class RecordingActions : ClientActions {
     var onAlbum: (Album) -> Unit = {}
     var onCloseAlbum: () -> Unit = {}
     var onVolume: (Float) -> Unit = {}
+    var onSetTranslationEnabled: (Boolean) -> Unit = {}
     override fun navigate(destination: MainDestination) { this.destination = destination; onNavigate(destination) }
     override fun loadMoreAlbums() {}
     override fun openAlbum(album: Album) { this.album = album; onAlbum(album) }
@@ -287,4 +342,8 @@ private class RecordingActions : ClientActions {
     override fun cycleRepeat() {}
     override fun selectQueueItem(index: Int) { queueIndex = index }
     override fun retryPlayback() {}
+    override fun removeQueueItem(index: Int) { removedQueueIndices += index }
+    override fun moveQueueItem(fromIndex: Int, toIndex: Int) { movedQueuePairs += fromIndex to toIndex }
+    override fun setTranslationEnabled(enabled: Boolean) { lastTranslationEnabled = enabled; onSetTranslationEnabled(enabled) }
+    override fun requestLyricTranslation() { lyricTranslationRequests++ }
 }

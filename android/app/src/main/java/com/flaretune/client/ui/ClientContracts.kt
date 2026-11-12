@@ -1,10 +1,7 @@
 package com.flaretune.client.ui
 
-import com.flaretune.client.model.ClientNotice
-import com.flaretune.client.model.Album
-import com.flaretune.client.model.Song
-import com.flaretune.client.model.PlaylistSummary
-import com.flaretune.client.model.LyricState
+import com.flaretune.client.model.*
+import com.flaretune.client.data.SearchEntity
 
 enum class ClientScreen { RESTORING, CONNECT, CHANGE_PASSWORD, LIBRARY }
 enum class LibraryTab { CATALOG, FAVORITES, ALBUMS }
@@ -68,6 +65,57 @@ data class ClientUiState(
     val queueNotice: ClientNotice? = null,
     val songLanguage: String = "all",
     val albumLanguage: String = "all",
+    val favoriteSongIds: Set<String> = emptySet(),
+    val selectedPlaylistEntries: List<PlaylistSong> = emptyList(),
+    val playlistShelf: PlaylistShelf? = null,
+    val libraryMutationBusy: Boolean = false,
+    val libraryMutationNotice: ClientNotice? = null,
+    val libraryMutationConflict: Boolean = false,
+    val libraryMutationResults: List<PlaylistTargetResult> = emptyList(),
+    val libraryMutationVersion: Long = 0,
+    val pickerSongs: List<Song> = emptyList(),
+    val pickerQuery: String = "",
+    val pickerLoading: Boolean = false,
+    val pickerLoadingMore: Boolean = false,
+    val pickerHasMore: Boolean = false,
+    val pickerNotice: ClientNotice? = null,
+    val artists: List<Artist> = emptyList(),
+    val artistQuery: String = "",
+    val artistsLoading: Boolean = false,
+    val artistsLoadingMore: Boolean = false,
+    val artistsHasMore: Boolean = false,
+    val artistsNotice: ClientNotice? = null,
+    val selectedArtist: Artist? = null,
+    val artistSongs: List<Song> = emptyList(),
+    val artistLoading: Boolean = false,
+    val artistLoadingMore: Boolean = false,
+    val artistHasMore: Boolean = false,
+    val artistNotice: ClientNotice? = null,
+    val playStats: PlayStats? = null,
+    val statsLoading: Boolean = false,
+    val statsNotice: ClientNotice? = null,
+    val languageCounts: Map<String, Int> = emptyMap(),
+    val playHistoryPlayedAt: Map<String, Long> = emptyMap(),
+    val songSort: String = "desc",
+    val searchAlbums: List<Album> = emptyList(),
+    val albumSearchQuery: String = "",
+    val albumSearchLoading: Boolean = false,
+    val albumSearchLoadingMore: Boolean = false,
+    val albumSearchHasMore: Boolean = false,
+    val albumSearchNotice: ClientNotice? = null,
+    val artistAlbums: List<Album> = emptyList(),
+    val artistAlbumsLoading: Boolean = false,
+    val artistAlbumsLoadingMore: Boolean = false,
+    val artistAlbumsHasMore: Boolean = false,
+    val artistAlbumsNotice: ClientNotice? = null,
+    val discoverySongs: List<Song> = emptyList(),
+    val spotlightArtist: SpotlightArtist? = null,
+    val discoveryLoading: Boolean = false,
+    val discoveryNotice: ClientNotice? = null,
+    val recentSearches: List<SearchEntity> = emptyList(),
+    val recentSearchTerms: List<String> = emptyList(),
+    val searchHistoryNotice: ClientNotice? = null,
+
 ) {
     val activeLyricIndex: Int get() = lyricState.activeLyricIndex
 }
@@ -95,6 +143,44 @@ interface ClientActions {
     fun selectQueueItem(index: Int)
     fun retryPlayback()
 
+    fun dismissLibraryMutationNotice() {}
+    fun toggleFavorite(song: Song) {}
+    fun createPlaylist(name: String, description: String = "", songIds: List<String> = emptyList()) {}
+    fun updatePlaylist(playlist: PlaylistSummary, name: String, description: String) {}
+    fun deletePlaylist(playlist: PlaylistSummary) {}
+    fun addPlaylistSongs(playlistIds: List<String>, songIds: List<String>) {}
+    fun removePlaylistSongs(songIds: List<String>) {}
+    fun replacePlaylistOrder(songIds: List<String>) {}
+    fun movePlaylistShelf(fromIndex: Int, toIndex: Int) {}
+    fun replacePlaylistShelfOrder(ids: List<String>) {}
+    fun playSongs(songs: List<Song>, startIndex: Int = 0, shuffle: Boolean = false) {}
+    fun playPlaylist(playlist: PlaylistSummary, shuffle: Boolean = false) {}
+    fun playNext(song: Song) {}
+    fun enqueue(songs: List<Song>) {}
+    fun clearQueue() {}
+    fun removeHistory(songId: String) {}
+    fun clearHistory() {}
+    fun setPlaylistCover(playlist: PlaylistSummary, sourceUri: String) {}
+    fun clearPlaylistCover(playlist: PlaylistSummary) {}
+    fun searchPlaylistSongs(query: String) {}
+    fun loadMorePlaylistSongs() {}
+    fun closePlaylistSongPicker() {}
+    fun refreshArtists(query: String = "") {}
+    fun loadMoreArtists() {}
+    fun openArtist(artist: Artist) {}
+    fun closeArtist() {}
+    fun loadMoreArtistSongs() {}
+    fun refreshPlayStats() {}
+    fun searchAlbums(query: String) {}
+    fun loadMoreSearchAlbums() {}
+    fun loadMoreArtistAlbums() {}
+    fun selectSongSort(sort: String) {}
+    fun refreshDiscovery() {}
+    fun openRecentSearch(entry: SearchEntity) {}
+    fun removeRecentSearch(entry: SearchEntity) {}
+    fun clearRecentSearches() {}
+    fun removeRecentSearchTerm(term: String) {}
+    fun clearRecentSearchTerms() {}
     fun removeQueueItem(index: Int) {}
     fun moveQueueItem(fromIndex: Int, toIndex: Int) {}
     fun retryQueueRestore() {}

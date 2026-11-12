@@ -21,7 +21,7 @@ class MainActivity : ComponentActivity() {
         val factory = object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 @Suppress("UNCHECKED_CAST")
-                return ClientViewModel(app.connections, AndroidPlaybackGateway(app, app.playbackRuntime), history = app.history, queueRepository = app.queueRepository, translationPreferences = app.translationPreferences) as T
+                return ClientViewModel(app.connections, AndroidPlaybackGateway(app, app.playbackRuntime), history = app.history, queueRepository = app.queueRepository, translationPreferences = app.translationPreferences, coverImageProcessor = app.coverImageProcessor, searchHistoryStore = app.searchHistoryStore, discoveryCache = app.discoveryCache) as T
             }
         }
         model = ViewModelProvider(this, factory)[ClientViewModel::class.java]

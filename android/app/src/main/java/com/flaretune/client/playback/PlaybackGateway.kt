@@ -11,6 +11,12 @@ interface PlaybackGateway {
     val imageLoader: ImageLoader?
     suspend fun connect(connection: ActiveConnection)
     fun play(songs: List<Song>, index: Int)
+    fun play(songs: List<Song>, index: Int, shuffle: Boolean) {
+        play(songs, index)
+        if (state.value.shuffle != shuffle) toggleShuffle()
+    }
+    fun enqueue(songs: List<Song>, next: Boolean = false) {}
+    fun clearQueue() {}
     fun setVolume(volume: Float)
     fun togglePlay()
     fun next()

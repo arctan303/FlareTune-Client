@@ -7,6 +7,7 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -113,6 +114,7 @@ fun ClientApp(
     LaunchedEffect(state.screen, state.playback.current?.id) {
         if (state.screen != ClientScreen.LIBRARY || state.playback.current == null) panel = PlayerPanel.NONE
     }
+    ListeningInteractionHost(state, actions, imageLoader) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(Modifier.fillMaxSize()) {
             when (state.screen) {
@@ -132,23 +134,40 @@ fun ClientApp(
                     )
                 }
             }
-            BackHandler(enabled = state.screen == ClientScreen.LIBRARY && panel == PlayerPanel.NONE && state.selectedAlbum == null && state.selectedPlaylist == null && state.destination != MainDestination.HOME) { actions.navigate(MainDestination.HOME) }
+            BackHandler(enabled = state.screen == ClientScreen.LIBRARY && panel == PlayerPanel.NONE && state.selectedArtist == null && state.selectedAlbum == null && state.selectedPlaylist == null && state.destination != MainDestination.HOME) { actions.navigate(MainDestination.HOME) }
             BackHandler(enabled = state.screen == ClientScreen.LIBRARY && panel == PlayerPanel.NONE && state.selectedPlaylist != null) { actions.closePlaylist() }
             BackHandler(enabled = state.screen == ClientScreen.LIBRARY && panel == PlayerPanel.NONE && state.selectedAlbum != null) { actions.closeAlbum() }
+            BackHandler(enabled = state.screen == ClientScreen.LIBRARY && panel == PlayerPanel.NONE && state.selectedArtist != null) { actions.closeArtist() }
             if (state.screen == ClientScreen.LIBRARY && state.playback.current != null) {
-                BackHandler(enabled = panel == PlayerPanel.PLAYER) { panel = PlayerPanel.NONE }
+                var skipPlayerExitAnim by remember { mutableStateOf(false) }
+                LaunchedEffect(panel) {
+                    if (panel != PlayerPanel.NONE) skipPlayerExitAnim = false
+                }
+                BackHandler(enabled = panel == PlayerPanel.PLAYER) {
+                    skipPlayerExitAnim = false
+                    panel = PlayerPanel.NONE
+                }
                 AnimatedVisibility(
                     visible = panel != PlayerPanel.NONE,
                     enter = slideInVertically(tween(250, easing = LinearOutSlowInEasing)) { it } + fadeIn(tween(180)),
-                    exit = slideOutVertically(tween(300, easing = LinearOutSlowInEasing)) { it } + fadeOut(tween(240)),
+                    exit = if (skipPlayerExitAnim) {
+                        ExitTransition.None
+                    } else {
+                        slideOutVertically(tween(300, easing = LinearOutSlowInEasing)) { it } + fadeOut(tween(240))
+                    },
                 ) {
                     NowPlayingScreen(
                         state = state.playback,
                         lyricState = state.lyricState,
+                        translationEnabled = state.translationEnabled,
+                        translationNotice = state.translationNotice,
                         actions = actions,
                         imageLoader = imageLoader,
                         onQueue = { panel = PlayerPanel.QUEUE },
-                        onClose = { panel = PlayerPanel.NONE },
+                        onClose = {
+                            skipPlayerExitAnim = true
+                            panel = PlayerPanel.NONE
+                        },
                     )
                 }
                 if (panel == PlayerPanel.QUEUE) {
@@ -164,7 +183,15 @@ fun ClientApp(
                         sheetState = sheetState,
                         containerColor = MaterialTheme.colorScheme.surface,
                     ) {
-                        QueuePanel(state.playback, imageLoader, close = closeQueue) { index ->
+                        QueuePanel(
+                            state = state.playback,
+                            loader = imageLoader,
+                            close = closeQueue,
+                            queueNotice = state.queueNotice,
+                            onRetryRestore = actions::retryQueueRestore,
+                            onRemove = actions::removeQueueItem,
+                            onMove = actions::moveQueueItem,
+                        ) { index ->
                             actions.selectQueueItem(index)
                             closeQueue()
                         }
@@ -172,6 +199,7 @@ fun ClientApp(
                 }
             }
         }
+    }
     }
 }
 
@@ -357,12 +385,14 @@ internal fun SongRow(
     playing: Boolean,
     buffering: Boolean = false,
     modifier: Modifier = Modifier,
+    clickEnabled: Boolean = true,
     onClick: () -> Unit,
 ) {
+    val interaction = LocalListeningInteractions.current
     val status = stringResource(if (buffering) R.string.ft_buffering else if (playing) R.string.ft_playing else R.string.ft_paused)
     Row(
         modifier.fillMaxWidth().heightIn(min = 72.dp)
-            .clickable(onClick = onClick)
+            .clickable(enabled = clickEnabled, onClick = onClick)
             .then(if (current) Modifier.semantics { stateDescription = status } else Modifier)
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -389,6 +419,8 @@ internal fun SongRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        if (interaction != null) ActionIcon(ClientIcons.More, stringResource(R.string.ft_listening_song_actions),
+            { interaction.song(song) }, modifier = Modifier.testTag("song_more_" + song.id))
     }
 }
 
@@ -422,22 +454,26 @@ internal fun QueuePanel(
     state: PlaybackSnapshot,
     loader: ImageLoader?,
     close: () -> Unit,
+    queueNotice: ClientNotice? = null,
+    onRetryRestore: (() -> Unit)? = null,
     onRemove: ((Int) -> Unit)? = null,
     onMove: ((Int, Int) -> Unit)? = null,
     select: (Int) -> Unit,
 ) {
+    val listeningInteractions = LocalListeningInteractions.current
     val windowHeight = with(androidx.compose.ui.platform.LocalDensity.current) {
         androidx.compose.ui.platform.LocalWindowInfo.current.containerSize.height.toDp()
     }
     val sheetHeight = (windowHeight * 0.74f).coerceAtLeast(320.dp)
+    var draggedKey by remember { mutableStateOf<String?>(null) }
+    var dragStartIndex by remember { mutableIntStateOf(-1) }
+    var dragOffsetY by remember { mutableFloatStateOf(0f) }
     val entries = remember(state.queue) {
         mutableStateListOf<QueueEntry>().apply {
             state.queue.forEachIndexed { idx, song -> add(QueueEntry("$idx:${song.id}", song, idx)) }
         }
     }
     val listState = rememberLazyListState()
-    var draggedKey by remember { mutableStateOf<String?>(null) }
-    var dragOffsetY by remember { mutableFloatStateOf(0f) }
 
     // Prevent bottom overscroll deltas from leaking into ModalBottomSheet and causing sheet jitter.
     val absorbBottomOverscroll = remember {
@@ -465,7 +501,21 @@ internal fun QueuePanel(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            if (entries.isNotEmpty() && listeningInteractions != null) ActionIcon(ClientIcons.Trash,
+                stringResource(R.string.ft_listening_clear_queue), listeningInteractions.clearQueue, modifier = Modifier.testTag("queue_clear"))
             ActionIcon(ClientIcons.Close, stringResource(R.string.ft_close), close)
+        }
+        queueNotice?.let { notice ->
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Notice(notice, Modifier.weight(1f))
+                if (entries.isEmpty() && onRetryRestore != null) {
+                    TextButton(onClick = onRetryRestore) { Text(stringResource(R.string.ft_retry)) }
+                }
+            }
         }
         if (entries.isEmpty()) {
             Box(Modifier.fillMaxWidth().heightIn(min = 160.dp).padding(24.dp), contentAlignment = Alignment.Center) {
@@ -533,14 +583,15 @@ internal fun QueuePanel(
                         QueueTrackRow(
                             song = entry.song,
                             loader = loader,
-                            current = entry.sourceIndex == state.currentIndex,
+                            current = index == state.currentIndex,
                             playing = state.playing,
                             buffering = state.buffering,
                             dragging = isDragging,
                             modifier = Modifier.testTag("queue_item_" + index),
-                            onClick = { select(entry.sourceIndex) },
+                            onClick = { select(index) },
                             onDragStart = {
                                 draggedKey = entry.key
+                                dragStartIndex = entries.indexOfFirst { it.key == entry.key }
                                 dragOffsetY = 0f
                             },
                             onDragDelta = { deltaY ->
@@ -552,17 +603,21 @@ internal fun QueuePanel(
                                     if (dragOffsetY > stepPx && currentIdx < entries.lastIndex) {
                                         entries.add(currentIdx + 1, entries.removeAt(currentIdx))
                                         dragOffsetY -= stepPx
-                                        onMove?.invoke(currentIdx, currentIdx + 1)
                                     } else if (dragOffsetY < -stepPx && currentIdx > 0) {
                                         entries.add(currentIdx - 1, entries.removeAt(currentIdx))
                                         dragOffsetY += stepPx
-                                        onMove?.invoke(currentIdx, currentIdx - 1)
                                     }
                                 }
                             },
                             onDragEnd = {
+                                val finalIndex = entries.indexOfFirst { it.key == entry.key }
+                                val startIndex = dragStartIndex
                                 draggedKey = null
+                                dragStartIndex = -1
                                 dragOffsetY = 0f
+                                if (startIndex >= 0 && finalIndex >= 0 && startIndex != finalIndex) {
+                                    onMove?.invoke(startIndex, finalIndex)
+                                }
                             },
                         )
                     }
@@ -689,6 +744,10 @@ internal fun Notice(notice: ClientNotice, modifier: Modifier = Modifier) {
         ClientNotice.PLAYBACK_FAILED -> R.string.ft_playback_error
         ClientNotice.SOME_SOURCES_UNAVAILABLE -> R.string.ft_notice_partial_sources
         ClientNotice.FORBIDDEN -> R.string.ft_notice_forbidden
+        ClientNotice.PLAYLIST_LIMIT -> R.string.ft_listening_playlist_limit
+        ClientNotice.PLAYLIST_SONG_LIMIT -> R.string.ft_listening_playlist_song_limit
+        ClientNotice.IMAGE_UPLOAD_LIMIT -> R.string.ft_listening_image_upload_limit
+        ClientNotice.IMAGE_TOO_LARGE -> R.string.ft_listening_image_too_large
     }
     val informational = notice in setOf(ClientNotice.PASSWORD_CHANGED, ClientNotice.PAGE_LIMIT, ClientNotice.SOME_SOURCES_UNAVAILABLE)
     Text(

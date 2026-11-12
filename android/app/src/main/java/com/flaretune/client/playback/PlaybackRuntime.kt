@@ -12,6 +12,7 @@ class PlaybackRuntime(
     private val context: Context,
     val history: PlaybackHistoryRepository? = null,
     val queueRepository: PlaybackQueueRepository? = null,
+    val playEvents: com.flaretune.client.data.PlayEventRepository? = null,
 ) {
     var connection: ActiveConnection? = null
         private set
@@ -25,6 +26,7 @@ class PlaybackRuntime(
         val identity = HistoryIdentity(next.network.address.origin, next.auth.account.id)
         history?.bind(identity)
         queueRepository?.bind(identity)
+        playEvents?.bind(identity, next) { connection?.network === next.network && next.network.isActive }
         imageLoader = ImageLoader.Builder(context).okHttpClient(next.network.mediaClient)
             .diskCache(null).crossfade(true).build()
     }
@@ -32,6 +34,7 @@ class PlaybackRuntime(
     fun clear() {
         // Remove authority before either repository changes or the old Service tears down.
         connection = null
+        playEvents?.clear()
         history?.clear()
         queueRepository?.clear()
         imageLoader?.memoryCache?.clear()

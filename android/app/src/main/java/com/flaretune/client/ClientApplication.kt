@@ -26,11 +26,16 @@ class ClientApplication : Application() {
     val connections by lazy {
         ConnectionManager(AndroidSessionStore(this)).also { manager ->
             // Register when the real application first needs a session, independently of any Activity.
-            scope.launch { manager.invalidations.collect { history.clear(); queueRepository.clear(); playbackRuntime.clear() } }
+            scope.launch { manager.invalidations.collect { playbackRuntime.clear() } }
         }
     }
+    val coverImageProcessor by lazy { com.flaretune.client.data.AndroidCoverImageProcessor(this) }
     val translationPreferences by lazy { AndroidTranslationPreferences(this) }
     val history by lazy { PlaybackHistoryRepository(AndroidPlaybackHistoryStore(this), scope) }
     val queueRepository by lazy { PlaybackQueueRepository(AndroidPlaybackQueueStore(this), scope) }
-    val playbackRuntime by lazy { PlaybackRuntime(this, history, queueRepository) }
+    private val listeningLocalStorage by lazy { com.flaretune.client.data.AndroidListeningLocalStorage(this) }
+    val searchHistoryStore by lazy { com.flaretune.client.data.SearchHistoryStore(listeningLocalStorage) }
+    val discoveryCache by lazy { com.flaretune.client.data.DiscoveryCache(listeningLocalStorage) }
+    val playEvents by lazy { com.flaretune.client.data.PlayEventRepository(com.flaretune.client.data.JsonPlayEventStore(listeningLocalStorage), scope) }
+    val playbackRuntime by lazy { PlaybackRuntime(this, history, queueRepository, playEvents) }
 }

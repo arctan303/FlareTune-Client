@@ -29,3 +29,6 @@ Desktop.ini
 
 # Research scratch space: raw APKs, extracted packages, venv
 .research/
+
+# Private assistant workspace state
+.workbuddy-ai/

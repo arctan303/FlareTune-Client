@@ -26,4 +26,22 @@ class TranslationPreferencesTest {
         assertFalse(first.read())
         assertFalse(ClientUiState().translationEnabled)
     }
+
+    @Test fun playerGainDefaultsToOneSurvivesReconstructionAndRejectsCorruptValues() {
+        val context = RuntimeEnvironment.getApplication()
+        val backing = context.getSharedPreferences("playback_display_v1", Context.MODE_PRIVATE)
+        backing.edit().clear().commit()
+        val first = AndroidTranslationPreferences(context)
+        assertEquals(1f, first.readVolume(), .0001f)
+        first.writeVolume(.4f)
+        assertEquals(.4f, AndroidTranslationPreferences(context).readVolume(), .0001f)
+        assertEquals(setOf("player_gain"), backing.all.keys)
+        for (gain in listOf(Float.NaN, Float.POSITIVE_INFINITY, -1f, 2f)) {
+            try { first.writeVolume(gain); fail("Expected invalid gain rejection") }
+            catch (_: com.flaretune.client.data.ApiFailure) { }
+        }
+        backing.edit().putFloat("player_gain", Float.NaN).commit()
+        try { first.readVolume(); fail("Expected corrupt gain rejection") }
+        catch (_: com.flaretune.client.data.ApiFailure) { }
+    }
 }

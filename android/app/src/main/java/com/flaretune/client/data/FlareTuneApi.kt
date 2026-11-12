@@ -16,48 +16,37 @@ class ApiFailure(
     val httpStatus: Int? = null,
     val code: String? = null,
     val reason: String? = null,
+    val details: MusicFailureDetails? = null,
 ) : IOException(failure.name)
-
-interface MusicApi {
-    fun songs(query: String, offset: Int): SongPage
-    fun songs(query: String, offset: Int, language: String): SongPage = songs(query, offset)
-    fun favorites(): List<Song>
-    fun albums(offset: Int = 0): AlbumPage = throw ApiFailure(Failure.REQUEST)
-    fun albums(offset: Int, language: String): AlbumPage = albums(offset)
-    fun album(id: String): AlbumDetail = throw ApiFailure(Failure.REQUEST)
-    fun playlists(): List<PlaylistSummary> = throw ApiFailure(Failure.REQUEST)
-    fun playlist(id: String): PlaylistDetail = throw ApiFailure(Failure.REQUEST)
-    fun song(id: String): Song = throw ApiFailure(Failure.REQUEST)
-    fun resolveSongs(ids: List<String>): List<Song> = ids.map { song(it) }
-    fun lyrics(songId: String, resultRef: String? = null): LyricDocument = throw ApiFailure(Failure.REQUEST)
-    fun translateLyrics(resultRef: String): LyricDocument = throw ApiFailure(Failure.REQUEST)
-}
-
-interface AccountApi : MusicApi {
-    fun changePassword(current: String, replacement: String)
-    fun logout()
-}
 
 class FlareTuneApi(val network: SessionNetwork) : AccountApi {
     private val address get() = network.address
     var session: AuthSession? = null
         private set
 
-    private fun request(path: String, body: JSONObject? = null, lyricOperation: String? = null): JSONObject = request(address.endpoint(path), body, lyricOperation)
+    private fun request(path: String, body: JSONObject? = null, lyricOperation: String? = null,
+        method: String = if (body == null) "GET" else "POST"): JSONObject = request(address.endpoint(path), body, lyricOperation, method)
 
-    private fun request(url: HttpUrl, body: JSONObject? = null, lyricOperation: String? = null): JSONObject {
+    private fun request(url: HttpUrl, body: JSONObject? = null, lyricOperation: String? = null,
+        method: String = if (body == null) "GET" else "POST"): JSONObject {
         if (!address.sameOrigin(url)) throw ApiFailure(Failure.REQUEST)
         val builder = Request.Builder().url(url).header("Accept", "application/json")
         session?.let { builder.header("X-FlareTune-Expected-Account", it.account.id) }
         if (body != null) {
             builder.header("Origin", address.origin).header("X-Requested-With", "FlareTune")
             session?.let { builder.header("X-CSRF-Token", it.csrfToken) }
-            builder.post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+            builder.method(method, body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
         }
+        return execute(builder.build(), lyricOperation)
+    }
+
+    private fun execute(request: Request, lyricOperation: String? = null): JSONObject {
+        val url = request.url
+        if (!address.sameOrigin(url)) throw ApiFailure(Failure.REQUEST)
         try {
-            network.apiClient.newCall(builder.build()).execute().use { response ->
+            network.apiClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
-                    // Error text is untrusted. Only bounded JSON identifier fields cross this boundary.
+                    // Error text is untrusted. Only bounded identifiers and typed current-state facts cross this boundary.
                     val source = response.body?.source()
                     source?.request(64L * 1024 + 1)
                     val error = if (source != null && source.buffer.size <= 64L * 1024) {
@@ -76,7 +65,7 @@ class FlareTuneApi(val network: SessionNetwork) : AccountApi {
                         else -> Failure.REQUEST
                     }
                     lyricOperation?.let { LyricsDiagnostics.http(it, response.code, code, reason) }
-                    throw ApiFailure(failure, response.code, code, reason)
+                    throw ApiFailure(failure, response.code, code, reason, parseFailureDetails(error))
                 }
                 lyricOperation?.let { LyricsDiagnostics.http(it, response.code) }
                 val source = response.body?.source() ?: invalidResponse()
@@ -89,7 +78,6 @@ class FlareTuneApi(val network: SessionNetwork) : AccountApi {
         } catch (e: ApiFailure) { throw e }
         catch (_: IOException) { throw ApiFailure(if (network.isActive) Failure.NETWORK else Failure.RETIRED) }
     }
-
     private fun machineField(json: JSONObject?, field: String): String? = (json?.opt(field) as? String)
         ?.takeIf { it.matches(Regex("[A-Za-z0-9_]{1,100}")) }
 
@@ -122,7 +110,10 @@ class FlareTuneApi(val network: SessionNetwork) : AccountApi {
 
     override fun songs(query: String, offset: Int): SongPage = songs(query, offset, "all")
 
-    override fun songs(query: String, offset: Int, language: String): SongPage {
+    override fun songs(query: String, offset: Int, language: String): SongPage = songs(query, offset, language, "desc")
+
+    override fun songs(query: String, offset: Int, language: String, sort: String): SongPage {
+        if (sort !in setOf("asc", "desc")) throw ApiFailure(Failure.REQUEST)
         if (offset !in 0..2000) throw ApiFailure(Failure.REQUEST)
         val filter = languageFilter(language)
         val searching = query.isNotBlank()
@@ -130,7 +121,7 @@ class FlareTuneApi(val network: SessionNetwork) : AccountApi {
             if (offset % 50 != 0) throw ApiFailure(Failure.REQUEST)
             address.endpoint("/api/songs").newBuilder()
                 .addQueryParameter("language", filter ?: ALL_LANGUAGES)
-                .addQueryParameter("page", (offset / 50 + 1).toString()).addQueryParameter("limit", "50")
+                .addQueryParameter("page", (offset / 50 + 1).toString()).addQueryParameter("limit", "50").addQueryParameter("sort", sort)
         } else address.endpoint("/api/songs/search").newBuilder()
             .addQueryParameter("q", query.trim().take(200)).addQueryParameter("limit", "50")
             .addQueryParameter("offset", offset.toString()).also { if (filter != null) it.addQueryParameter("language", filter) }
@@ -184,18 +175,396 @@ class FlareTuneApi(val network: SessionNetwork) : AccountApi {
 
     override fun playlist(id: String): PlaylistDetail {
         checkId(id, 240)
-        val data = memberData(request(address.endpoint("/api/account/playlists").newBuilder().addPathSegment(id).build()))
-            .optJSONObject("playlist") ?: invalidResponse()
-        val playlist = parsePlaylist(data)
-        if (playlist.id != id) invalidResponse()
-        val songs = data.optJSONArray("songs") ?: invalidResponse()
-        val entries = (0 until songs.length()).mapNotNull { index ->
-            val row = songs.optJSONObject(index) ?: invalidResponse()
-            parseSong(row)?.let { PlaylistSong(it, nonNegativeInt(row, "sortOrder", 0), nonNegativeLong(row, "addedAt", 0)) }
-        }.distinctBy { it.song.id }.sortedBy { it.sortOrder }
-        return PlaylistDetail(playlist, entries)
+        val data = memberData(request(playlistUrl(id))).optJSONObject("playlist") ?: invalidResponse()
+        return parsePlaylistDetail(data).also { if (it.playlist.id != id) invalidResponse() }
+    }
+    override fun createPlaylist(name: String, description: String, songIds: List<String>, idempotencyKey: String?): PlaylistMutationResult {
+        val body = JSONObject().put("name", playlistName(name)).put("description", playlistDescription(description))
+            .put("songIds", JSONArray(validSongIds(songIds, 0, 500)))
+        if (!idempotencyKey.isNullOrEmpty()) body.put("idempotencyKey", idempotencyKey)
+        val result = parsePlaylistMutation(memberData(mutation(address.endpoint("/api/account/playlists"), "POST", body)))
+        if (result.shelf == null) invalidResponse()
+        return result
     }
 
+    override fun updatePlaylist(id: String, expectedRevision: Long, name: String?, description: String?): PlaylistMutationResult {
+        if (name == null && description == null) throw ApiFailure(Failure.REQUEST)
+        val body = revisionBody(expectedRevision)
+        name?.let { body.put("name", playlistName(it)) }
+        description?.let { body.put("description", playlistDescription(it)) }
+        return parsePlaylistMutation(memberData(mutation(playlistUrl(id), "PUT", body)), id)
+    }
+
+    override fun deletePlaylist(id: String, expectedRevision: Long): PlaylistDeleteResult {
+        val data = memberData(mutation(playlistUrl(id), "DELETE", revisionBody(expectedRevision)))
+        if (requiredString(data, "outcome") != "applied" || requiredString(data, "deletedPlaylistId") != id) invalidResponse()
+        return PlaylistDeleteResult("applied", id, parseShelf(data.optJSONObject("shelf") ?: invalidResponse()))
+    }
+
+    override fun replacePlaylistSongs(id: String, songIds: List<String>, expectedRevision: Long, name: String?, description: String?): PlaylistMutationResult {
+        val body = revisionBody(expectedRevision).put("songIds", JSONArray(validSongIds(songIds, 0, 500)))
+        name?.let { body.put("name", playlistName(it)) }
+        description?.let { body.put("description", playlistDescription(it)) }
+        return parsePlaylistMutation(memberData(mutation(playlistUrl(id, "songs"), "PUT", body)), id, requireDetail = true)
+    }
+
+    override fun removePlaylistSong(id: String, songId: String, expectedRevision: Long): PlaylistMutationResult {
+        checkId(songId, 240)
+        return parsePlaylistMutation(memberData(mutation(playlistUrl(id, "songs", songId), "DELETE", revisionBody(expectedRevision))), id, requireDetail = true)
+    }
+
+    override fun addPlaylistSongs(targets: List<PlaylistTarget>, songIds: List<String>): PlaylistAddResult {
+        if (targets.size !in 1..50 || targets.map { it.playlistId }.distinct().size != targets.size) throw ApiFailure(Failure.REQUEST)
+        val ids = validSongIds(songIds, 1, 100)
+        if (targets.size * ids.size > 500) throw ApiFailure(Failure.REQUEST)
+        val targetRows = JSONArray()
+        targets.forEach { target ->
+            checkId(target.playlistId, 240)
+            targetRows.put(revisionBody(target.expectedRevision).put("playlistId", target.playlistId))
+        }
+        val data = memberData(mutation(address.endpoint("/api/account/playlist-songs"), "POST",
+            JSONObject().put("targets", targetRows).put("songIds", JSONArray(ids))))
+        val rows = data.optJSONArray("results") ?: invalidResponse()
+        val expected = targets.map { it.playlistId }.toSet()
+        if (rows.length() != targets.size) invalidResponse()
+        val results = (0 until rows.length()).map { index ->
+            val row = rows.optJSONObject(index) ?: invalidResponse()
+            val id = requiredString(row, "playlistId")
+            if (id !in expected) invalidResponse()
+            val outcome = requiredString(row, "outcome")
+            if (outcome !in setOf("applied", "noop", "failed")) invalidResponse()
+            val added = stringIds(row.optJSONArray("addedSongIds") ?: invalidResponse())
+            val noop = stringIds(row.optJSONArray("noopSongIds") ?: invalidResponse())
+            if ((added + noop).any { it !in ids } || added.any { it in noop } || (outcome != "applied" && added.isNotEmpty())) invalidResponse()
+            val error = machineField(row, "error")
+            if (outcome == "failed" && error == null) invalidResponse()
+            PlaylistTargetResult(id, outcome, added, noop, if (row.has("revision")) nonNegativeLong(row, "revision") else null, error)
+        }
+        if (results.map { it.playlistId }.distinct().size != results.size) invalidResponse()
+        val affected = stringIds(data.optJSONArray("affectedPlaylistIds") ?: invalidResponse())
+        if (affected.toSet() != results.filter { it.outcome == "applied" }.map { it.playlistId }.toSet()) invalidResponse()
+        val expectedOutcome = if (results.any { it.outcome == "failed" }) {
+            if (affected.isEmpty()) "failed" else "partial"
+        } else if (affected.isEmpty()) "noop" else "applied"
+        if (requiredString(data, "outcome") != expectedOutcome) invalidResponse()
+        return PlaylistAddResult(expectedOutcome, results, affected)
+    }
+
+    override fun playlistShelf(): PlaylistShelf = parseShelf(memberData(request("/api/account/playlist-shelf"))
+        .optJSONObject("shelf") ?: invalidResponse())
+
+    override fun updatePlaylistShelf(items: List<ShelfItem>, expectedRevision: Long): ShelfMutationResult {
+        if (items.size !in 1..51 || items.map { it.id }.distinct().size != items.size || items.any { it.kind != "member" }) throw ApiFailure(Failure.REQUEST)
+        val rows = JSONArray()
+        items.forEach { checkId(it.id, 240); rows.put(JSONObject().put("kind", "member").put("id", it.id)) }
+        val data = memberData(mutation(address.endpoint("/api/account/playlist-shelf"), "PUT", revisionBody(expectedRevision).put("items", rows)))
+        val outcome = mutationOutcome(data)
+        val shelf = parseShelf(data.optJSONObject("shelf") ?: invalidResponse())
+        if (shelf.items != items) invalidResponse()
+        return ShelfMutationResult(outcome, shelf)
+    }
+
+    override fun favoriteMembership(songIds: List<String>): FavoriteMembership {
+        // The host has no separate membership endpoint; complete detail retains unplayable members too.
+        val favorite = playlists().singleOrNull { it.kind == "favorite" } ?: invalidResponse()
+        val detail = playlist(favorite.id)
+        if (detail.playlist.kind != "favorite") invalidResponse()
+        val requested = songIds.toSet()
+        return FavoriteMembership(detail.playlist, detail.entries.map { it.song.id }.filter { it in requested }.toSet())
+    }
+
+    private fun playlistUrl(id: String, vararg segments: String): HttpUrl {
+        checkId(id, 240)
+        return address.endpoint("/api/account/playlists").newBuilder().addPathSegment(id).apply {
+            segments.forEach { addPathSegment(it) }
+        }.build()
+    }
+
+    private fun mutation(url: HttpUrl, method: String, body: JSONObject): JSONObject {
+        requireMutationSession()
+        if (body.toString().toByteArray(Charsets.UTF_8).size > 64 * 1024) throw ApiFailure(Failure.REQUEST)
+        return request(url, body, method = method)
+    }
+
+    private fun requireMutationSession() {
+        if (!network.isActive) throw ApiFailure(Failure.RETIRED)
+        val auth = session ?: throw ApiFailure(Failure.SESSION_EXPIRED)
+        if (auth.mustChangePassword) throw ApiFailure(Failure.FORBIDDEN)
+    }
+
+    private fun revisionBody(revision: Long): JSONObject {
+        if (revision !in 0..9_007_199_254_740_991L) throw ApiFailure(Failure.REQUEST)
+        return JSONObject().put("expectedRevision", revision)
+    }
+
+    private fun playlistName(value: String): String = value.trim().also {
+        if (it.codePointCount(0, it.length) !in 1..40) throw ApiFailure(Failure.REQUEST)
+    }
+    private fun playlistDescription(value: String): String = value.trim().also {
+        if (it.codePointCount(0, it.length) > 300) throw ApiFailure(Failure.REQUEST)
+    }
+    private fun validSongIds(ids: List<String>, minimum: Int, maximum: Int): List<String> {
+        if (ids.size !in minimum..maximum || ids.distinct().size != ids.size) throw ApiFailure(Failure.REQUEST)
+        ids.forEach { checkId(it, 240) }
+        return ids
+    }
+    private fun mutationOutcome(data: JSONObject): String = requiredString(data, "outcome").also {
+        if (it !in setOf("applied", "noop")) invalidResponse()
+    }
+    private fun parsePlaylistMutation(data: JSONObject, expectedId: String? = null, requireDetail: Boolean = false): PlaylistMutationResult {
+        val outcome = mutationOutcome(data)
+        val raw = data.optJSONObject("playlist") ?: invalidResponse()
+        val summary = parsePlaylist(raw)
+        if (expectedId != null && summary.id != expectedId) invalidResponse()
+        val detail = if (raw.has("songs")) parsePlaylistDetail(raw) else null
+        if (requireDetail && detail == null) invalidResponse()
+        val shelf = if (data.has("shelf")) parseShelf(data.optJSONObject("shelf") ?: invalidResponse()) else null
+        return PlaylistMutationResult(summary, detail, shelf, outcome)
+    }
+    private fun parsePlaylistDetail(data: JSONObject): PlaylistDetail {
+        val summary = parsePlaylist(data)
+        val rows = data.optJSONArray("songs") ?: invalidResponse()
+        val entries = (0 until rows.length()).map { index ->
+            val row = rows.optJSONObject(index) ?: invalidResponse()
+            PlaylistSong(parseSongMetadata(row), nonNegativeInt(row, "sortOrder", 0), nonNegativeLong(row, "addedAt", 0))
+        }
+        if (entries.map { it.song.id }.distinct().size != entries.size) invalidResponse()
+        return PlaylistDetail(summary, entries.sortedBy { it.sortOrder })
+    }
+    private fun parseSongMetadata(row: JSONObject): Song = Song(
+        requiredString(row, "id"), (row.opt("title") as? String).orEmpty().ifBlank { requiredString(row, "id") },
+        (row.opt("artist") as? String).orEmpty(), (row.opt("album") as? String).orEmpty(),
+        row.optDouble("duration", 0.0).takeIf { it.isFinite() && it > 0 } ?: 0.0,
+        nullableString(row, "audio_url")?.let(address::media).orEmpty(),
+        nullableString(row, "cover_url")?.let(address::media), nullableString(row, "language"),
+    )
+    private fun parseShelf(data: JSONObject): PlaylistShelf {
+        val rows = data.optJSONArray("items") ?: invalidResponse()
+        if (rows.length() > 51) invalidResponse()
+        val items = (0 until rows.length()).map { index ->
+            val row = rows.optJSONObject(index) ?: invalidResponse()
+            if (requiredString(row, "kind") != "member") invalidResponse()
+            ShelfItem(requiredString(row, "id"))
+        }
+        if (items.map { it.id }.distinct().size != items.size) invalidResponse()
+        return PlaylistShelf(nonNegativeLong(data, "revision"), nonNegativeLong(data, "updatedAt", 0), items)
+    }
+    private fun stringIds(array: JSONArray): List<String> = (0 until array.length()).map { index ->
+        (array.opt(index) as? String)?.takeIf { it.isNotBlank() && !it.any { char -> char.code < 32 || char.code == 127 } } ?: invalidResponse()
+    }.also { if (it.distinct().size != it.size) invalidResponse() }
+    private fun parseFailureDetails(error: JSONObject?): MusicFailureDetails? {
+        val data = error?.optJSONObject("data") ?: return null
+        // Malformed optional details never replace the original HTTP status/code.
+        val playlist = try { data.optJSONObject("playlist")?.let(::parsePlaylist) } catch (_: ApiFailure) { null }
+        val shelf = try { data.optJSONObject("shelf")?.let(::parseShelf) } catch (_: ApiFailure) { null }
+        val missing = try { data.optJSONArray("missingSongIds")?.let(::stringIds).orEmpty() } catch (_: ApiFailure) { emptyList() }
+        return if (playlist == null && shelf == null && missing.isEmpty()) null else MusicFailureDetails(playlist, shelf, missing)
+    }
+    override fun artists(query: String, offset: Int, language: String): ArtistPage {
+        checkOffset(offset)
+        val filter = languageFilter(language)
+        val url = address.endpoint("/api/artists").newBuilder().addQueryParameter("limit", "20")
+            .addQueryParameter("offset", offset.toString()).apply {
+                catalogName(query)?.let { addQueryParameter("q", it) }
+                filter?.let { addQueryParameter("language", it) }
+            }.build()
+        val data = catalogData(request(url))
+        val rows = data.optJSONArray("artists") ?: invalidResponse()
+        val artists = (0 until rows.length()).map { parseArtist(rows.optJSONObject(it) ?: invalidResponse()) }
+        val more = data.opt("hasMore") as? Boolean ?: invalidResponse()
+        return ArtistPage(artists, offset + 20, more && offset + 20 <= 2000, requiredInt(data, "total"), more && offset + 20 > 2000)
+    }
+
+    override fun artist(name: String, offset: Int): ArtistDetail {
+        checkOffset(offset)
+        val artistName = catalogName(name) ?: throw ApiFailure(Failure.REQUEST)
+        val url = address.endpoint("/api/artists").newBuilder().addPathSegment(artistName)
+            .addQueryParameter("limit", "50").addQueryParameter("offset", offset.toString()).build()
+        val data = catalogData(request(url))
+        if (requiredString(data, "name") != artistName) invalidResponse()
+        val artist = parseArtist(data)
+        val more = data.opt("hasMore") as? Boolean ?: invalidResponse()
+        return ArtistDetail(artist, parseSongs(data.optJSONArray("songs") ?: invalidResponse()), offset + 50,
+            more && offset + 50 <= 2000, more && offset + 50 > 2000)
+    }
+
+    override fun browseAlbums(query: String, offset: Int, language: String, artist: String?): AlbumPage {
+        checkOffset(offset)
+        val filter = languageFilter(language)
+        val url = address.endpoint("/api/albums").newBuilder().addQueryParameter("limit", "20")
+            .addQueryParameter("offset", offset.toString()).apply {
+                catalogName(query)?.let { addQueryParameter("q", it) }
+                filter?.let { addQueryParameter("language", it) }
+                artist?.let { catalogName(it)?.let { value -> addQueryParameter("artist", value) } }
+            }.build()
+        val data = catalogData(request(url))
+        val rows = data.optJSONArray("albums") ?: invalidResponse()
+        val albums = (0 until rows.length()).map { parseAlbum(rows.optJSONObject(it) ?: invalidResponse()) }
+        val more = data.opt("hasMore") as? Boolean ?: invalidResponse()
+        return AlbumPage(albums, offset + 20, more && offset + 20 <= 2000, more && offset + 20 > 2000)
+    }
+
+    override fun artistPhotos(name: String): ArtistPhotos {
+        val clean = catalogName(name) ?: throw ApiFailure(Failure.REQUEST)
+        if (clean.length > 200) throw ApiFailure(Failure.REQUEST)
+        val result = request(address.endpoint("/api/artist-photo").newBuilder().addQueryParameter("name", clean).build())
+        if ((result.opt("code") as? Number)?.toDouble() != 0.0) invalidResponse()
+        val data = result.optJSONObject("data") ?: invalidResponse()
+        if (requiredString(data, "artist") != clean) invalidResponse()
+        val names = data.optJSONArray("artistNames") ?: invalidResponse()
+        val rows = data.optJSONArray("photos") ?: invalidResponse()
+        if (names.length() > 8 || rows.length() > 12) invalidResponse()
+        val photos = (0 until rows.length()).map { index ->
+            val row = rows.optJSONObject(index) ?: invalidResponse()
+            val url = artistPhotoUrl(requiredString(row, "url")) ?: invalidResponse()
+            fun dimension(field: String): Int? = if (row.has(field)) requiredInt(row, field).also { if (it > 100_000) invalidResponse() } else null
+            ArtistPhoto(url, nullableString(row, "artistName"), nullableString(row, "type"), nullableString(row, "label"),
+                nullableString(row, "source"), nullableString(row, "sourceName"), dimension("width"), dimension("height"),
+                row.opt("isRealArtist") as? Boolean, row.opt("is169") as? Boolean)
+        }
+        return ArtistPhotos(clean, stringIds(names), nullableString(data, "primary")?.let(::artistPhotoUrl), photos)
+    }
+    private fun artistPhotoUrl(raw: String): String? {
+        if (raw.isBlank()) return null
+        val url = try { address.endpoint(raw) } catch (_: IllegalArgumentException) { invalidResponse() }
+        if (!url.isHttps || url.username.isNotEmpty() || url.password.isNotEmpty() || (!raw.startsWith('/') && !raw.startsWith("https://", true)) || raw.startsWith("//")) invalidResponse()
+        return url.toString()
+    }
+    override fun languageCounts(): Map<String, Int> {
+        val data = catalogData(request(address.endpoint("/api/songs").newBuilder().addQueryParameter("counts", "language").build()))
+        return data.keys().asSequence().associateWith { requiredInt(data, it) }
+    }
+
+    override fun randomSongs(limit: Int, exclude: List<String>): List<Song> {
+        if (limit !in 1..50) throw ApiFailure(Failure.REQUEST)
+        val url = address.endpoint("/api/songs/random").newBuilder().addQueryParameter("limit", limit.toString())
+            .apply { commaExclusions(exclude, 80)?.let { addQueryParameter("exclude", it) } }.build()
+        return parseSongs(catalogData(request(url)).optJSONArray("songs") ?: invalidResponse())
+    }
+
+    override fun spotlightArtist(exclude: List<String>): SpotlightArtist? {
+        val url = address.endpoint("/api/songs/spotlight-artist").newBuilder()
+            .apply { commaExclusions(exclude, 100)?.let { addQueryParameter("exclude", it) } }.build()
+        val result = request(url)
+        if ((result.opt("code") as? Number)?.toDouble() != 200.0) invalidResponse()
+        if (result.isNull("data")) return null
+        val data = result.optJSONObject("data") ?: invalidResponse()
+        return SpotlightArtist(requiredString(data, "artist"), requiredInt(data, "songCount"),
+            parseSongs(data.optJSONArray("songs") ?: invalidResponse()), nullableString(data, "photoUrl")?.let(address::media),
+            nullableString(data, "coverUrl")?.let(address::media))
+    }
+
+    override fun playStats(limit: Int, summaryOnly: Boolean): PlayStats {
+        if (limit !in 1..50) throw ApiFailure(Failure.REQUEST)
+        val url = address.endpoint("/api/account/play-stats").newBuilder().addQueryParameter("limit", limit.toString())
+            .apply { if (summaryOnly) addQueryParameter("view", "summary") }.build()
+        val data = memberData(request(url))
+        val rows = data.optJSONArray("songs") ?: invalidResponse()
+        val songs = (0 until rows.length()).map { index ->
+            val row = rows.optJSONObject(index) ?: invalidResponse()
+            RankedSong(parseSongMetadata(row), nonNegativeLong(row, "play_count"), nonNegativeLong(row, "last_played_at"))
+        }
+        if (summaryOnly) {
+            if (data.opt("view") != "summary") invalidResponse()
+            return PlayStats(songs, summaryOnly = true)
+        }
+        val counts = data.optJSONObject("playCounts") ?: invalidResponse()
+        return PlayStats(songs, counts.keys().asSequence().associateWith { nonNegativeLong(counts, it) },
+            nonNegativeLong(data, "totalPlays"), requiredInt(data, "totalUniqueSongs"))
+    }
+
+    override fun submitPlayEvents(events: List<PlayEvent>): PlayEventReceipt {
+        if (events.isEmpty()) return PlayEventReceipt(0, emptyList())
+        if (events.size > 25) throw ApiFailure(Failure.REQUEST)
+        val rows = JSONArray()
+        events.forEach { event ->
+            if (!event.eventId.matches(Regex("[A-Za-z0-9_-]{1,128}")) || event.playedAt !in 1..9_007_199_254_740_991L) throw ApiFailure(Failure.REQUEST)
+            checkId(event.songId, 256)
+            rows.put(JSONObject().put("event_id", event.eventId).put("song_id", event.songId).put("played_at", event.playedAt))
+        }
+        val data = memberData(mutation(address.endpoint("/api/account/play-stats"), "POST", JSONObject().put("events", rows)))
+        val accepted = stringIds(data.optJSONArray("acceptedEventIds") ?: invalidResponse())
+        val recorded = requiredInt(data, "recorded")
+        val submitted = events.map { it.eventId }.toSet()
+        if (accepted.any { it !in submitted } || recorded > submitted.size) invalidResponse()
+        return PlayEventReceipt(recorded, accepted)
+    }
+
+    override fun imageSlot(purpose: String, targetId: String): ImageSlot {
+        if (purpose !in setOf("avatar", "playlist") || (purpose == "avatar" && targetId != "avatar")) throw ApiFailure(Failure.REQUEST)
+        checkImageId(targetId)
+        val url = address.endpoint("/api/account/images/slots").newBuilder().addPathSegment(purpose).addPathSegment(targetId).build()
+        return parseImageSlot(request(url))
+    }
+
+    override fun uploadPlaylistCover(bytes: ByteArray): UserImage {
+        requireMutationSession()
+        if (bytes.isEmpty() || bytes.size > 5 * 1024 * 1024) throw ApiFailure(Failure.REQUEST)
+        val auth = session ?: throw ApiFailure(Failure.SESSION_EXPIRED)
+        val builder = Request.Builder().url(address.endpoint("/api/account/images/upload/playlist"))
+            .header("Accept", "application/json").header("Origin", address.origin).header("X-Requested-With", "FlareTune")
+            .header("X-FlareTune-Expected-Account", auth.account.id).header("X-CSRF-Token", auth.csrfToken)
+            .post(bytes.copyOf().toRequestBody("image/webp".toMediaType()))
+        val data = execute(builder.build())
+        val id = requiredString(data, "id").also { if (!it.matches(Regex("[A-Za-z0-9_-]{1,160}"))) invalidResponse() }
+        val width = requiredInt(data, "width")
+        val height = requiredInt(data, "height")
+        val size = requiredInt(data, "byteSize")
+        if (width != 1024 || height != 1024 || size !in 1..5 * 1024 * 1024 || size != bytes.size) invalidResponse()
+        return UserImage(id, privateImageUrl(nullableString(data, "url"), id) ?: invalidResponse(), width, height, size)
+    }
+
+    override fun setPlaylistCover(id: String, imageId: String?, revision: Long): ImageSlot {
+        checkImageId(id)
+        imageId?.let(::checkImageId)
+        revisionBody(revision)
+        val url = address.endpoint("/api/account/images/slots/playlist").newBuilder().addPathSegment(id).build()
+        val data = mutation(url, "PUT", JSONObject().put("imageId", imageId ?: JSONObject.NULL).put("revision", revision))
+        return parseImageSlot(data).also { if (it.imageId != imageId) invalidResponse() }
+    }
+
+    override fun discardUserImage(id: String) {
+        checkImageId(id)
+        val url = address.endpoint("/api/account/images").newBuilder().addPathSegment(id).build()
+        if (mutation(url, "DELETE", JSONObject()).opt("ok") != true) invalidResponse()
+    }
+
+    private fun checkImageId(id: String) {
+        if (!id.matches(Regex("[A-Za-z0-9_-]{1,160}"))) throw ApiFailure(Failure.REQUEST)
+    }
+    private fun parseImageSlot(data: JSONObject): ImageSlot {
+        val id = nullableString(data, "imageId")
+        if (id != null && !id.matches(Regex("[A-Za-z0-9_-]{1,160}"))) invalidResponse()
+        return ImageSlot(id, privateImageUrl(nullableString(data, "url"), id), nonNegativeLong(data, "revision"))
+    }
+    private fun privateImageUrl(raw: String?, id: String?): String? {
+        if (id == null) {
+            if (raw != null) invalidResponse()
+            return null
+        }
+        if (raw.isNullOrBlank()) invalidResponse()
+        val url = try { address.endpoint(raw) } catch (_: IllegalArgumentException) { invalidResponse() }
+        if (!address.sameOrigin(url) || url.encodedPath != "/api/account/images/$id" || url.query != null || url.fragment != null ||
+            url.username.isNotEmpty() || url.password.isNotEmpty()) invalidResponse()
+        return url.toString()
+    }
+    private fun parseArtist(data: JSONObject): Artist = Artist(requiredString(data, "name"), requiredInt(data, "songCount"),
+        nonNegativeInt(data, "albumCount", 0), nullableString(data, "photoUrl")?.let(address::media), nullableString(data, "coverUrl")?.let(address::media))
+    private fun checkOffset(offset: Int) { if (offset !in 0..2000) throw ApiFailure(Failure.REQUEST) }
+    private fun catalogName(raw: String): String? = raw.trim().takeIf { it.isNotEmpty() }?.also {
+        if (it.length > 300 || it.any { char -> char.code < 32 || char.code == 127 }) throw ApiFailure(Failure.REQUEST)
+    }
+    private fun commaExclusions(items: List<String>, maximumLength: Int): String? {
+        if (items.isEmpty()) return null
+        if (items.size > 20) throw ApiFailure(Failure.REQUEST)
+        val value = items.joinToString(",") { item -> item.trim().also {
+            if (it.isEmpty() || it.length > maximumLength || it.any { char -> char.code < 32 || char.code == 127 }) throw ApiFailure(Failure.REQUEST)
+        } }
+        if (value.length > 1000 || value.split(',').size > 20 || value.split(',').any { it.isBlank() }) throw ApiFailure(Failure.REQUEST)
+        return value
+    }
+    private fun requiredInt(json: JSONObject, field: String): Int = nonNegativeLong(json, field)
+        .also { if (it > Int.MAX_VALUE) invalidResponse() }.toInt()
     override fun song(id: String): Song {
         checkId(id, 256)
         val song = parseSong(catalogData(request(address.endpoint("/api/songs").newBuilder().addPathSegment(id).build()))) ?: invalidResponse()
@@ -287,7 +656,7 @@ class FlareTuneApi(val network: SessionNetwork) : AccountApi {
                 val raw = covers.opt(index) as? String ?: invalidResponse()
                 address.media(raw)
             }, nullableString(json, "customCoverUrl")?.let(address::media),
-            nonNegativeLong(json, "createdAt", 0), nonNegativeLong(json, "updatedAt", 0))
+            nonNegativeLong(json, "createdAt", 0), nonNegativeLong(json, "updatedAt", 0), coverRevision = nonNegativeLong(json, "coverRevision", 0))
     }
 
     private fun validAlbumId(id: String): Boolean = id.length in 1..3200 && id.matches(Regex("[A-Za-z0-9_-]+"))

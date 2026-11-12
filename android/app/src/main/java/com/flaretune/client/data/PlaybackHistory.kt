@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import com.flaretune.client.model.ClientNotice
 import com.flaretune.client.model.Song
 import java.security.MessageDigest
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -179,6 +180,10 @@ class PlaybackHistoryRepository(
             val identity: HistoryIdentity,
             val entry: HistoryEntry,
         ) : Command
+        data class Edit(
+            override val generation: Long, val identity: HistoryIdentity,
+            val removeId: String?, val completion: CompletableDeferred<Boolean>,
+        ) : Command
         data class Clear(
             override val generation: Long,
             val previous: HistoryIdentity?,
@@ -191,6 +196,7 @@ class PlaybackHistoryRepository(
                 is Command.Bind -> load(command)
                 is Command.Record -> persist(command)
                 is Command.Clear -> retire(command)
+                is Command.Edit -> edit(command)
             }
         }
     }
@@ -216,6 +222,19 @@ class PlaybackHistoryRepository(
                 durationSeconds = song.durationSeconds, language = song.language, playedAt = playedAt,
             )))
         }
+    }
+
+    /** Durable user edit, preserving the active identity and subsequent playback recording. */
+    suspend fun remove(songId: String): Boolean = editHistory(songId)
+    suspend fun clearEntries(): Boolean = editHistory(null)
+    private suspend fun editHistory(removeId: String?): Boolean {
+        val completion = CompletableDeferred<Boolean>()
+        synchronized(lock) {
+            val current = identity ?: return false
+            if (!worker.isActive || commands.trySend(Command.Edit(generation, current, removeId, completion)).isFailure)
+                completion.complete(false)
+        }
+        return completion.await()
     }
 
     /** Retires the binding immediately. A later bind is required to resume recording. */
@@ -300,6 +319,29 @@ class PlaybackHistoryRepository(
             loadedEntries = next
             publish(command.generation, command.identity, next, failed = !cleared)
         } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            publish(command.generation, command.identity, null, failed = true)
+        }
+    }
+
+    private fun edit(command: Command.Edit) {
+        try {
+            if (!current(command.generation, command.identity) || loadedGeneration != command.generation ||
+                !flushClears() || command.identity in pendingClears) {
+                command.completion.complete(false)
+                return
+            }
+            val next = if (command.removeId == null) emptyList() else loadedEntries.filterNot { it.id == command.removeId }
+            if (next.isEmpty()) store.clear(command.identity) else store.write(command.identity, next)
+            if (!current(command.generation, command.identity)) {
+                command.completion.complete(false)
+                return
+            }
+            loadedEntries = next
+            publish(command.generation, command.identity, next, failed = false)
+            command.completion.complete(true)
+        } catch (error: Exception) {
+            command.completion.complete(false)
             if (error is CancellationException) throw error
             publish(command.generation, command.identity, null, failed = true)
         }

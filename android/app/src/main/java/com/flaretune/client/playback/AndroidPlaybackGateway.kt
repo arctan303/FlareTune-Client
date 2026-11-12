@@ -84,6 +84,19 @@ class AndroidPlaybackGateway(private val context: Context, private val runtime: 
         if (songs.isEmpty() || index !in songs.indices) return
         controller?.run { setMediaItems(songs.map { it.item() }, index, 0); prepare(); play() }
     }
+    override fun play(songs: List<Song>, index: Int, shuffle: Boolean) {
+        if (songs.isEmpty() || index !in songs.indices) return
+        controller?.run { shuffleModeEnabled = shuffle; setMediaItems(songs.map { it.item() }, index, 0); prepare(); play() }
+    }
+    override fun enqueue(songs: List<Song>, next: Boolean) {
+        controller?.let { enqueuePlayerSongs(it, songs.filter { song -> song.canPlay }.map { song -> song.item() }, next) }
+    }
+    override fun clearQueue() {
+        controller?.run { stop(); clearMediaItems() }
+        runtime.queueRepository?.save(PlaybackSnapshot())
+        state.value = state.value.copy(current = null, queue = emptyList(), currentIndex = -1,
+            playing = false, buffering = false, positionMs = 0, durationMs = 0, failed = false)
+    }
     override fun setVolume(volume: Float) { if (volume.isFinite()) controller?.volume = volume.coerceIn(0f, 1f) }
     override fun togglePlay() { controller?.run { if (isPlaying || (playWhenReady && playbackState == Player.STATE_BUFFERING)) pause() else { if (playbackState == Player.STATE_ENDED) seekToDefaultPosition(); play() } } }
     override fun next() { controller?.run { if (hasNextMediaItem()) seekToNextMediaItem() } }

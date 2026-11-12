@@ -112,6 +112,7 @@
     <string name="ft_reorder">Reorder</string>
     <string name="ft_instrumental_lyrics">Instrumental — please enjoy</string>
     <string name="ft_lyrics_failed">Could not load lyrics.</string>
-    <string name="ft_translate_lyrics">Translate</string>
+    <string name="ft_translate_lyrics">Toggle lyric translation</string>
+    <string name="ft_request_translation">Translate lyrics</string>
     <string name="ft_translating_lyrics">Translating…</string>
 </resources>

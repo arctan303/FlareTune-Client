@@ -9,7 +9,10 @@ data class Song(
     val audioUrl: String,
     val coverUrl: String? = null,
     val language: String? = null,
-)
+) {
+    /** Membership metadata can exist after a media source disappears. */
+    val canPlay: Boolean get() = audioUrl.isNotBlank()
+}
 
 data class SongPage(val songs: List<Song>, val nextOffset: Int, val hasMore: Boolean, val partialSources: Boolean = false, val capped: Boolean = false)
 data class Account(val id: String, val username: String, val displayName: String)
@@ -17,7 +20,8 @@ data class AuthSession(val account: Account, val csrfToken: String, val mustChan
 enum class ClientNotice {
     INVALID_URL, NOT_READY, NETWORK, INVALID_LOGIN, SESSION_EXPIRED, PASSWORD_CHANGED,
     REQUEST_FAILED, RATE_LIMITED, INVALID_RESPONSE, STORAGE_FAILED, PAGE_LIMIT,
-    PLAYBACK_FAILED, SOME_SOURCES_UNAVAILABLE, FORBIDDEN
+    PLAYBACK_FAILED, SOME_SOURCES_UNAVAILABLE, FORBIDDEN,
+    PLAYLIST_LIMIT, PLAYLIST_SONG_LIMIT, IMAGE_UPLOAD_LIMIT, IMAGE_TOO_LARGE
 }
 
 

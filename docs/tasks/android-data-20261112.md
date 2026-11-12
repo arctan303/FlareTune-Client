@@ -15,7 +15,7 @@
 
 风险R2：新持久个人收听历史、歌词跨账号与旧异步结果可能泄露；需要隔离/清理/恢复行为证据。纯数据层不变更UI外观，不将既有43项或Gemini视觉变更声明为本轮已验。
 
-状态：active，本地实施/143项验证完成，fresh R2最后两项聚焦收尾与授权设备覆盖更新进行中，未正式发布。此前不连接远程/不安装的临时限制，已分别由用户本轮WIP备份和达标后平板更新授权替代；根整合数据与播放，Gemini负责UI，Gradle继续单会话独占。
+状态：active，本地实施/固定最新UI的143项验证完成，fresh R2两项聚焦已关闭；授权平板覆盖安装与真实MainActivity启动已完成，继续开发中真实功能测试，未正式发布。此前不连接远程/不安装的临时限制，已分别由用户本轮WIP备份和达标后平板更新授权替代；根整合数据与播放，Gemini负责UI，Gradle继续单会话独占。
 ## 后续用户反馈与新增范围
 
 - 用户反馈上一首需滑两次：已确认3秒重播阈值，改为一次直接上一曲（无上一曲才归零）。继续收听在Gemini的ListeningShell读取完整queue，已交前端改playHistory；历史弹层当前读playHistory，生产只记实际current+isPlaying，未确认整队列写历史的根因，不以队列兜底制造历史。
@@ -35,9 +35,28 @@
 - fresh R2对原三P2确认关闭，新增两项：500个合法80字符Unicode ID的JSON可超过host64KiB，以及Service保存失败未持续进入VM.queueNotice。已在FlareTuneApi/ClientViewModel及两个现有测试文件修复。
 - 新解析按稳定唯一顺序分批，每批≤200且真实序列化UTF-8≤60KiB，继续复用同一Origin/账号/CSRF/会话门禁；不提高宿主限制。真实TLS回归使用500个Unicode ID，保留缺失略过及输入顺序。
 - VM捕获当前连接/身份收集仓库notice，重建立即消费；成功保存只清存储错误，保留缺曲恢复提示；退出取消收集并拒旧身份晚通知。回归覆盖失败→恢复、部分恢复、VM重建和退出晚值。
-- 修复后当前143/143自动测试、assembleDebug与Lint通过（0错误/40警告），含当前Gemini UI；日志 `android/build/data-r2-queue-final.log`。固定38文件manifest `694A9ACC6708B1EB88CD55E68022F66341BDF832F10D5AFD77138B58E03715DC`，4文件delta `74BA49AB6D574D7738048808F42C90B30F2057F3347A85641317527C8B8FD239`，位于 `android/build/review-data-r2-queue-20261112/`；原审查者一次focused recheck中。
+- 修复后当前143/143自动测试、assembleDebug与Lint通过（0错误/40警告），含当前Gemini UI；日志 `android/build/data-r2-queue-final.log`。固定38文件manifest `694A9ACC6708B1EB88CD55E68022F66341BDF832F10D5AFD77138B58E03715DC`，4文件delta `74BA49AB6D574D7738048808F42C90B30F2057F3347A85641317527C8B8FD239`，位于 `android/build/review-data-r2-queue-20261112/`；原审查者一次focused recheck已确认两项关闭。
 - versionName `0.1.0-dev.3` / code3，APK `android/build/deliverables/FlareTune-0.1.0-dev.3-20261112-debug.apk`，16,948,244字节，SHA-256 `90CDB1B93BA69B38A9A9415304690262C85B0645282A9C38F3423D9C72F9F20F`。debug v1/v2签名与16KB对齐检查通过；这是开发测试包。
 - 用户授权的设备动作：聚焦复核关闭后覆盖安装并启动真实MainActivity，保留账号/应用数据；不使用Preview、不卸载或清数据。回执待补，不将构建通过写成设备全部功能通过。
-- 宿主排障已获得真实ready歌词资产（79行/448词），因此用户当前失败不能解释为“本来无词”。最终HTTP/结构故障原因仍由主协作追踪；本App不放宽parser或切源掩盖，不记录私有歌词/ID/URL/ref/凭据。
+- 宿主排障已获得真实ready歌词资产（79行/448词），因此用户当前失败不能解释为“本来无词”。主协作随后已修复并部署开发实例，浏览器统一GET实测200/79行448词/ready且配置曲库保全；App已在用户换线后覆盖安装，真实歌词回读由主协作继续验证。本App不放宽parser或切源掩盖，不记录私有歌词/ID/URL/ref/凭据。
 
-当前交接：[Android-Data-Contract](../Android-Data-Contract.md)给Gemini列出全部新增状态/动作、歌词/译文开关、个人歌单/收藏/历史/分类、队列恢复/删除/移动与设备存储边界。源码与UI分工继续有效；剩余为本次focused审查、授权覆盖更新、开发中真实功能验证和独立宿主故障收尾。
+当前交接：[Android-Data-Contract](../Android-Data-Contract.md)给Gemini列出全部新增状态/动作、歌词/译文开关、个人歌单/收藏/历史/分类、队列恢复/删除/移动与设备存储边界。源码与UI分工继续有效；focused审查已关闭；宿主修复已部署开发实例并经浏览器验证，USB运输恢复后的授权覆盖更新已完成；剩余为开发中App真实歌词/其他功能继续验证。
+
+## 固定最新UI后的最终候选
+
+- 原审查者已对上述4文件delta做一次focused recheck，确认两项P2均关闭，无新增具体相邻问题；未冒称UI视觉或真机全功能审查。
+- 143项数据候选后Gemini再次修改ClientApp.kt与NowPlayingScreen.kt，两文件确实不同于先前构建输入。为避免覆盖其工作或无限追随后续编辑，冻结当前Android工程66文件至 `android/build/install-ui-snapshot-20261112/`，manifest SHA-256 `37896F59F1899557BE5A62AA125AAF0B41E0F36A8989DEC8C48C43B2B264F5A0`；已复核的38项数据输入零变化。
+- 该固定UI输入再次完整143/143测试、assembleDebug与Lint通过（0错误/42警告），日志 `android/build/data-ui-install-final.log`。此结果只覆盖该固定输入，其后的Gemini编辑不自动纳入此APK。
+- 最终候选仍为dev.3/code3，交付副本 `android/build/deliverables/FlareTune-0.1.0-dev.3-20261112-debug.apk` 更新为16,516,002字节，SHA-256 `604BBF5444EDA5CC4B8108BE43D2D44E2D28B77BD2F97860F97A0CA63EA05BB0`；同debug证书v1/v2验证与16KB对齐通过。摘要 `android/build/data-ui-install-verification.json`，签名 `android/build/data-ui-install-signature.log`。
+- 前述16,948,244字节/90CDB1…的数据143项APK保留为 `android/build/deliverables/FlareTune-0.1.0-dev.3-20261112-data-r2-debug.apk`，与新UI安装候选分开，不改写原证据。
+- 授权安装在任何install动作前检查设备：ADB正常退出但device/offline/unauthorized均0，无任何运输。用户回复已连接后再次立即复核，仍为0；没有执行install、卸载、清data或修改安全设置。已告主协作请求恢复USB数据/调试通道，连接恢复后沿用既有安装授权，不再询问安装许可。此为用户更换数据线前的现场记录，后续安装回执见下；账号/队列及其他真实功能按新版本继续验证。
+
+## 平板覆盖更新回执
+
+用户更换数据线/接口后，有界等待第2轮枚举到唯一已授权原平板（device=1、offline=0、unauthorized=0）；无需第3轮。按既有授权直接安装最终604BBF… APK：
+
+- `adb install -r` 返回 Success，未卸载、清data或更改调试/安全设置。
+- 启动真实 `com.flaretune.client/.MainActivity`，Status=ok，未打开Preview；既有前台实例接收启动intent。
+- 包信息回读 versionCode=3、versionName=0.1.0-dev.3、minSdk23、targetSdk36。安装日志 `android/build/data-ui-device-install.log` 不记录serial/账号/歌词。
+- 当前前台与设备所有权已交回主协作抓 `FlareTuneLyrics` 脱敏诊断/重试；没有由安装成功推断所有歌词、实际声音、锁屏/蓝牙或后台功能通过。
+- 最终APK/冻结UI/143项与focused关闭基线保持上节记录；先前无运输的真实记录保留，不将其说成设备拒绝安装。后续用户功能反馈继续开发处理。

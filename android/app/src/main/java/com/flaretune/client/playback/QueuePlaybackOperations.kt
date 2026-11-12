@@ -49,3 +49,24 @@ internal fun Player.playbackSnapshot(): PlaybackSnapshot {
         shuffle = shuffleModeEnabled, repeatMode = repeatMode, failed = playerError != null, volume = volume,
     )
 }
+
+/** Relocate selected IDs without restarting or replacing the active native timeline. */
+internal fun enqueuePlayerSongs(player: Player, items: List<MediaItem>, next: Boolean) {
+    val currentId = player.currentMediaItem?.mediaId
+    val targets = items.distinctBy { it.mediaId }.filter { it.mediaId != currentId }
+    if (targets.isEmpty()) return
+    val ids = targets.map { it.mediaId }.toSet()
+    for (index in player.mediaItemCount - 1 downTo 0) {
+        if (index != player.currentMediaItemIndex && player.getMediaItemAt(index).mediaId in ids)
+            player.removeMediaItem(index)
+    }
+    if (player.mediaItemCount == 0) {
+        player.setMediaItems(targets)
+        player.playWhenReady = next
+        player.prepare()
+        if (next) player.play()
+        return
+    }
+    val insertion = if (next) (player.currentMediaItemIndex + 1).coerceIn(0, player.mediaItemCount) else player.mediaItemCount
+    player.addMediaItems(insertion, targets)
+}

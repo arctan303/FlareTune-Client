@@ -7,8 +7,8 @@
 - 当前优先安卓；客户端界面独立重写，服务端与 Web 仍在相邻 FlareTune 仓库。
 - 安卓工程位于 `android/`，为未来其他客户端保留独立目录空间。
 - 应用 ID / namespace：`com.flaretune.client`。
-- 当前工程提供连接/登录、曲库/搜索/收藏、悬浮/全屏播放器、队列与 Media3 系统播放服务。服务仅应用内部可启动；未登录和受限账号不创建播放器。
-- 账号、实例、流媒体、统一歌词/译文状态、个人歌单/收藏、实际播放历史与持久队列已实现；真实账号逐项验收见当前任务。持久音频缓存和离线下载未实现。
+- 当前工程提供连接/登录、歌曲/专辑/歌手浏览与检索、收藏和个人歌单完整写入/顺序/封面、实际历史/统计、悬浮/全屏播放器、队列与 Media3 系统播放服务。服务仅应用内部可启动；未登录和受限账号不创建播放器。
+- 账号、实例、流媒体、统一歌词/译文状态、个人歌单/收藏、实际播放历史与持久队列已实现；dev.4仅本机验证，真实账号逐项验收见[当前补全任务](tasks/android-listening-capabilities-20261112.md)。持久音频缓存和离线下载未实现。
 - 设计范围见 [设计入口](Design-Brief.md)；本轮采用的竞品布局与比例已列入该入口，未采用的研究内容继续作为候选。
 
 ## 依赖基线
@@ -71,11 +71,11 @@ adb install -r android\app\build\outputs\apk\debug\app-debug.apk
 
 本轮由Gemini继续UI，本协作负责API/状态/存储/Media3服务，用户明确要求并行开发。新增接线见[数据合同](Android-Data-Contract.md)，需求/风险/历史证据见[数据任务](tasks/android-data-20261112.md)。
 
-- versionName `0.1.0-dev.3`、versionCode 3；143/143自动测试、assembleDebug与Lint通过，Lint 0错误/40警告。
-- 构建命令：`./android/gradlew.bat --project-dir android --console=plain :app:testDebugUnitTest :app:assembleDebug :app:lintDebug`；日志 `android/build/data-r2-queue-final.log`。
-- fresh R2最后两项修复为Unicode批量解析按UTF-8≤60KiB/每批≤200，以及当前身份队列保存notice持续传递并保留部分恢复提示；4文件delta和38文件固定快照在 `android/build/review-data-r2-queue-20261112/`，待同一审查者聚焦关闭。
-- 最终测试APK副本 `android/build/deliverables/FlareTune-0.1.0-dev.3-20261112-debug.apk`，16,948,244字节，SHA-256 `90CDB1B93BA69B38A9A9415304690262C85B0645282A9C38F3423D9C72F9F20F`。debug v1/v2签名验证与16KB对齐检查通过，签名日志 `android/build/data-r2-apk-signature.log`。
-- 用户已授权达到本轮本地测试与聚焦复核标准后覆盖更新现有平板，使用真实MainActivity；不卸载、不清数据、不改设备安全设置。部署回执见任务，不把这份准备说明当已经安装。
+- versionName `0.1.0-dev.3`、versionCode 3；固定最新UI输入143/143自动测试、assembleDebug与Lint通过，Lint 0错误/42警告。
+- 构建命令：`./android/gradlew.bat --project-dir android --console=plain :app:testDebugUnitTest :app:assembleDebug :app:lintDebug`；数据修复日志 `android/build/data-r2-queue-final.log`；Gemini随后两UI变更已冻结到 `android/build/install-ui-snapshot-20261112/`，单次完整测试/构建/Lint日志 `android/build/data-ui-install-final.log`，不会无限追随其后续编辑。
+- fresh R2最后两项修复为Unicode批量解析按UTF-8≤60KiB/每批≤200，以及当前身份队列保存notice持续传递并保留部分恢复提示；4文件delta和38文件固定快照在 `android/build/review-data-r2-queue-20261112/`，已由同一审查者一次focused确认关闭；未扩大为UI/全设备验收。
+- 最终测试APK副本 `android/build/deliverables/FlareTune-0.1.0-dev.3-20261112-debug.apk`，16,516,002字节，SHA-256 `604BBF5444EDA5CC4B8108BE43D2D44E2D28B77BD2F97860F97A0CA63EA05BB0`。debug v1/v2签名验证与16KB对齐检查通过，最终签名日志 `android/build/data-ui-install-signature.log`，完整摘要 `android/build/data-ui-install-verification.json`；固定安装输入manifest SHA-256 `37896F59F1899557BE5A62AA125AAF0B41E0F36A8989DEC8C48C43B2B264F5A0`。
+- 用户已授权达到本轮本地测试与聚焦复核标准后覆盖更新现有平板，使用真实MainActivity；不卸载、不清数据、不改设备安全设置。先前无ADB运输的记录保留；用户更换数据线后，唯一已授权原平板覆盖安装Success、真实MainActivity启动Status=ok，回读dev.3/code3。未卸载或清data，日志 `android/build/data-ui-device-install.log`；不将安装成功当作全部真机功能通过。
 - 现已实现歌词/译文状态、个人歌单读取、完整收藏、实际播放历史、分类及持久队列。译文显示设备保存、默认关闭；显示开关不请求生成。
 - 队列恢复是重新验证并解析媒体后的暂停恢复；force-stop只恢复最后提交快照。旧dev.2未保存的队列不能从历史倒推。真实音频、蓝牙/锁屏/后台、歌词实例联调与UI视觉验收仍分别记录。
 

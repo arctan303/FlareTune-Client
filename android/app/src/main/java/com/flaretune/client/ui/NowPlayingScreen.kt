@@ -42,7 +42,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
@@ -86,6 +85,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -97,7 +97,11 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -117,6 +121,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.ImageLoader
@@ -124,6 +129,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.request.SuccessResult
 import com.flaretune.client.R
+import com.flaretune.client.model.ClientNotice
 import com.flaretune.client.model.LyricLine
 import com.flaretune.client.model.LyricState
 import com.flaretune.client.model.LyricStatus
@@ -153,6 +159,8 @@ private enum class ClassicMobilePane { SONG, LYRICS }
 internal fun NowPlayingScreen(
     state: PlaybackSnapshot,
     lyricState: LyricState = LyricState(),
+    translationEnabled: Boolean = false,
+    translationNotice: ClientNotice? = null,
     actions: ClientActions,
     imageLoader: ImageLoader?,
     onClose: () -> Unit,
@@ -166,11 +174,94 @@ internal fun NowPlayingScreen(
     val atmospheric = coverBackground && artworkAvailable
     val scope = rememberCoroutineScope()
     val dismissDragY = remember { Animatable(0f) }
+    var containerHeightPx by remember { mutableFloatStateOf(0f) }
     var draggingDismiss by remember { mutableStateOf(false) }
-    val dismissThresholdPx = with(LocalDensity.current) { 108.dp.toPx() }
+    var closingSheet by remember { mutableStateOf(false) }
+    val scrollState = rememberScrollState()
+    val maxDragThresholdPx = with(LocalDensity.current) { 148.dp.toPx() }
+    val settleSpring = remember { spring<Float>(dampingRatio = 0.8f, stiffness = 308f) }
+
+    val closeAnimated: () -> Unit = {
+        if (!closingSheet) {
+            closingSheet = true
+            scope.launch {
+                val target = containerHeightPx
+                if (target > 1f) {
+                    dismissDragY.animateTo(target, settleSpring)
+                }
+                onClose()
+            }
+        }
+    }
+
+    val settleSheet: (Float) -> Unit = { velocityY ->
+        draggingDismiss = false
+        if (!closingSheet) {
+            val height = containerHeightPx.coerceAtLeast(1f)
+            val posThreshold = minOf(height * 0.26f, maxDragThresholdPx)
+            val shouldClose = when {
+                velocityY <= -1400f -> false
+                velocityY >= 1500f -> true
+                else -> dismissDragY.value >= posThreshold
+            }
+            if (shouldClose) {
+                closeAnimated()
+            } else {
+                scope.launch { dismissDragY.animateTo(0f, settleSpring) }
+            }
+        }
+    }
+
+    // Page-level vertical drag-to-dismiss hook (matching Musiver whole-page root draggable semantics).
+    val sheetNestedScroll = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source != NestedScrollSource.UserInput || closingSheet) return Offset.Zero
+                val currentY = dismissDragY.value
+                if (currentY > 0f) {
+                    draggingDismiss = true
+                    val maxH = containerHeightPx.coerceAtLeast(1f)
+                    val next = (currentY + available.y).coerceIn(0f, maxH)
+                    val consumedY = next - currentY
+                    scope.launch { dismissDragY.snapTo(next) }
+                    return Offset(0f, consumedY)
+                }
+                return Offset.Zero
+            }
+
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (source != NestedScrollSource.UserInput || closingSheet) return Offset.Zero
+                if (scrollState.value == 0 && available.y > 0f) {
+                    draggingDismiss = true
+                    val maxH = containerHeightPx.coerceAtLeast(1f)
+                    val next = (dismissDragY.value + available.y).coerceIn(0f, maxH)
+                    scope.launch { dismissDragY.snapTo(next) }
+                    return Offset(0f, available.y)
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (!closingSheet && dismissDragY.value > 0f) {
+                    settleSheet(available.y)
+                    return available
+                }
+                return Velocity.Zero
+            }
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                if (!closingSheet && scrollState.value == 0 && available.y > 220f) {
+                    settleSheet(available.y)
+                    return available
+                }
+                return Velocity.Zero
+            }
+        }
+    }
 
     Box(
         modifier.fillMaxSize()
+            .onSizeChanged { containerHeightPx = it.height.toFloat() }
             .graphicsLayer { translationY = dismissDragY.value }
             .testTag("full_player"),
     ) {
@@ -179,33 +270,32 @@ internal fun NowPlayingScreen(
             val screenMaxWidth = maxWidth
             val screenMaxHeight = maxHeight
             val twoColumns = screenMaxWidth >= 1000.dp || (screenMaxWidth >= 600.dp && screenMaxWidth > screenMaxHeight * 1.1f)
-            val bodyHeight = (screenMaxHeight - 60.dp).coerceAtLeast(0.dp)
+            val bodyHeight = (screenMaxHeight - 44.dp).coerceAtLeast(0.dp)
             val pageWidth = screenMaxWidth.coerceAtMost(1320.dp)
             val narrowContentWidth = (screenMaxWidth - 44.dp).coerceAtLeast(0.dp).coerceAtMost(440.dp)
             val portraitArtSize = narrowContentWidth.coerceAtMost((screenMaxHeight - 310.dp).coerceAtLeast(216.dp))
 
             Column(
-                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("player_scroll"),
+                Modifier.fillMaxSize()
+                    .nestedScroll(sheetNestedScroll)
+                    .verticalScroll(scrollState)
+                    .testTag("player_scroll"),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 ClassicDragHandleHeader(
                     dragging = draggingDismiss,
-                    onClose = onClose,
+                    onClose = closeAnimated,
                     onDragStart = { draggingDismiss = true },
                     onDragDelta = { delta ->
-                        scope.launch {
-                            val next = (dismissDragY.value + delta).coerceAtLeast(0f)
-                            dismissDragY.snapTo(next)
+                        if (!closingSheet) {
+                            val maxH = containerHeightPx.coerceAtLeast(1f)
+                            scope.launch {
+                                val next = (dismissDragY.value + delta).coerceIn(0f, maxH)
+                                dismissDragY.snapTo(next)
+                            }
                         }
                     },
-                    onDragEnd = {
-                        draggingDismiss = false
-                        if (dismissDragY.value >= dismissThresholdPx) {
-                            onClose()
-                        } else {
-                            scope.launch { dismissDragY.animateTo(0f, spring(stiffness = Spring.StiffnessMediumLow)) }
-                        }
-                    },
+                    onDragEnd = settleSheet,
                 )
                 if (twoColumns) {
                     val stagePaddingH = (screenMaxWidth * 0.045f).coerceIn(28.dp, 68.dp)
@@ -257,12 +347,15 @@ internal fun NowPlayingScreen(
                             ClassicLyricsViewport(
                                 song = song,
                                 lyricState = lyricState,
+                                translationEnabled = translationEnabled,
+                                translationNotice = translationNotice,
                                 playbackPositionMs = state.positionMs,
                                 playing = state.playing,
                                 buffering = state.buffering,
                                 twoColumns = true,
                                 onSeekTo = actions::seekTo,
                                 onRetry = actions::retryLyrics,
+                                onSetTranslationEnabled = actions::setTranslationEnabled,
                                 onTranslate = actions::requestLyricTranslation,
                                 modifier = Modifier
                                     .widthIn(max = (artSize * 1.32f).coerceAtLeast(420.dp))
@@ -296,12 +389,15 @@ internal fun NowPlayingScreen(
                                 ClassicLyricsViewport(
                                     song = song,
                                     lyricState = lyricState,
+                                    translationEnabled = translationEnabled,
+                                    translationNotice = translationNotice,
                                     playbackPositionMs = state.positionMs,
                                     playing = state.playing,
                                     buffering = state.buffering,
                                     twoColumns = false,
                                     onSeekTo = actions::seekTo,
                                     onRetry = actions::retryLyrics,
+                                    onSetTranslationEnabled = actions::setTranslationEnabled,
                                     onTranslate = actions::requestLyricTranslation,
                                     modifier = Modifier.fillMaxWidth()
                                         .height((screenMaxHeight - 300.dp).coerceAtLeast(220.dp))
@@ -345,6 +441,7 @@ internal fun NowPlayingScreen(
                                     ClassicLyricPreviewStrip(
                                         song = song,
                                         lyricState = lyricState,
+                                        translationEnabled = translationEnabled,
                                         onClick = { mobilePane = ClassicMobilePane.LYRICS },
                                     )
                                 }
@@ -377,28 +474,39 @@ private fun ClassicDragHandleHeader(
     onClose: () -> Unit,
     onDragStart: () -> Unit,
     onDragDelta: (Float) -> Unit,
-    onDragEnd: () -> Unit,
+    onDragEnd: (Float) -> Unit,
 ) {
     val closeDescription = stringResource(R.string.ft_close)
-    val handleWidth by animateDpAsState(if (dragging) 54.dp else 42.dp, tween(150), label = "drag_handle_width")
+    val velocityTracker = remember { VelocityTracker() }
+    var trackedY = remember { 0f }
     Box(
         Modifier.fillMaxWidth()
+            .height(44.dp)
             .pointerInput(Unit) {
                 detectVerticalDragGestures(
-                    onDragStart = { onDragStart() },
+                    onDragStart = {
+                        trackedY = 0f
+                        velocityTracker.resetTracking()
+                        onDragStart()
+                    },
                     onVerticalDrag = { change, dragAmount ->
                         change.consume()
+                        trackedY += dragAmount
+                        velocityTracker.addPosition(change.uptimeMillis, Offset(0f, trackedY))
                         onDragDelta(dragAmount)
                     },
-                    onDragEnd = onDragEnd,
-                    onDragCancel = onDragEnd,
+                    onDragEnd = {
+                        val velocityY = velocityTracker.calculateVelocity().y
+                        onDragEnd(velocityY)
+                    },
+                    onDragCancel = { onDragEnd(0f) },
                 )
-            }
-            .padding(top = 6.dp),
+            },
         contentAlignment = Alignment.Center,
     ) {
+        // Compact 38dp x 38dp collapse target with crisp 36dp x 4dp capsule pill (modeled after Musiver).
         Box(
-            Modifier.size(width = 96.dp, height = 48.dp)
+            Modifier.size(38.dp)
                 .clip(CircleShape)
                 .clickable(onClick = onClose)
                 .testTag("player_close")
@@ -406,9 +514,9 @@ private fun ClassicDragHandleHeader(
             contentAlignment = Alignment.Center,
         ) {
             Box(
-                Modifier.width(handleWidth).height(5.dp)
+                Modifier.size(width = 36.dp, height = 4.dp)
                     .clip(CircleShape)
-                    .background(Color.White.copy(alpha = if (dragging) 0.56f else 0.34f)),
+                    .background(Color.White.copy(alpha = if (dragging) 0.72f else 0.42f)),
             )
         }
     }
@@ -471,7 +579,12 @@ private fun ClassicArtwork(
 }
 
 @Composable
-private fun ClassicLyricPreviewStrip(song: Song, lyricState: LyricState, onClick: () -> Unit) {
+private fun ClassicLyricPreviewStrip(
+    song: Song,
+    lyricState: LyricState,
+    translationEnabled: Boolean,
+    onClick: () -> Unit,
+) {
     val activeIdx = lyricState.activeLyricIndex
     val activeLine = lyricState.lines.getOrNull(activeIdx)
     val nextLine = if (activeIdx >= 0) lyricState.lines.getOrNull(activeIdx + 1) else lyricState.lines.firstOrNull()
@@ -482,7 +595,7 @@ private fun ClassicLyricPreviewStrip(song: Song, lyricState: LyricState, onClick
         else -> song.album.ifBlank { stringResource(R.string.ft_tap_for_lyrics) }
     }
     val line2 = when (lyricState.status) {
-        LyricStatus.READY -> activeLine?.translation?.takeIf { it.isNotBlank() } ?: nextLine?.text.orEmpty()
+        LyricStatus.READY -> activeLine?.translation?.takeIf { translationEnabled && it.isNotBlank() } ?: nextLine?.text.orEmpty()
         else -> ""
     }
 
@@ -583,6 +696,7 @@ private fun ClassicLyricsTopRow(
             )
         }
         PlayerMoreMenu(
+            song = song,
             artworkAvailable = imageLoader != null && !song.coverUrl.isNullOrBlank(),
             coverBackground = coverBackground,
             toggleBackground = toggleBackground,
@@ -594,12 +708,15 @@ private fun ClassicLyricsTopRow(
 private fun ClassicLyricsViewport(
     song: Song,
     lyricState: LyricState,
+    translationEnabled: Boolean,
+    translationNotice: ClientNotice?,
     playbackPositionMs: Long,
     playing: Boolean,
     buffering: Boolean,
     twoColumns: Boolean,
     onSeekTo: (Long) -> Unit,
     onRetry: () -> Unit,
+    onSetTranslationEnabled: (Boolean) -> Unit,
     onTranslate: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -607,7 +724,6 @@ private fun ClassicLyricsViewport(
     val density = LocalDensity.current
     var viewportHeightPx by remember { mutableIntStateOf(0) }
     var userScrolling by remember { mutableStateOf(false) }
-    var translationVisible by rememberSaveable(song.id) { mutableStateOf(true) }
 
     LaunchedEffect(listState.isScrollInProgress, lyricState.songId) {
         if (listState.isScrollInProgress) {
@@ -632,7 +748,18 @@ private fun ClassicLyricsViewport(
     val secondarySize = if (twoColumns) 18.sp else 16.sp
     val secondaryLineHeight = if (twoColumns) 26.sp else 23.sp
 
-    val showTranslateTool = lyricState.status == LyricStatus.READY && lyricState.translationSupported
+    val hasInlineTranslation = remember(lyricState.lines) {
+        lyricState.lines.any { !it.translation.isNullOrBlank() }
+    }
+    val showDisplayToggle = lyricState.status == LyricStatus.READY &&
+        (lyricState.translationSupported || hasInlineTranslation)
+    val showGenerateAction = lyricState.status == LyricStatus.READY &&
+        lyricState.translationSupported &&
+        lyricState.translationState in setOf(
+            LyricTranslationStatus.IDLE,
+            LyricTranslationStatus.PENDING,
+            LyricTranslationStatus.FAILED,
+        )
 
     // Direct floating lyrics viewport (borderless & cardless, modeled after Web LyricsScroller).
     Column(modifier = modifier) {
@@ -685,10 +812,21 @@ private fun ClassicLyricsViewport(
                     val firstTime = lyricState.lines.firstOrNull()?.timeSeconds
                     val inIntroGap = activeIdx < 0 && firstTime != null && firstTime > 4.0 &&
                         (playbackPositionMs / 1000.0) < (firstTime - 0.6)
+                    // Keep lyrics scroll gestures self-contained so scrolling lyrics does not pull the sheet.
+                    val absorbLyricsOverscroll = remember {
+                        object : NestedScrollConnection {
+                            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset =
+                                Offset(0f, available.y)
+
+                            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity =
+                                Velocity(0f, available.y)
+                        }
+                    }
                     LazyColumn(
                         state = listState,
                         modifier = Modifier
                             .fillMaxSize()
+                            .nestedScroll(absorbLyricsOverscroll)
                             .onSizeChanged { viewportHeightPx = it.height }
                             .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
                             .drawWithContent {
@@ -802,7 +940,7 @@ private fun ClassicLyricsViewport(
                                     )
                                 }
 
-                                val translation = if (translationVisible) line.translation?.trim().orEmpty() else ""
+                                val translation = if (translationEnabled) line.translation?.trim().orEmpty() else ""
                                 if (translation.isNotBlank()) {
                                     Text(
                                         text = translation,
@@ -833,28 +971,39 @@ private fun ClassicLyricsViewport(
             }
         }
 
-        // Web-matching bottom-left lyric tool strip (compact icon-only Languages toggle, tucked cleanly under viewport).
-        if (showTranslateTool) {
-            Row(
-                Modifier.fillMaxWidth().padding(top = 6.dp, start = 4.dp, bottom = 2.dp),
-                horizontalArrangement = Arrangement.Start,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                ClassicTranslationButton(
-                    translationState = lyricState.translationState,
-                    translationVisible = translationVisible,
-                    polling = lyricState.polling,
-                    onClick = {
-                        when (lyricState.translationState) {
-                            LyricTranslationStatus.READY -> translationVisible = !translationVisible
-                            LyricTranslationStatus.PENDING -> {}
-                            else -> {
-                                translationVisible = true
-                                onTranslate()
-                            }
-                        }
-                    },
-                )
+        // Web-matching bottom-left lyric tool strip: display preference switch vs independent generation trigger.
+        if (showDisplayToggle || showGenerateAction || translationNotice != null) {
+            Column(Modifier.fillMaxWidth().padding(top = 6.dp, start = 4.dp, bottom = 2.dp)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (showDisplayToggle) {
+                        ClassicTranslationButton(
+                            translationState = lyricState.translationState,
+                            translationEnabled = translationEnabled,
+                            polling = lyricState.polling,
+                            onClick = { onSetTranslationEnabled(!translationEnabled) },
+                        )
+                    }
+                    if (showGenerateAction) {
+                        ClassicGenerateTranslationButton(
+                            translationState = lyricState.translationState,
+                            polling = lyricState.polling,
+                            onClick = onTranslate,
+                        )
+                    }
+                }
+                translationNotice?.let {
+                    Text(
+                        text = stringResource(R.string.ft_notice_storage_failed),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xDCFDE68A),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
             }
         }
     }
@@ -959,14 +1108,14 @@ private fun InterludeDotsRow(active: Boolean) {
 @Composable
 private fun ClassicTranslationButton(
     translationState: LyricTranslationStatus,
-    translationVisible: Boolean,
+    translationEnabled: Boolean,
     polling: Boolean,
     onClick: () -> Unit,
 ) {
     val ready = translationState == LyricTranslationStatus.READY
     val pending = translationState == LyricTranslationStatus.PENDING || polling
     val failed = translationState == LyricTranslationStatus.FAILED
-    val active = ready && translationVisible
+    val active = translationEnabled
     val context = LocalContext.current
     val animatorsEnabled = remember(context) { systemAnimatorsEnabled(context) }
     val pulseAlpha = if (pending && animatorsEnabled) {
@@ -992,9 +1141,7 @@ private fun ClassicTranslationButton(
         failed -> Color(0xDCFDE68A)
         else -> Color(0x73FFFFFF)
     }
-    val description = stringResource(
-        if (pending) R.string.ft_translating_lyrics else R.string.ft_translate_lyrics,
-    )
+    val description = stringResource(R.string.ft_translate_lyrics)
 
     Box(
         Modifier
@@ -1007,7 +1154,7 @@ private fun ClassicTranslationButton(
                     Modifier.border(1.dp, Color(0xFF60A5FA).copy(alpha = pulseAlpha), RoundedCornerShape(8.dp))
                 } else Modifier,
             )
-            .clickable(enabled = !pending, onClick = onClick)
+            .clickable(onClick = onClick)
             .semantics {
                 contentDescription = description
                 selected = active
@@ -1022,15 +1169,43 @@ private fun ClassicTranslationButton(
             modifier = Modifier.size(15.dp),
             tint = tint,
         )
-        if (failed) {
-            Box(
-                Modifier.align(Alignment.TopEnd)
-                    .offset(x = 5.dp, y = (-3).dp)
-                    .size(7.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFFFBBF24)),
-            )
-        }
+    }
+}
+
+@Composable
+private fun ClassicGenerateTranslationButton(
+    translationState: LyricTranslationStatus,
+    polling: Boolean,
+    onClick: () -> Unit,
+) {
+    val pending = translationState == LyricTranslationStatus.PENDING || polling
+    val failed = translationState == LyricTranslationStatus.FAILED
+    val label = stringResource(
+        when {
+            pending -> R.string.ft_translating_lyrics
+            failed -> R.string.ft_retry
+            else -> R.string.ft_request_translation
+        },
+    )
+    val bg = if (failed) Color(0x1AFBBF24) else Color(0x0DFFFFFF)
+    val tint = if (failed) Color(0xDCFDE68A) else Color(0x99FFFFFF)
+
+    Box(
+        Modifier
+            .height(28.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(bg)
+            .clickable(enabled = !pending, onClick = onClick)
+            .testTag("player_generate_translation")
+            .padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Medium,
+            color = tint,
+        )
     }
 }
 
@@ -1126,6 +1301,7 @@ private fun ClassicPlayerControls(
                 )
             }
             PlayerMoreMenu(
+                song = song,
                 artworkAvailable = imageLoader != null && !song.coverUrl.isNullOrBlank(),
                 coverBackground = coverBackground,
                 toggleBackground = toggleBackground,
@@ -1320,10 +1496,12 @@ private fun ClassicTransportRow(
 
 @Composable
 private fun PlayerMoreMenu(
+    song: Song,
     artworkAvailable: Boolean,
     coverBackground: Boolean,
     toggleBackground: () -> Unit,
 ) {
+    val listeningInteractions = LocalListeningInteractions.current
     var expanded by remember { mutableStateOf(false) }
     val atmospheric = coverBackground && artworkAvailable
     val mode = stringResource(if (atmospheric) R.string.ft_cover_background else R.string.ft_plain_background)
@@ -1339,6 +1517,12 @@ private fun PlayerMoreMenu(
             )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            if (listeningInteractions != null) DropdownMenuItem(
+                text = { Text(stringResource(R.string.ft_listening_song_actions)) },
+                leadingIcon = { Icon(ClientIcons.Music, null) },
+                onClick = { expanded = false; listeningInteractions.song(song) },
+                modifier = Modifier.heightIn(min = 48.dp).testTag("player_song_actions"),
+            )
             DropdownMenuItem(
                 text = { Text(mode) },
                 leadingIcon = { Icon(ClientIcons.Background, null) },

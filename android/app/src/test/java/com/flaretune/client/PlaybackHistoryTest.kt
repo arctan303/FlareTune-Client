@@ -19,6 +19,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.async
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
@@ -360,6 +361,52 @@ class PlaybackHistoryTest {
                 assertEquals(listOf("new-session"), delegate.read(a).map { it.id })
             } finally { release.countDown() }
         }
+    }
+
+
+    @Test fun userRemoveAndClearRemainDurableAndKeepIdentityBoundForFuturePlayback() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val applicationScope = CoroutineScope(SupervisorJob() + dispatcher)
+        val store = InMemoryPlaybackHistoryStore()
+        val repository = PlaybackHistoryRepository(store, applicationScope, dispatcher)
+        try {
+            repository.bind(a)
+            repository.record(Song("one", "One", audioUrl = "private"), 10)
+            repository.record(Song("two", "Two", audioUrl = "private"), 20)
+            runCurrent()
+            val removed = async { repository.remove("one") }
+            runCurrent()
+            assertTrue(removed.await())
+            assertEquals(listOf("two"), repository.state.value.map { it.id })
+            assertEquals(listOf("two"), store.read(a).map { it.id })
+            val cleared = async { repository.clearEntries() }
+            runCurrent()
+            assertTrue(cleared.await())
+            assertTrue(store.read(a).isEmpty())
+            repository.record(Song("three", "Three", audioUrl = "private"), 30)
+            runCurrent()
+            assertEquals(listOf("three"), store.read(a).map { it.id })
+        } finally { applicationScope.cancel() }
+    }
+
+    @Test fun failedUserHistoryEditKeepsLastDurableStateAndReportsFailure() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val applicationScope = CoroutineScope(SupervisorJob() + dispatcher)
+        val delegate = InMemoryPlaybackHistoryStore()
+        delegate.write(a, listOf(entry("kept", 1)))
+        val store = object : PlaybackHistoryStore by delegate {
+            override fun clear(identity: HistoryIdentity) { throw ApiFailure(Failure.STORAGE) }
+        }
+        val repository = PlaybackHistoryRepository(store, applicationScope, dispatcher)
+        try {
+            repository.bind(a); runCurrent()
+            val result = async { repository.clearEntries() }
+            runCurrent()
+            assertFalse(result.await())
+            assertEquals(listOf("kept"), repository.state.value.map { it.id })
+            assertEquals(ClientNotice.STORAGE_FAILED, repository.notice.value)
+            assertEquals(listOf("kept"), delegate.read(a).map { it.id })
+        } finally { applicationScope.cancel() }
     }
 
     private fun entry(id: String, time: Long) = HistoryEntry(id, "Title $id", "Artist", "Album", 180.0, playedAt = time)

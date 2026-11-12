@@ -164,7 +164,11 @@ internal fun ListeningShell(
         // Main content spans full height and scrolls underneath both the status bar and the floating dock.
         Box(Modifier.fillMaxSize()) {
             when {
+                state.selectedArtist != null -> ListeningArtistPage(state, actions, imageLoader, topInset, contentBottomInset)
                 state.selectedAlbum != null -> AlbumScreen(state, actions, imageLoader, topInset, contentBottomInset)
+                state.selectedPlaylist != null && state.destination != MainDestination.SEARCH -> ListeningPlaylistDetailPage(state, actions, imageLoader, topInset, contentBottomInset)
+                state.destination == MainDestination.SEARCH -> ListeningSearchPage(state, actions, imageLoader, topInset, contentBottomInset)
+                state.destination == MainDestination.LIBRARY && state.tab == LibraryTab.CATALOG -> ListeningLibraryOverview(state, actions, imageLoader, topInset, contentBottomInset)
                 state.destination == MainDestination.HOME -> when (homeSubpage) {
                     HomeSubpage.ALL_SONGS -> HomeAllSongsScreen(
                         state = state,
@@ -241,7 +245,7 @@ internal fun ListeningShell(
                         exit = fadeOut(tween(200)) + shrinkHorizontally(tween(240), shrinkTowards = Alignment.Start) + slideOutVertically(tween(220)) { it / 2 },
                     ) {
                         ShellMiniPlayer(
-                            state.playback, state.lyricState, actions, imageLoader, openPlayer,
+                            state.playback, state.lyricState, state.translationEnabled, actions, imageLoader, openPlayer,
                             modifier = Modifier.width(FlareTokens.WideMiniPlayerWidth),
                         )
                     }
@@ -257,7 +261,7 @@ internal fun ListeningShell(
                         exit = fadeOut(tween(200)) + shrinkVertically(tween(220), shrinkTowards = Alignment.Bottom) + slideOutVertically(tween(220)) { it / 2 },
                     ) {
                         Column(Modifier.fillMaxWidth()) {
-                            ShellMiniPlayer(state.playback, state.lyricState, actions, imageLoader, openPlayer)
+                            ShellMiniPlayer(state.playback, state.lyricState, state.translationEnabled, actions, imageLoader, openPlayer)
                             Spacer(Modifier.height(8.dp))
                         }
                     }
@@ -281,6 +285,7 @@ internal fun ListeningShell(
             ) {
                 PlayHistorySheet(
                     state = state,
+                    actions = actions,
                     loader = imageLoader,
                     onPlay = { song ->
                         actions.playHistorySong(song)
@@ -307,6 +312,10 @@ internal fun ListeningShell(
                     state = state.playback,
                     loader = imageLoader,
                     close = closeQueue,
+                    queueNotice = state.queueNotice,
+                    onRetryRestore = actions::retryQueueRestore,
+                    onRemove = actions::removeQueueItem,
+                    onMove = actions::moveQueueItem,
                     select = { index ->
                         actions.selectQueueItem(index)
                         closeQueue()
@@ -405,6 +414,7 @@ private fun RowScope.NavItem(
 
 @Composable
 private fun AccountAvatar(state: ClientUiState, actions: ClientActions) {
+    val listeningInteractions = LocalListeningInteractions.current
     var expanded by remember { mutableStateOf(false) }
     val label = stringResource(R.string.ft_account)
     val account = state.accountName.ifBlank { state.username.ifBlank { stringResource(R.string.app_name) } }
@@ -434,6 +444,11 @@ private fun AccountAvatar(state: ClientUiState, actions: ClientActions) {
                 )
             }
             HorizontalDivider()
+            if (listeningInteractions != null) {
+                DropdownMenuItem(text = { Text(stringResource(R.string.ft_listening_artists)) }, onClick = { expanded = false; listeningInteractions.artists() }, modifier = Modifier.testTag("account_artists"))
+                DropdownMenuItem(text = { Text(stringResource(R.string.ft_albums)) }, onClick = { expanded = false; listeningInteractions.albums("") })
+                DropdownMenuItem(text = { Text(stringResource(R.string.ft_listening_statistics)) }, onClick = { expanded = false; listeningInteractions.statistics() }, modifier = Modifier.testTag("account_statistics"))
+            }
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.ft_refresh)) },
                 leadingIcon = { Icon(ClientIcons.Refresh, null) },
@@ -476,7 +491,7 @@ private fun HomeScreen(
         }
 
         LazyColumn(
-            Modifier.fillMaxSize(),
+            Modifier.fillMaxSize().testTag("home_feed"),
             contentPadding = PaddingValues(top = topInset, bottom = bottomInset),
         ) {
             item(key = "home-header") {
@@ -567,6 +582,7 @@ private fun HomeScreen(
             state.notice?.let { notice ->
                 item(key = "song-notice") { InlineNotice(notice, actions::refresh) }
             }
+            item(key = "listening-discovery") { ListeningDiscoverySection(state, actions, loader) }
             if (state.albums.isNotEmpty() || state.albumsLoading || state.albumLanguage != "all") {
                 item(key = "albums-title") { ShelfHeading(stringResource(R.string.ft_your_albums), openAllAlbums) }
                 item(key = "album-categories") {
@@ -620,13 +636,10 @@ private fun HomeScreen(
                     }
                 }
             }
-            if (state.playback.queue.isNotEmpty()) {
-                item(key = "queue-title") { ShelfHeading(stringResource(R.string.ft_continue_listening), openHistory) }
-                item(key = "queue-shelf") {
-                    SongShelf(state.playback.queue.take(12), loader, cardWidth, "home_queue_") { _, index ->
-                        if (index != state.playback.currentIndex) actions.selectQueueItem(index)
-                        openPlayer()
-                    }
+            if (state.playHistory.isNotEmpty()) {
+                item(key = "history-title") { ShelfHeading(stringResource(R.string.ft_continue_listening), openHistory) }
+                item(key = "history-shelf") {
+                    SongShelf(state.playHistory.take(12), loader, cardWidth, "home_history_song_") { song, _ -> actions.playHistorySong(song) }
                 }
             }
             if (state.loading && state.songs.isEmpty() && state.songLanguage == "all") {
@@ -648,7 +661,7 @@ private fun HomeScreen(
 }
 
 @Composable
-private fun LanguageFilterRow(
+internal fun LanguageFilterRow(
     selected: String,
     tagPrefix: String,
     onSelect: (String) -> Unit,
@@ -704,6 +717,7 @@ private fun HomeAllSongsScreen(
             tagPrefix = "all_songs_lang",
             onSelect = actions::selectSongLanguage,
         )
+        ListeningSongSortRow(state, actions)
         state.notice?.let { InlineNotice(it, actions::refresh, "list_retry") }
         SongFeed(state = state, actions = actions, loader = loader, bottomInset = bottomInset, modifier = Modifier.weight(1f))
     }
@@ -1669,10 +1683,12 @@ private fun AlbumDescription(album: Album, state: ClientUiState, actions: Client
 @Composable
 private fun PlayHistorySheet(
     state: ClientUiState,
+    actions: ClientActions,
     loader: ImageLoader?,
     onPlay: (Song) -> Unit,
     onClose: () -> Unit,
 ) {
+    val listeningInteractions = LocalListeningInteractions.current
     val historyItems = state.playHistory
     val windowHeight = with(LocalDensity.current) {
         androidx.compose.ui.platform.LocalWindowInfo.current.containerSize.height.toDp()
@@ -1702,6 +1718,8 @@ private fun PlayHistorySheet(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            if (historyItems.isNotEmpty() && listeningInteractions != null) ActionIcon(ClientIcons.Trash,
+                stringResource(R.string.ft_listening_clear_history), listeningInteractions.clearHistory, modifier = Modifier.testTag("history_clear"))
             ActionIcon(ClientIcons.Close, stringResource(R.string.ft_close), onClose)
         }
         state.historyNotice?.let { notice ->
@@ -1719,13 +1737,21 @@ private fun PlayHistorySheet(
                 contentPadding = PaddingValues(bottom = 16.dp),
             ) {
                 itemsIndexed(historyItems, key = { index, song -> "$index:${song.id}" }) { _, song ->
+                    Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                     SongRow(
                         song = song,
                         imageLoader = loader,
                         current = song.id == state.playback.current?.id,
                         playing = state.playback.playing,
                         buffering = state.playback.buffering,
+                        modifier = Modifier.weight(1f).testTag("history_song_" + song.id),
                     ) { onPlay(song) }
+                    ActionIcon(ClientIcons.Trash, stringResource(R.string.ft_listening_remove_history), { actions.removeHistory(song.id) }, modifier = Modifier.testTag("history_remove_" + song.id))
+                    }
+                    val playedAt = listeningTime(state.playHistoryPlayedAt[song.id])
+                    if (playedAt.isNotBlank()) Text(playedAt, Modifier.padding(start = 76.dp, bottom = 8.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
         }
@@ -1804,6 +1830,7 @@ private fun LoadMore(loading: Boolean, enabled: Boolean, load: () -> Unit, tag: 
 private fun ShellMiniPlayer(
     playback: PlaybackSnapshot,
     lyricState: LyricState,
+    translationEnabled: Boolean,
     actions: ClientActions,
     loader: ImageLoader?,
     openPlayer: () -> Unit,
@@ -1834,7 +1861,7 @@ private fun ShellMiniPlayer(
         playback.buffering -> song.title
         lyricState.status == LyricStatus.INSTRUMENTAL -> "${song.title} · $fallbackArtist"
         activeLine != null && activeLine.text.isNotBlank() ->
-            activeLine.translation?.takeIf { it.isNotBlank() }
+            activeLine.translation?.takeIf { translationEnabled && it.isNotBlank() }
                 ?: nextLyricText
                 ?: "${song.title} · $fallbackArtist"
         else -> fallbackArtist

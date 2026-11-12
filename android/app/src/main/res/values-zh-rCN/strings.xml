@@ -110,6 +110,7 @@
     <string name="ft_reorder">拖动排序</string>
     <string name="ft_instrumental_lyrics">纯音乐，请欣赏</string>
     <string name="ft_lyrics_failed">歌词加载失败</string>
-    <string name="ft_translate_lyrics">译</string>
+    <string name="ft_translate_lyrics">切换译文显示</string>
+    <string name="ft_request_translation">补全译文</string>
     <string name="ft_translating_lyrics">正在翻译…</string>
 </resources>

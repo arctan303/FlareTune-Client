@@ -1,8 +1,8 @@
 # Android 数据与 UI 接线合同
 
-本文件给 Gemini 与后续 UI 协作者使用，以当前 Kotlin 类型和真实动作实现为准。2026-11-12 的分工为：**Gemini 负责 UI/资源；本协作负责 API、数据、状态、存储、播放与系统服务**。用户明确要求两部分并行继续开发；不再执行此前“整个 Android 停写”的旧限制。视觉规则仍归 [Design-Brief](Design-Brief.md)。
+本文件给 Gemini 与后续 UI 协作者使用，以当前 Kotlin 类型和真实动作实现为准。用户后续明确授权本协作补齐Web普通听歌能力并实现基础UI，Gemini后续迭代视觉；这在本轮范围替代此前UI仅由Gemini修改的限制。用户挂机后不能反馈，后续只做本机验证，不操作/覆盖挂机平板或向真实云端写入验收。视觉规则仍归 [Design-Brief](Design-Brief.md)。
 
-当前本地验证：`0.1.0-dev.3` / versionCode 3，143/143 JVM/Compose/Robolectric 单测、assembleDebug、Lint通过（0错误/40警告）。143项包含本轮fresh R2两项修复；旧43/85/131/139项是各自输入的历史证据，不证明全设备真实功能。设备与服务端歌词问题另见 [任务](tasks/android-data-20261112.md)。
+历史已验证且已安装的基线：`0.1.0-dev.3` / versionCode 3，固定最新UI输入143/143 JVM/Compose/Robolectric 单测、assembleDebug、Lint通过（0错误/42警告）。143项包含本轮fresh R2两项修复，原审查者已聚焦确认关闭；旧43/85/131/139项是各自输入的历史证据，不证明全设备真实功能。设备与服务端歌词问题另见 [任务](tasks/android-data-20261112.md)。
 
 ## 1. 单一入口与分工
 
@@ -10,7 +10,7 @@
 - 类型定义：[`ClientContracts.kt`](../android/app/src/main/java/com/flaretune/client/ui/ClientContracts.kt)、[`Models.kt`](../android/app/src/main/java/com/flaretune/client/model/Models.kt)、[`LibraryModels.kt`](../android/app/src/main/java/com/flaretune/client/model/LibraryModels.kt)、[`LyricsModels.kt`](../android/app/src/main/java/com/flaretune/client/model/LyricsModels.kt)。
 - 歌曲行交给 `actions.playSong(song)`；历史入口优先 `actions.playHistorySong(song)`，完整收藏快捷入口交给 `actions.playFavorites()`。不要从UI将首屏数据组装成“完整收藏/专辑”。
 - 所有封面复用传入的认证 ImageLoader。不要自行新建图片客户端、把Cookie拼进URL、重新请求未认证封面或缓存临时签名链接。
-- 新动作有兼容默认实现，只保证旧UI实现者继续编译；**默认空函数不是界面已接线证据**。当前真实 ClientViewModel 已覆盖本页列出的新动作，Gemini须把对应按钮绑定到 actions。
+- 新动作有兼容默认实现，只保证旧UI实现者继续编译；**默认空函数不是界面已接线证据**。当前真实 ClientViewModel 已覆盖本页列出的动作，基础UI已接线；后续Gemini迭代继续绑定同一actions，不能创建另一套私人数据或播放事实。
 - UI只消费安全 ClientNotice；不展示异常正文、服务端任意message、Cookie、CSRF、resultRef或媒体签名链接。
 
 ## 2. 状态字段与动作
@@ -90,7 +90,7 @@ val shownTranslation = line?.translation.takeIf { state.translationEnabled }
 - favoriteSongs是完整收藏详情的歌曲。latestFavoriteCoverUrl取最大的addedAt（并以sortOrder作并列顺序），不是当前队列第一首或“列表第一张”。
 - playFavorites点击后重新请求完整现代收藏详情，构造完整队列；不能用首页卡片的截断预览代替。
 - 被动refreshFavorites不会取消用户明确的收藏播放意图。退出/切换取消旧列表/详情/播放请求并清私人状态。
-- 本轮只有读取与播放；没有新增收藏写入、歌单创建/改名/删除或排序API动作，不为UI展示未接线的管理成功结果。
+- 原只读范围已由本轮用户授权替代：收藏与普通歌单写入、成员/资料库排序、封面均已实现真实动作，详细见第9节。其当前本机验收状态归补全任务，不能用dev.3的旧结果冒称新实现通过。
 
 ## 5. 继续收听与设备历史
 
@@ -136,4 +136,49 @@ songLanguage与albumLanguage接受：
 
 仅debug Application安装 `FlareTuneLyrics` 脱敏日志sink，release关闭。允许HTTP状态、封闭机器码/原因类别、格式/同步类型、行数/空行数/译文结构计数、ref长度；不记录URL、歌曲ID、歌词文本、resultRef、账户、Cookie或CSRF。日志用于判断HTTP/结构失败，不根据旧无相关日志的设备记录猜测具体故障。
 
-本轮数据/状态及TLS合同回归通过，不代表当前实例的每首歌词、真实声音、蓝牙、锁屏、后台耗电或Gemini视觉验收已完成。设备覆盖更新与服务器故障状态记在任务；不要将WIP Git备份当正式发布。
+dev.3数据/状态及TLS合同回归已通过，用户已确认歌词恢复；dev.4补全候选的测试/构建/复核状态见[本轮任务](tasks/android-listening-capabilities-20261112.md)。不据此声称每首歌曲、真实声音、蓝牙、锁屏、后台耗电或后续视觉优化均已验收。设备覆盖更新与服务器故障状态记在任务；不要将WIP Git备份当正式发布。
+
+## 9. 收藏、个人歌单与完整成员写入
+
+新增状态：favoriteSongIds、selectedPlaylistEntries、playlistShelf、libraryMutationBusy/Notice/Conflict/Results/Version。成功序号只表示当前完整操作明确成功或noop；partial/失败/409不据此关闭编辑器。UI保留草稿，真正修订冲突需关闭/刷新/重新审阅，不将旧顺序配新revision盲重发。
+
+| ClientActions | 用途与宿主合同 |
+| --- | --- |
+| toggleFavorite(song) | 用真实favorite ID，通过现代playlist-songs批加或成员DELETE，读取实际成员态，跨页同步收藏集合 |
+| createPlaylist(name,description,songIds) | POST /api/account/playlists；新意图新幂等键，同一表单网络重试复用键，不重复创建 |
+| updatePlaylist(playlist,name,description) | PUT /api/account/playlists/{id}，expectedRevision；favorite元信息受保护 |
+| deletePlaylist(playlist) | DELETE同路径带expectedRevision JSON；只删本人普通集合，不删共享歌曲、不清播放队列 |
+| addPlaylistSongs(playlistIds,songIds) | POST /api/account/playlist-songs，真实targets各带revision；按目标反馈applied/noop/failed，partial保留剩余目标重试意图 |
+| removePlaylistSongs(songIds) | 当前详情完整membership原子替换，保留未删成员及不可播放项；不使用过滤后的playlistSongs反推集合 |
+| replacePlaylistOrder(songIds) | 完整ID集合、顺序与expectedRevision；禁止丢项/重复/越权；排序动作不增删成员，空歌单只能提交[]。明确移除全部成员使用removePlaylistSongs，不借排序清空非空集合 |
+| replacePlaylistShelfOrder(ids) / movePlaylistShelf(from,to) | GET/PUT /api/account/playlist-shelf的完整混排集合与独立shelf revision；favorite与普通歌单均保留一次 |
+| playPlaylist(playlist,shuffle) | 重新读取完整详情后建立播放队列，不从首屏预览截断 |
+| dismissLibraryMutationNotice() | 新UI意图清旧错误/目标结果；同一失败表单重试不调用，以保持幂等键 |
+
+每账号最多50个普通歌单，favorite另计；每歌单500首唯一歌曲。名称trim后1–40 Unicode码点、简介0–300。批加1–50目标、1–100首唯一歌曲且乘积≤500；UI不无声截断。容量/图片限额映射PLAYLIST_LIMIT、PLAYLIST_SONG_LIMIT、IMAGE_UPLOAD_LIMIT、IMAGE_TOO_LARGE等封闭安全文案。
+
+PlaylistDetail.entries / selectedPlaylistEntries是完整成员；其songIds用于写入完整性，.songs / playlistSongs仅为可播放投影。Song/PlaylistSong.canPlay不代表历史元数据不可重试；历史行仍应调用playHistorySong重新解析。只有明确的歌单不可播放成员禁直接播放，仍能排序或移除。
+
+## 10. 歌单封面与选歌
+
+setPlaylistCover(playlist,sourceUri)只接系统照片选择器临时content URI，设备处理器有界读取、解码采样、中心方形/1024缩放并重编码WebP；不保存URI或原EXIF，不申请整个相册读取权限。UI选择依据[Android照片选择器](https://developer.android.com/training/data-storage/shared/photo-picker)。clearPlaylistCover(playlist)移除自定义槽引用。
+
+宿主三步为POST /api/account/images/upload/playlist、GET/PUT /api/account/images/slots/playlist/{id}，图片槽revision独立于playlist.revision。slot仅本人普通歌单；失败/取消尝试DELETE未采用draft。旧网络退休后不会再发送凭据，未引用草稿保留宿主TTL回收兜底，不承诺退出后立即远端删除。
+
+选歌状态pickerSongs/Query/Loading/LoadingMore/HasMore/Notice独立于全局检索；动作searchPlaylistSongs、loadMorePlaylistSongs、closePlaylistSongPicker。先打开/确认目标详情再启动选歌，不能从资料库菜单沿用旧selectedPlaylist。多选遵守100首批次边界，提交给真实目标ID。
+
+## 11. 检索、发现、历史与统计
+
+- 三类检索：歌曲原query/songs；歌手artists/artistQuery/artistsLoading*；专辑searchAlbums/albumSearchQuery/albumSearchLoading*，各自错误/分页互不覆盖。动作refreshArtists/loadMoreArtists、searchAlbums/loadMoreSearchAlbums。本地目录songSort=asc|desc只读切换收录顺序，不永久改曲库。
+- 歌手详情selectedArtist、artistSongs、artistAlbums及各自Loading/More/HasMore/Notice；openArtist/closeArtist、loadMoreArtistSongs/loadMoreArtistAlbums。署名拆分沿Web规则，专辑用真实opaque ID，不自造ID。
+- discoverySongs/spotlightArtist/discoveryLoading/Notice，refreshDiscovery消费已有random/spotlight宿主接口；当日账号+实例metadata缓存先重解析当前媒体，刷新有Web同类冷却。不是新增AI或插件推荐算法。
+- recentSearches是song/artist实体，recentSearchTerms是提交的词，不在每次输入时保存。openRecentSearch会重新解析；实体/词可单删、清空，私有分键，退出清UI而不抹除其他主体历史。只存展示元数据。
+- playHistoryPlayedAt提供本机实际播放时间，removeHistory/clearHistory仅改活跃身份下历史，不解绑后续记录、不清队列或云统计。“继续收听”来自playHistory，队列有独立入口。
+- playSongs(songs,startIndex,shuffle)明确当前列表上下文；playNext/enqueue/clearQueue作用真实Media3 Timeline并同步持久化，不回写歌单。历史/恢复占位会按当前身份重解析，不捏造已播放记录。
+- playStats/statsLoading/Notice与refreshPlayStats是真实GET /api/account/play-stats；常听歌手按真实常听单曲聚合，不把队列或最近记录当次数。
+- 独立QualifiedListeningTracker每播放迭代最多一事件：真实连续进度累计30秒，短于60秒曲目半程也合格；暂停/seek跳跃不算。Service后台同样采样，不能用历史启动事件冒充。PlayEventRepository以稳定eventId私有持久化、最多25批次、只删除acceptedEventIds、失败退避重试；身份退役拒绝旧ack污染新主体，未确认旧事件仅由原身份后续重试，不持久化网络凭据/媒体URL。
+- 音量与译文显示仅本机偏好；gain即时控制并有界去抖保存，不触系统或蓝牙音量，不修改服务器来源/AI配置。
+
+## 12. 当前补全验收边界
+
+本轮候选dev.4/code4仅在本机验证；旧dev.3已安装并正常播放。禁止将当前构建产物自动覆盖挂机平板，也不以云端私人数据写入代替本地TLS/状态/播放器/Compose测试。当前实现、失败修复、独立复核、最终APK摘要和备份由[补全任务](tasks/android-listening-capabilities-20261112.md)统一记账；不要把默认空actions或单纯编译通过当成功能力。

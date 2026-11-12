@@ -29,6 +29,7 @@ class PlaybackService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private var network: com.flaretune.client.data.SessionNetwork? = null
     private var playerListener: Player.Listener? = null
+    private var qualifiedListening: QualifiedListeningTracker? = null
     private val persistenceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     // A newly created empty Player must not erase the queue being loaded from disk.
     private var seenNonEmptyQueue = false
@@ -56,13 +57,21 @@ class PlaybackService : MediaSessionService() {
             if (runtime.connection?.network === connection.network && connection.network.isActive)
                 runtime.history?.record(song)
         }
+        qualifiedListening = QualifiedListeningTracker { song ->
+            if (runtime.connection?.network === connection.network && connection.network.isActive) runtime.playEvents?.record(song)
+        }
         playerListener = object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 historyTracker.onMediaItemTransition()
+                qualifiedListening?.onMediaItemTransition()
+            }
+            override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+                qualifiedListening?.onPositionDiscontinuity()
             }
             override fun onEvents(player: Player, events: Player.Events) {
                 historyTracker.observe(player.currentMediaItem?.song(), player.isPlaying)
                 saveQueue(player)
+                observeListening(player)
             }
         }.also(player::addListener)
         val activity = PendingIntent.getActivity(this, 0,
@@ -73,13 +82,30 @@ class PlaybackService : MediaSessionService() {
         mediaSession = MediaSession.Builder(this, player).setSessionActivity(activity)
             .setBitmapLoader(artwork).build()
         persistenceScope.launch {
+            var ticks = 0
             while (isActive) {
-                delay(2_000)
-                mediaSession?.player?.let(::saveQueue)
+                delay(500)
+                mediaSession?.player?.let { current ->
+                    observeListening(current)
+                    if (++ticks % 4 == 0) saveQueue(current)
+                }
             }
         }
     }
 
+    private fun observeListening(player: Player) {
+        val captured = network ?: return
+        val runtime = (application as ClientApplication).playbackRuntime
+        if (runtime.connection?.network !== captured || !captured.isActive) return
+        // Progress sampling does not rebuild the full queue every half-second.
+        qualifiedListening?.observe(com.flaretune.client.ui.PlaybackSnapshot(
+            current = player.currentMediaItem?.song(), playing = player.isPlaying,
+            buffering = player.playWhenReady && player.playbackState == Player.STATE_BUFFERING,
+            positionMs = player.currentPosition.coerceAtLeast(0),
+            durationMs = player.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0,
+            failed = player.playerError != null,
+        ))
+    }
     private fun saveQueue(player: Player) {
         val captured = network ?: return
         val runtime = (application as ClientApplication).playbackRuntime
@@ -98,7 +124,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
-        mediaSession?.player?.let(::saveQueue)
+        mediaSession?.player?.let { observeListening(it); saveQueue(it) }
         persistenceScope.cancel()
         mediaSession?.run {
             playerListener?.let(player::removeListener)
@@ -106,6 +132,7 @@ class PlaybackService : MediaSessionService() {
             release()
         }
         playerListener = null
+        qualifiedListening = null
         mediaSession = null
         network = null
         super.onDestroy()
