@@ -1,0 +1,28 @@
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Android local configuration and caches
+local.properties
+.gradle/
+.kotlin/
+
+# Build output
+build/
+
+# Signing credentials
+*.jks
+*.keystore
+keystore.properties
+key.properties
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
