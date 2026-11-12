@@ -1,0 +1,231 @@
+{
+  "file": {
+    "name": "musiver_1.3.9_arm64-v8a.apk",
+    "size_mb": 36.12
+  },
+  "manifest": {
+    "package": "cn.aqzscn.stream_music",
+    "app_name": "Musiver",
+    "version_name": "1.3.9",
+    "version_code": "135",
+    "min_sdk": "23",
+    "target_sdk": "35",
+    "main_activity": "cn.aqzscn.stream_music.MainActivity",
+    "permissions": 18,
+    "activities": 14,
+    "features": [
+      "android.hardware.touchscreen",
+      "android.hardware.camera.any",
+      "android.hardware.camera",
+      "android.software.leanback"
+    ]
+  },
+  "zip": {
+    "entries": 1938,
+    "top_dirs": [
+      [
+        "res/color",
+        85
+      ],
+      [
+        "assets/flutter_assets",
+        80
+      ],
+      [
+        "lib/arm64-v8a",
+        13
+      ],
+      [
+        "res/color-v23",
+        9
+      ],
+      [
+        "assets/mlkit_barcode_models",
+        3
+      ],
+      [
+        "META-INF/androidx",
+        3
+      ],
+      [
+        "META-INF/services",
+        3
+      ],
+      [
+        "org/apache",
+        3
+      ],
+      [
+        "res/color-night-v8",
+        3
+      ],
+      [
+        "assets/dexopt",
+        2
+      ],
+      [
+        "META-INF/com",
+        1
+      ],
+      [
+        "META-INF/version-control-info.textproto",
+        1
+      ],
+      [
+        "classes.dex",
+        1
+      ],
+      [
+        "classes2.dex",
+        1
+      ],
+      [
+        "DebugProbesKt.bin",
+        1
+      ],
+      [
+        "META-INF/DEPENDENCIES",
+        1
+      ],
+      [
+        "META-INF/androidx.activity_activity-compose.version",
+        1
+      ],
+      [
+        "META-INF/androidx.activity_activity-ktx.version",
+        1
+      ],
+      [
+        "META-INF/androidx.activity_activity.version",
+        1
+      ],
+      [
+        "META-INF/androidx.annotation_annotation-experimental.version",
+        1
+      ],
+      [
+        "META-INF/androidx.appcompat_appcompat-resources.version",
+        1
+      ],
+      [
+        "META-INF/androidx.appcompat_appcompat.version",
+        1
+      ],
+      [
+        "META-INF/androidx.arch.core_core-runtime.version",
+        1
+      ],
+      [
+        "META-INF/androidx.autofill_autofill.version",
+        1
+      ],
+      [
+        "META-INF/androidx.browser_browser.version",
+        1
+      ]
+    ],
+    "dex": [
+      "classes.dex",
+      "classes2.dex"
+    ],
+    "native_libs": [
+      "lib/arm64-v8a/libandroidx.graphics.path.so",
+      "lib/arm64-v8a/libapp.so",
+      "lib/arm64-v8a/libbarhopper_v3.so",
+      "lib/arm64-v8a/libdatastore_shared_counter.so",
+      "lib/arm64-v8a/libflutter.so",
+      "lib/arm64-v8a/libimage_processing_util_jni.so",
+      "lib/arm64-v8a/libmedia_kit_native_event_loop.so",
+      "lib/arm64-v8a/libmediakitandroidhelper.so",
+      "lib/arm64-v8a/libmpv.so",
+      "lib/arm64-v8a/librhttp.so",
+      "lib/arm64-v8a/librust_lib_stream_music.so",
+      "lib/arm64-v8a/libsqlite3.so",
+      "lib/arm64-v8a/libsurface_util_jni.so"
+    ],
+    "vector_drawables": 1383,
+    "png_jpg_webp": 339,
+    "flutter": true
+  },
+  "font_files": [
+    "assets/flutter_assets/fonts/MaterialIcons-Regular.otf",
+    "assets/flutter_assets/packages/cupertino_icons/assets/CupertinoIcons.ttf",
+    "assets/flutter_assets/packages/fluent_ui/fonts/FluentIcons.ttf",
+    "assets/flutter_assets/packages/fluentui_system_icons/fonts/FluentSystemIcons-Filled.ttf",
+    "assets/flutter_assets/packages/fluentui_system_icons/fonts/FluentSystemIcons-Regular.ttf",
+    "assets/flutter_assets/packages/fluttericon/lib/fonts/Brandico.ttf",
+    "assets/flutter_assets/packages/fluttericon/lib/fonts/Elusive.ttf",
+    "assets/flutter_assets/packages/fluttericon/lib/fonts/Entypo.ttf",
+    "assets/flutter_assets/packages/fluttericon/lib/fonts/FontAwesome.ttf",
+    "assets/flutter_assets/packages/fluttericon/lib/fonts/FontAwesome5.ttf",
+    "assets/flutter_assets/packages/fluttericon/lib/fonts/Fontelico.ttf",
+    "assets/flutter_assets/packages/fluttericon/lib/fonts/Iconic.ttf",
+    "assets/flutter_assets/packages/fluttericon/lib/fonts/LineariconsFree.ttf",
+    "assets/flutter_assets/packages/fluttericon/lib/fonts/Linecons.ttf",
+    "assets/flutter_assets/packages/fluttericon/lib/fonts/Maki.ttf",
+    "assets/flutter_assets/packages/fluttericon/lib/fonts/Meteocons.ttf",
+    "assets/flutter_assets/packages/fluttericon/lib/fonts/MfgLabs.ttf",
+    "assets/flutter_assets/packages/fluttericon/lib/fonts/ModernPictograms.ttf",
+    "assets/flutter_assets/packages/fluttericon/lib/fonts/Octicons.ttf",
+    "assets/flutter_assets/packages/fluttericon/lib/fonts/RpgAwesome.ttf",
+    "assets/flutter_assets/packages/fluttericon/lib/fonts/Typicons.ttf",
+    "assets/flutter_assets/packages/fluttericon/lib/fonts/WebSymbols.ttf",
+    "assets/flutter_assets/packages/fluttericon/lib/fonts/Zocial.ttf",
+    "assets/flutter_assets/packages/font_awesome_flutter/lib/fonts/fa-brands-400.ttf",
+    "assets/flutter_assets/packages/font_awesome_flutter/lib/fonts/fa-regular-400.ttf",
+    "assets/flutter_assets/packages/font_awesome_flutter/lib/fonts/fa-solid-900.ttf",
+    "assets/flutter_assets/packages/material_design_icons_flutter/lib/fonts/materialdesignicons-webfont.ttf"
+  ],
+  "flutter_font_manifest": [
+    "MaterialIcons",
+    "packages/cupertino_icons/CupertinoIcons",
+    "packages/fluent_ui/FluentIcons",
+    "packages/fluentui_system_icons/FluentSystemIcons-Regular",
+    "packages/fluentui_system_icons/FluentSystemIcons-Filled",
+    "packages/fluttericon/Brandico",
+    "packages/fluttericon/Elusive",
+    "packages/fluttericon/Entypo",
+    "packages/fluttericon/FontAwesome",
+    "packages/fluttericon/FontAwesome5",
+    "packages/fluttericon/Fontelico",
+    "packages/fluttericon/Iconic",
+    "packages/fluttericon/LineariconsFree",
+    "packages/fluttericon/Linecons",
+    "packages/fluttericon/Maki",
+    "packages/fluttericon/Meteocons",
+    "packages/fluttericon/MfgLabs",
+    "packages/fluttericon/ModernPictograms",
+    "packages/fluttericon/Typicons",
+    "packages/fluttericon/WebSymbols",
+    "packages/fluttericon/Zocial",
+    "packages/fluttericon/RpgAwesome",
+    "packages/fluttericon/Octicons",
+    "packages/font_awesome_flutter/FontAwesomeBrands",
+    "packages/font_awesome_flutter/FontAwesomeRegular",
+    "packages/font_awesome_flutter/FontAwesomeSolid",
+    "packages/material_design_icons_flutter/Material Design Icons"
+  ],
+  "arsc": {
+    "type_counts": {
+      "public": 5890,
+      "id": 1081,
+      "dimen": 373,
+      "color": 304,
+      "string": 134,
+      "integer": 42,
+      "bool": 6,
+      "anim": 0,
+      "animator": 0,
+      "attr": 0,
+      "drawable": 0,
+      "interpolator": 0,
+      "layout": 0,
+      "mipmap": 0,
+      "style": 0,
+      "xml": 0
+    },
+    "colors_count": 224,
+    "dimens_count": 309,
+    "strings_count": 134
+  }
+}

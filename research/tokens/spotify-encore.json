@@ -1,0 +1,665 @@
+{
+  "source": {
+    "app": "Spotify",
+    "package": "com.spotify.music",
+    "version": "9.2.0.2053",
+    "version_code": "148387875",
+    "artifact": "APKPure 分发包（base.apk + config splits）",
+    "extraction": "androguard 4.1.4 解析 resources.arsc（默认配置）",
+    "note": "encore_* 为 Spotify 自有设计系统命名空间；颜色条目在本包中为动态引用，未解析出字面色值。"
+  },
+  "dimensions": {
+    "encore_action_button_border_width": {
+      "value": 1,
+      "unit": "dip"
+    },
+    "encore_action_button_corner_radius": {
+      "value": 48,
+      "unit": "dip"
+    },
+    "encore_action_button_default_dot_indicator_top_margin": {
+      "value": 6,
+      "unit": "dip"
+    },
+    "encore_action_button_height_large": {
+      "value": 48,
+      "unit": "dip"
+    },
+    "encore_action_button_height_small": {
+      "value": 32,
+      "unit": "dip"
+    },
+    "encore_action_button_horizontal_padding_large": {
+      "value": 32,
+      "unit": "dip"
+    },
+    "encore_action_button_horizontal_padding_small": {
+      "value": 16,
+      "unit": "dip"
+    },
+    "encore_action_button_icon_size": {
+      "value": 24,
+      "unit": "dip"
+    },
+    "encore_action_button_icon_size_small": {
+      "value": 16,
+      "unit": "dip"
+    },
+    "encore_back_button_background_size": {
+      "value": 32,
+      "unit": "dip"
+    },
+    "encore_back_button_icon_size": {
+      "value": 24,
+      "unit": "dip"
+    },
+    "encore_back_button_size": {
+      "value": 48,
+      "unit": "dip"
+    },
+    "encore_back_button_unified_background_size": {
+      "value": 40,
+      "unit": "dip"
+    },
+    "encore_badge_group_badge_height": {
+      "value": 12,
+      "unit": "sp"
+    },
+    "encore_badge_margin": {
+      "value": 4,
+      "unit": "dip"
+    },
+    "encore_badge_padding": {
+      "value": 2,
+      "unit": "dip"
+    },
+    "encore_badge_radius": {
+      "value": 2,
+      "unit": "dip"
+    },
+    "encore_badge_size": {
+      "value": 12,
+      "unit": "sp"
+    },
+    "encore_bell_button_size": {
+      "value": 24,
+      "unit": "dip"
+    },
+    "encore_border_width_hairline": {
+      "value": 1,
+      "unit": "dip"
+    },
+    "encore_border_width_thick": {
+      "value": 4,
+      "unit": "dip"
+    },
+    "encore_button_animation_default_scale": {
+      "value": 4161536,
+      "unit": "px"
+    },
+    "encore_button_icon_only_icon_padding": {
+      "value": 0,
+      "unit": "dip"
+    },
+    "encore_button_icon_only_text_size": {
+      "value": 0,
+      "unit": "sp"
+    },
+    "encore_button_large_horizontal_inset": {
+      "value": 0,
+      "unit": "dip"
+    },
+    "encore_button_large_icon_only_insets": {
+      "value": 0,
+      "unit": "dip"
+    },
+    "encore_button_large_progress_indicator_thickness": {
+      "value": 4,
+      "unit": "dip"
+    },
+    "encore_button_large_progress_indicator_track_corner_radius": {
+      "value": 8,
+      "unit": "dip"
+    },
+    "encore_button_large_vertical_inset": {
+      "value": 0,
+      "unit": "dip"
+    },
+    "encore_button_medium_horizontal_inset": {
+      "value": 0,
+      "unit": "dip"
+    },
+    "encore_button_medium_horizontal_padding": {
+      "value": 8324866,
+      "unit": "sp"
+    },
+    "encore_button_medium_icon_only_insets": {
+      "value": 0,
+      "unit": "dip"
+    },
+    "encore_button_medium_progress_indicator_thickness": {
+      "value": 3,
+      "unit": "dip"
+    },
+    "encore_button_medium_progress_indicator_track_corner_radius": {
+      "value": 6,
+      "unit": "dip"
+    },
+    "encore_button_medium_vertical_inset": {
+      "value": 0,
+      "unit": "dip"
+    },
+    "encore_button_progress_indicator_insets": {
+      "value": 0,
+      "unit": "dip"
+    },
+    "encore_button_small_horizontal_inset": {
+      "value": 0,
+      "unit": "dip"
+    },
+    "encore_button_small_icon_size": {
+      "value": 0.99,
+      "unit": "sp"
+    },
+    "encore_button_small_progress_indicator_thickness": {
+      "value": 2.5,
+      "unit": "dip"
+    },
+    "encore_button_small_progress_indicator_track_corner_radius": {
+      "value": 5,
+      "unit": "dip"
+    },
+    "encore_camera_button_icon_size": {
+      "value": 24,
+      "unit": "dip"
+    },
+    "encore_camera_button_size": {
+      "value": 32,
+      "unit": "dip"
+    },
+    "encore_choice_chip_icon_padding": {
+      "value": 3,
+      "unit": "dip"
+    },
+    "encore_choice_chip_icon_size": {
+      "value": 11,
+      "unit": "dip"
+    },
+    "encore_control_size_base": {
+      "value": 48,
+      "unit": "dip"
+    },
+    "encore_control_size_larger": {
+      "value": 56,
+      "unit": "dip"
+    },
+    "encore_control_size_smaller": {
+      "value": 32,
+      "unit": "dip"
+    },
+    "encore_corner_radius_base": {
+      "value": 4,
+      "unit": "dip"
+    },
+    "encore_corner_radius_larger": {
+      "value": 6,
+      "unit": "dip"
+    },
+    "encore_corner_radius_larger_2": {
+      "value": 8,
+      "unit": "dip"
+    },
+    "encore_corner_radius_larger_3": {
+      "value": 16,
+      "unit": "dip"
+    },
+    "encore_corner_radius_smaller": {
+      "value": 2,
+      "unit": "dip"
+    },
+    "encore_creator_button_margin_start": {
+      "value": 8,
+      "unit": "dip"
+    },
+    "encore_creator_button_view_height": {
+      "value": 20,
+      "unit": "dip"
+    },
+    "encore_creator_row_face_width": {
+      "value": 20,
+      "unit": "dip"
+    },
+    "encore_creator_row_margin": {
+      "value": 8,
+      "unit": "dip"
+    },
+    "encore_creator_row_view_height": {
+      "value": 20,
+      "unit": "dip"
+    },
+    "encore_entity_action_view_size": {
+      "value": 48,
+      "unit": "dip"
+    },
+    "encore_follow_button_corner_radius": {
+      "value": 4,
+      "unit": "dip"
+    },
+    "encore_follow_button_horizontal_padding": {
+      "value": 12,
+      "unit": "dip"
+    },
+    "encore_follow_button_rounded_corner_radius": {
+      "value": 999,
+      "unit": "dip"
+    },
+    "encore_follow_button_vertical_padding": {
+      "value": 6,
+      "unit": "dip"
+    },
+    "encore_graphic_size_decorative_base": {
+      "value": 24,
+      "unit": "dip"
+    },
+    "encore_graphic_size_decorative_larger": {
+      "value": 32,
+      "unit": "dip"
+    },
+    "encore_graphic_size_decorative_larger_3": {
+      "value": 48,
+      "unit": "dip"
+    },
+    "encore_graphic_size_decorative_larger_4": {
+      "value": 64,
+      "unit": "dip"
+    },
+    "encore_graphic_size_decorative_larger_5": {
+      "value": 88,
+      "unit": "dip"
+    },
+    "encore_graphic_size_decorative_smaller": {
+      "value": 16,
+      "unit": "dip"
+    },
+    "encore_graphic_size_decorative_smaller_2": {
+      "value": 12,
+      "unit": "dip"
+    },
+    "encore_layout_margin_base": {
+      "value": 16,
+      "unit": "dip"
+    },
+    "encore_layout_max_width_narrow": {
+      "value": 640,
+      "unit": "dip"
+    },
+    "encore_list_row_action_container_margin_end": {
+      "value": 4,
+      "unit": "dip"
+    },
+    "encore_list_row_action_container_margin_start": {
+      "value": 0,
+      "unit": "dip"
+    },
+    "encore_list_row_trailing_margin_start": {
+      "value": 4,
+      "unit": "dip"
+    },
+    "encore_loading_indicator_size": {
+      "value": 24,
+      "unit": "dip"
+    },
+    "encore_loading_indicator_thickness": {
+      "value": 2.5,
+      "unit": "dip"
+    },
+    "encore_nav_chip_icon_padding": {
+      "value": 3,
+      "unit": "dip"
+    },
+    "encore_nav_chip_icon_size": {
+      "value": 11,
+      "unit": "dip"
+    },
+    "encore_navigate_button_view_size": {
+      "value": 40,
+      "unit": "dip"
+    },
+    "encore_play_and_pause_button_size_extra_large": {
+      "value": 54,
+      "unit": "dip"
+    },
+    "encore_play_and_pause_button_size_large": {
+      "value": 48,
+      "unit": "dip"
+    },
+    "encore_play_and_pause_icon_extra_large": {
+      "value": 32,
+      "unit": "dip"
+    },
+    "encore_play_and_pause_icon_large": {
+      "value": 24,
+      "unit": "dip"
+    },
+    "encore_play_and_pause_icon_small": {
+      "value": 16,
+      "unit": "dip"
+    },
+    "encore_play_and_pause_icon_very_small": {
+      "value": 12,
+      "unit": "dip"
+    },
+    "encore_play_button_badge_size": {
+      "value": 11,
+      "unit": "dip"
+    },
+    "encore_play_button_home_playable_card_shortcut_view_size": {
+      "value": 48,
+      "unit": "dip"
+    },
+    "encore_play_button_large_view_size": {
+      "value": 52,
+      "unit": "dip"
+    },
+    "encore_play_button_small_view_size": {
+      "value": 32,
+      "unit": "dip"
+    },
+    "encore_play_button_very_small_button_size": {
+      "value": 23,
+      "unit": "dip"
+    },
+    "encore_play_button_very_small_view_large_tap_area_size": {
+      "value": 48,
+      "unit": "dip"
+    },
+    "encore_play_button_very_small_view_size": {
+      "value": 23,
+      "unit": "dip"
+    },
+    "encore_play_indicator_default_size": {
+      "value": 12,
+      "unit": "dip"
+    },
+    "encore_profile_image_size": {
+      "value": 112,
+      "unit": "dip"
+    },
+    "encore_regular_list_row_small_media_size": {
+      "value": 0.99,
+      "unit": "sp"
+    },
+    "encore_regular_list_row_x_large_media_size": {
+      "value": 0.99,
+      "unit": "px"
+    },
+    "encore_regular_list_row_xx_large_media_size": {
+      "value": 0.99,
+      "unit": "dip"
+    },
+    "encore_spacer_base": {
+      "value": 16,
+      "unit": "dip"
+    },
+    "encore_spacer_looser": {
+      "value": 20,
+      "unit": "dip"
+    },
+    "encore_spacer_looser_2": {
+      "value": 24,
+      "unit": "dip"
+    },
+    "encore_spacer_looser_3": {
+      "value": 32,
+      "unit": "dip"
+    },
+    "encore_spacer_looser_4": {
+      "value": 40,
+      "unit": "dip"
+    },
+    "encore_spacer_looser_5": {
+      "value": 48,
+      "unit": "dip"
+    },
+    "encore_spacer_looser_6": {
+      "value": 64,
+      "unit": "dip"
+    },
+    "encore_spacer_tighter": {
+      "value": 12,
+      "unit": "dip"
+    },
+    "encore_spacer_tighter_2": {
+      "value": 8,
+      "unit": "dip"
+    },
+    "encore_spacer_tighter_3": {
+      "value": 6,
+      "unit": "dip"
+    },
+    "encore_spacer_tighter_4": {
+      "value": 4,
+      "unit": "dip"
+    },
+    "encore_spacer_tighter_5": {
+      "value": 2,
+      "unit": "dip"
+    },
+    "encore_tab_heading_horizontal_padding": {
+      "value": 16,
+      "unit": "dip"
+    },
+    "encore_tab_heading_tab_spacing": {
+      "value": 24,
+      "unit": "dip"
+    },
+    "encore_tag_label_corner_radius": {
+      "value": 3,
+      "unit": "dip"
+    },
+    "encore_tag_label_left_right_padding": {
+      "value": 8,
+      "unit": "dip"
+    },
+    "encore_tag_label_top_bottom_padding": {
+      "value": 2,
+      "unit": "dip"
+    },
+    "encore_text_size_base": {
+      "value": 16,
+      "unit": "sp"
+    },
+    "encore_text_size_larger": {
+      "value": 20,
+      "unit": "sp"
+    },
+    "encore_text_size_larger_2": {
+      "value": 24,
+      "unit": "sp"
+    },
+    "encore_text_size_larger_3": {
+      "value": 32,
+      "unit": "sp"
+    },
+    "encore_text_size_larger_4": {
+      "value": 40,
+      "unit": "sp"
+    },
+    "encore_text_size_larger_5": {
+      "value": 48,
+      "unit": "sp"
+    },
+    "encore_text_size_smaller": {
+      "value": 13,
+      "unit": "sp"
+    },
+    "encore_text_size_smaller_2": {
+      "value": 11,
+      "unit": "sp"
+    },
+    "encore_text_size_smaller_3": {
+      "value": 9,
+      "unit": "sp"
+    },
+    "encore_tooltip_corner_radius": {
+      "value": 10,
+      "unit": "dip"
+    },
+    "encore_viral_badge_margin": {
+      "value": 8,
+      "unit": "dip"
+    },
+    "encore_viral_badge_trending_icon_size": {
+      "value": 9,
+      "unit": "dip"
+    }
+  },
+  "groups": {
+    "border_width": {
+      "encore_action_button_border_width": "1dip",
+      "encore_border_width_hairline": "1dip",
+      "encore_border_width_thick": "4dip"
+    },
+    "corner_radius": {
+      "encore_action_button_corner_radius": "48dip",
+      "encore_button_large_progress_indicator_track_corner_radius": "8dip",
+      "encore_button_medium_progress_indicator_track_corner_radius": "6dip",
+      "encore_button_small_progress_indicator_track_corner_radius": "5dip",
+      "encore_corner_radius_base": "4dip",
+      "encore_corner_radius_larger": "6dip",
+      "encore_corner_radius_larger_2": "8dip",
+      "encore_corner_radius_larger_3": "16dip",
+      "encore_corner_radius_smaller": "2dip",
+      "encore_follow_button_corner_radius": "4dip",
+      "encore_follow_button_rounded_corner_radius": "999dip",
+      "encore_tag_label_corner_radius": "3dip",
+      "encore_tooltip_corner_radius": "10dip"
+    },
+    "text_size": {
+      "encore_button_icon_only_text_size": "0sp",
+      "encore_text_size_base": "16sp",
+      "encore_text_size_larger": "20sp",
+      "encore_text_size_larger_2": "24sp",
+      "encore_text_size_larger_3": "32sp",
+      "encore_text_size_larger_4": "40sp",
+      "encore_text_size_larger_5": "48sp",
+      "encore_text_size_smaller": "13sp",
+      "encore_text_size_smaller_2": "11sp",
+      "encore_text_size_smaller_3": "9sp"
+    },
+    "control_size": {
+      "encore_control_size_base": "48dip",
+      "encore_control_size_larger": "56dip",
+      "encore_control_size_smaller": "32dip"
+    },
+    "layout_margin": {
+      "encore_layout_margin_base": "16dip"
+    },
+    "spacer": {
+      "encore_spacer_base": "16dip",
+      "encore_spacer_looser": "20dip",
+      "encore_spacer_looser_2": "24dip",
+      "encore_spacer_looser_3": "32dip",
+      "encore_spacer_looser_4": "40dip",
+      "encore_spacer_looser_5": "48dip",
+      "encore_spacer_looser_6": "64dip",
+      "encore_spacer_tighter": "12dip",
+      "encore_spacer_tighter_2": "8dip",
+      "encore_spacer_tighter_3": "6dip",
+      "encore_spacer_tighter_4": "4dip",
+      "encore_spacer_tighter_5": "2dip"
+    }
+  },
+  "typography": {
+    "font_files": [
+      "res/font/spoticon.ttf",
+      "res/font/spotify_mix_mono_regular.otf",
+      "res/font/spotify_mix_ui_arab_bold.otf",
+      "res/font/spotify_mix_ui_arab_regular.otf",
+      "res/font/spotify_mix_ui_bold.otf",
+      "res/font/spotify_mix_ui_cyrl_bold.otf",
+      "res/font/spotify_mix_ui_cyrl_regular.otf",
+      "res/font/spotify_mix_ui_grek_bold.otf",
+      "res/font/spotify_mix_ui_grek_regular.otf",
+      "res/font/spotify_mix_ui_hebr_bold.otf",
+      "res/font/spotify_mix_ui_hebr_regular.otf",
+      "res/font/spotify_mix_ui_regular.otf",
+      "res/font/spotify_mix_ui_thai_bold.otf",
+      "res/font/spotify_mix_ui_thai_regular.otf",
+      "res/font/spotify_mix_ui_title_arab_bold.otf",
+      "res/font/spotify_mix_ui_title_arab_extrabold.otf",
+      "res/font/spotify_mix_ui_title_bold.otf",
+      "res/font/spotify_mix_ui_title_cyrl_bold.otf",
+      "res/font/spotify_mix_ui_title_cyrl_extrabold.otf",
+      "res/font/spotify_mix_ui_title_extrabold.otf",
+      "res/font/spotify_mix_ui_title_grek_bold.otf",
+      "res/font/spotify_mix_ui_title_grek_extrabold.otf",
+      "res/font/spotify_mix_ui_title_hebr_bold.otf",
+      "res/font/spotify_mix_ui_title_hebr_extrabold.otf",
+      "res/font/spotify_mix_ui_title_thai_bold.otf",
+      "res/font/spotify_mix_ui_title_thai_extrabold.otf"
+    ],
+    "text_size_scale": [
+      0,
+      9,
+      11,
+      13,
+      16,
+      20,
+      24,
+      32,
+      40,
+      48
+    ]
+  },
+  "measured_palette": [
+    {
+      "hex": "#121212",
+      "pct": 22.7
+    },
+    {
+      "hex": "#A75C28",
+      "pct": 7.0
+    },
+    {
+      "hex": "#000000",
+      "pct": 6.3
+    },
+    {
+      "hex": "#822A29",
+      "pct": 4.1
+    },
+    {
+      "hex": "#194641",
+      "pct": 4.0
+    },
+    {
+      "hex": "#153431",
+      "pct": 3.9
+    },
+    {
+      "hex": "#191515",
+      "pct": 3.7
+    },
+    {
+      "hex": "#161212",
+      "pct": 3.1
+    },
+    {
+      "hex": "#332C2B",
+      "pct": 3.0
+    },
+    {
+      "hex": "#CABECF",
+      "pct": 3.0
+    },
+    {
+      "hex": "#E7A5CB",
+      "pct": 2.9
+    },
+    {
+      "hex": "#E8A4CA",
+      "pct": 2.9
+    }
+  ]
+}

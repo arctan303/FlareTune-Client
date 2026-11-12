@@ -26,3 +26,6 @@ key.properties
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Research scratch space: raw APKs, extracted packages, venv
+.research/

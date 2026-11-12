@@ -1,0 +1,6 @@
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@id/page_container" android:tag="layout/fragment_static_lyrics_0" android:layout_width="match_parent" android:layout_height="match_parent">
+  <eightbitlab.com.blurview.BlurTarget android:id="@id/blur_target" android:layout_width="match_parent" android:layout_height="match_parent">
+    <androidx.recyclerview.widget.RecyclerView android:id="@id/main_content" android:layout_width="match_parent" android:layout_height="match_parent"/>
+  </eightbitlab.com.blurview.BlurTarget>
+  <androidx.compose.ui.platform.ComposeView android:layout_gravity="0x00000030" android:id="@id/floating_app_bar_container" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+</FrameLayout>

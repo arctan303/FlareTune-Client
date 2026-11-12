@@ -1,0 +1,148 @@
+{
+  "$schema": "flaretune-client-design-tokens@1",
+  "meta": {
+    "name": "FlareTune Client",
+    "version": "0.1.0-proposal",
+    "basis": "research/docs/06-flaretune-client-design.md",
+    "note": "数值为提案，非从任何 APK 复制；比例参考 Spotify Encore 与 Apple Music 资源表，中文尺寸已调整。"
+  },
+  "color": {
+    "dark": {
+      "bg.base": "#09090B",
+      "bg.surface": "#121214",
+      "bg.elevated": "#18181B",
+      "bg.overlay": "#0000008C",
+      "border.hairline": "#27272A",
+      "text.primary": "#FAFAFA",
+      "text.secondary": "#A1A1AA",
+      "text.tertiary": "#71717A",
+      "accent.base": "#FF7A45",
+      "accent.on": "#1A0F08",
+      "accent.soft": "#FF7A4529",
+      "state.playing": "#FF7A45",
+      "state.liked": "#FF7A45"
+    },
+    "light": {
+      "bg.base": "#FFFFFF",
+      "bg.surface": "#FAFAFA",
+      "bg.elevated": "#F4F4F5",
+      "bg.overlay": "#FFFFFFBF",
+      "border.hairline": "#E4E4E7",
+      "text.primary": "#18181B",
+      "text.secondary": "#52525B",
+      "text.tertiary": "#71717A",
+      "accent.base": "#E8590C",
+      "accent.on": "#FFFFFF",
+      "accent.soft": "#E8590C1F",
+      "state.playing": "#E8590C",
+      "state.liked": "#E8590C"
+    },
+    "artworkDerived": {
+      "saturationMax": 0.45,
+      "lightnessDark": [0.18, 0.28],
+      "lightnessLight": [0.88, 0.94],
+      "usage": "background-only"
+    }
+  },
+  "typography": {
+    "fontFamily": {
+      "sans": ["Inter", "PingFang SC", "HarmonyOS Sans", "sans-serif"],
+      "numeric": ["JetBrains Mono", "Inter"],
+      "icon": "material-symbols"
+    },
+    "scale": {
+      "display": { "size": 30, "lineHeight": 40, "weight": 700, "letterSpacing": -0.2 },
+      "title": { "size": 24, "lineHeight": 32, "weight": 600, "letterSpacing": -0.2 },
+      "headline": { "size": 20, "lineHeight": 28, "weight": 600 },
+      "bodyLg": { "size": 17, "lineHeight": 26, "weight": 500 },
+      "body": { "size": 15, "lineHeight": 23, "weight": 400 },
+      "label": { "size": 13, "lineHeight": 18, "weight": 400 },
+      "caption": { "size": 11, "lineHeight": 16, "weight": 500 },
+      "numeric": { "size": 13, "lineHeight": 18, "weight": 500, "tabular": true }
+    }
+  },
+  "spacing": {
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "base": 16,
+    "lg": 20,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 40,
+    "4xl": 48,
+    "5xl": 64,
+    "pagePaddingList": 16,
+    "pagePaddingImmersive": 20,
+    "sectionGap": 24
+  },
+  "radius": {
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "full": 999
+  },
+  "component": {
+    "chip": { "height": 36, "radius": 18, "paddingX": 16, "touchTarget": 48 },
+    "listRow": {
+      "heightSingle": 64,
+      "heightDouble": 72,
+      "artwork": 48,
+      "artworkRadius": 8,
+      "gap": 12
+    },
+    "miniPlayer": {
+      "height": 72,
+      "radius": 16,
+      "margin": 8,
+      "artwork": 44,
+      "artworkRadius": 8,
+      "progressHeight": 2,
+      "playButton": 40,
+      "secondaryButton": 32
+    },
+    "player": {
+      "horizontalPadding": 32,
+      "artworkRadius": 12,
+      "artworkShadow": { "color": "#00000040", "offsetY": 8, "blur": 24 },
+      "vinylDiameterInset": 96,
+      "progressHeight": 2,
+      "progressThumb": 12,
+      "playButton": 56,
+      "controlButton": 32,
+      "blurRadius": [48, 64],
+      "overlayDark": 0.55,
+      "overlayLight": 0.75
+    },
+    "lyrics": {
+      "size": 20,
+      "lineHeight": 1.4,
+      "blockGap": 28,
+      "inactiveOpacity": 0.45,
+      "translationSize": 15,
+      "horizontalPadding": 32,
+      "karaokeFeather": 24
+    },
+    "grid": {
+      "artworkRadius": 12,
+      "peekRatio": 0.1
+    }
+  },
+  "motion": {
+    "duration": { "press": 100, "state": 180, "enter": 240, "expand": 320, "lyricLine": 220, "colorCross": 400 },
+    "easing": {
+      "standard": "cubic-bezier(0.2, 0, 0, 1)",
+      "linear": "linear"
+    },
+    "vinylRotationSeconds": 24,
+    "vinylStopMs": 800
+  },
+  "accessibility": {
+    "minTouchTarget": 48,
+    "contrastBody": 4.5,
+    "contrastLarge": 3.0,
+    "maxFontScale": 2.0
+  }
+}

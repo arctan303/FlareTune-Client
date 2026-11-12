@@ -1,0 +1,192 @@
+{
+  "file": {
+    "name": "com.apple.android.music.apk",
+    "size_mb": 75.86
+  },
+  "manifest": {
+    "package": "com.apple.android.music",
+    "app_name": "Apple Music",
+    "version_name": "7.0.0",
+    "version_code": "1614",
+    "min_sdk": "30",
+    "target_sdk": "36",
+    "main_activity": "com.apple.android.music.common.MainActivity",
+    "permissions": 28,
+    "activities": 32,
+    "features": [
+      "android.hardware.camera"
+    ]
+  },
+  "zip": {
+    "entries": 4936,
+    "top_dirs": [
+      [
+        "res/drawable",
+        1585
+      ],
+      [
+        "res/layout",
+        1241
+      ],
+      [
+        "com/google",
+        541
+      ],
+      [
+        "res/layout-v33",
+        319
+      ],
+      [
+        "res/color",
+        231
+      ],
+      [
+        "res/layout-v31",
+        150
+      ],
+      [
+        "res/font",
+        99
+      ],
+      [
+        "res/anim",
+        73
+      ],
+      [
+        "res/drawable-anydpi-v21",
+        73
+      ],
+      [
+        "org/bytedeco",
+        41
+      ],
+      [
+        "res/animator",
+        36
+      ],
+      [
+        "res/drawable-xxxhdpi-v4",
+        35
+      ],
+      [
+        "res/color-v31",
+        32
+      ],
+      [
+        "res/xml",
+        32
+      ],
+      [
+        "res/menu",
+        27
+      ],
+      [
+        "res/layout-w600dp-v13",
+        23
+      ],
+      [
+        "res/interpolator",
+        16
+      ],
+      [
+        "google/protobuf",
+        12
+      ],
+      [
+        "res/anim-v21",
+        11
+      ],
+      [
+        "res/drawable-night-v8",
+        11
+      ],
+      [
+        "res/drawable-xhdpi-v4",
+        11
+      ],
+      [
+        "res/drawable-v21",
+        10
+      ],
+      [
+        "res/interpolator-v21",
+        10
+      ],
+      [
+        "res/color-v23",
+        9
+      ],
+      [
+        "META-INF/androidx",
+        8
+      ]
+    ],
+    "dex": [
+      "classes.dex",
+      "classes2.dex",
+      "classes3.dex",
+      "classes4.dex"
+    ],
+    "native_libs": [],
+    "vector_drawables": 4053,
+    "png_jpg_webp": 96,
+    "flutter": false
+  },
+  "font_files": [
+    "assets/fonts/NotoSansSymbols.otf",
+    "assets/fonts/NotoSans_sub.ttf",
+    "res/font/noto_nastaliq_urdu_ui.ttf",
+    "res/font/noto_nastaliq_urdu_ui_bold.ttf",
+    "res/font/roboto_medium_numbers.ttf",
+    "res/font/sf_arabic.ttf",
+    "res/font/sf_arabic_rounded.ttf",
+    "res/font/sf_armenian.ttf",
+    "res/font/sf_armenian_rounded.ttf",
+    "res/font/sf_bangla.ttf",
+    "res/font/sf_devanagari.ttf",
+    "res/font/sf_georgian.ttf",
+    "res/font/sf_georgian_rounded.ttf",
+    "res/font/sf_gujarati.ttf",
+    "res/font/sf_gurmukhi.ttf",
+    "res/font/sf_hebrew.ttf",
+    "res/font/sf_hebrew_rounded.ttf",
+    "res/font/sf_kannada.ttf",
+    "res/font/sf_malayalam.ttf",
+    "res/font/sf_odia.ttf",
+    "res/font/sf_pro_android_ui.ttf",
+    "res/font/sf_pro_rounded_android_ui.ttf",
+    "res/font/sf_tamil.ttf",
+    "res/font/sf_telugu.ttf"
+  ],
+  "flutter_font_manifest": [],
+  "arsc": {
+    "type_counts": {
+      "public": 17142,
+      "string": 3063,
+      "id": 2956,
+      "dimen": 1807,
+      "color": 1372,
+      "integer": 179,
+      "bool": 50,
+      "anim": 0,
+      "animator": 0,
+      "array": 0,
+      "attr": 0,
+      "drawable": 0,
+      "font": 0,
+      "interpolator": 0,
+      "layout": 0,
+      "menu": 0,
+      "mipmap": 0,
+      "navigation": 0,
+      "plurals": 0,
+      "raw": 0,
+      "style": 0,
+      "transition": 0,
+      "xml": 0
+    },
+    "colors_count": 1132,
+    "dimens_count": 1593,
+    "strings_count": 3062
+  }
+}

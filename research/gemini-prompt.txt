@@ -1,0 +1,201 @@
+我在做一个纯消费型音乐播放器客户端（Android，还没定技术栈）。产品定位是「首页结构学 Spotify，全屏播放页学 Apple Music」。
+
+为了搞清楚 Apple Music 播放页到底怎么做的，我把它的 APK（com.apple.android.music 7.0.0，versionCode 1614）拆了：反编译了 res/layout、res/anim、resources.arsc，还用脚本 dump 了 4 个 dex 的 dalvik 指令，把背景、动效、歌词的实现逻辑还原出来了。
+
+下面是全部结论，以及我没搞明白的地方。想请你帮我看几件事，具体问题在最后。
+
+━━━━━━━━━━━━━━━━━━━━
+一、背景效果：每帧实时算出来的，不是一张模糊图
+━━━━━━━━━━━━━━━━━━━━
+
+自定义 View（LyricsBackgroundLayerView）收到封面后，在 onDraw 里按当前时间实时合成背景 bitmap。反编译还原的流程：
+
+1. 目标尺寸 = 视图尺寸 × 1.3
+2. createBitmap(w×1.3, h×1.3, ARGB_8888)
+3. 三层 drawBitmap，每层：
+   - Matrix.setScale(k, k)，k = 1.3 × 目标尺寸 / 原图尺寸
+   - Matrix.postRotate(animValue, cx, cy)
+   - Matrix.postTranslate(dx, dy)
+   - Paint 挂 ColorMatrixColorFilter(ColorMatrix().setSaturation(2.5f))
+4. 用封面取到的两个颜色 drawPaint 打底
+5. RenderScript 高斯模糊，radius = 25
+6. createBitmap + drawBitmap 缩放输出
+
+三个旋转动画（ValueAnimator）：
+- 时长 120000ms / 90000ms / 70000ms
+- 都是 LinearInterpolator + setRepeatCount(-1)
+- 每帧调 setCurrentPlayTime(System.currentTimeMillis())
+
+也就是说背景用「真实时间」驱动，跟播放进度无关：暂停时背景还在缓慢流动，切歌也不重新计时。
+
+常量还原：
+- 1067869798 = 1.3f（放大倍数）
+- 1075838976 = 2.5f（饱和度）
+- -1082969293 = -1.0f，-1087163597 = -0.8f（第2层偏移系数）
+- -1090519040 = -2.0f，1060320051 = 0.7f（第3层）
+
+性能处理：用 HashMap<Pair<w,h>, Pair<Bitmap,Canvas>> 按视图尺寸缓存，尺寸不变就不重算。还有个 setReducedEffects(boolean) 可以整套关掉。
+
+另外有一个「镜像模糊」层，我觉得是这套设计里性价比最高的一招：
+封面只占屏幕上方 3:4 的一块（TextureView，constraintDimensionRatio="H,3:4"），下半屏用「封面底边的翻转副本 + 模糊」铺满——一个 View 设 scaleY=-1，top 约束到一个 barrier 上，barrier 的 margin 是 -22dp（往封面里多压 22dp，防止接缝露白边）。所以整屏是同一张图的气质，但没有硬分界。
+
+遮罩层：
+- 全屏可读性渐变，基色 #B3171717（70% 黑）
+- 封面下方再叠 #59000000（35% 黑）
+- 歌词列表背后 #4D000000（30% 黑）
+- 没拿到封面时兜底 #FF424242 + 顶部圆角 16dp
+
+━━━━━━━━━━━━━━━━━━━━
+二、动效
+━━━━━━━━━━━━━━━━━━━━
+
+进场 250ms，退场 300ms，都是 decelerate_interpolator，整屏 translateY 100%p：
+- activity_slide_up.xml: duration = @integer/slide_animation_duration = 250
+- activity_slide_down.xml: duration = 300（硬编码，没走资源）
+- activity_fade_in.xml: 200ms，accelerate_decelerate
+- activity_hold.xml: 250ms，translate 不动，zAdjustment=-1
+
+出比进慢 50ms。activity_hold 的存在说明这是双 Activity 叠层：上层滑入时下层不动，只被压到后面。所以播放页是「盖上来」，不是「推走」。
+
+播放页本身是 BottomSheet：
+- PlayerBottomSheetBehavior extends Material 的 BottomSheetBehavior，只覆写了 4 个方法
+- player.xml 里 app:behavior_peekHeight = 0dp（收起时完全不可见，没有半露的播放条）
+- onBottomSheetSlide(float) 里，slide <= 0.3f 时切换系统栏明暗
+
+通用滑动（BottomSheet / Fragment）用 config_shortAnimTime = 200ms。
+
+还有一个 rotation_anim.xml：objectAnimator rotation 0→360，500ms，repeat=-1。这不是黑胶（太快），是加载/缓冲指示器。
+
+━━━━━━━━━━━━━━━━━━━━
+三、歌词
+━━━━━━━━━━━━━━━━━━━━
+
+字号 34sp（Title0Emphasized），次级行 22sp，静态歌词行高 26sp。
+行距 32dp，静态歌词行距 40dp，顶部留 30dp。
+行内 padding 上 2 / 下 10 / 左右 12，行 margin 左右 20 —— 合起来左右留白 32dp。
+
+34sp 在 1080p 屏上一屏只放 4~5 行。Apple 敢这么做，是因为它把歌词当海报排版，不是当文本。
+
+行状态：
+- 非当前行 scale 0.98，当前行 1.0
+- 颜色：当前行 #F0FFFFFF（94% 白），非当前行 #73FFFFFF（45% 白）
+- 只有 2% 的缩放差异，但配合颜色层级就立起来了，不用 0.8/1.2 那种夸张缩放
+
+逐字高亮（卡拉OK）：
+- 每个字是一个独立的 CustomTextView，用 Flexbox 排成一行
+- 逐字上色 = 改那个字的 textColor，不用复杂 span
+- 整行边缘羽化由一个自定义的 FullWidthAlphaGradientFlexboxLayout 做：
+  canvas.saveLayer() 整层合成 → 用 LinearGradient 当 shader 的 Paint 逐 mask 画 → restore
+  关键是用「一个共享的渐变遮罩」而不是给每个 TextView 单独设 alpha，
+  这样一行里所有字共享同一个渐变坐标系，边缘过渡是连续的
+- 羽化宽度 30dp（在 34sp 的字上，所以高亮是「扫」过去不是「切」过去）
+- 唱到的音节上浮 -2dp（几乎看不出来，但去掉整个效果会变平）
+- 背景人声行用同一个布局类，22sp，paddingTop 22dp
+
+滚动策略：
+- ItemAnimator 的 animateChange 直接 return true，不做任何 item 动画
+  因为歌词是整体滚动的，每行再各自动会打架，所以行内容更新是瞬时的
+- 用户手动滚动后 7000ms 内不自动跟随，之后恢复自动居中
+
+布局：
+- 控件区固定占屏高 34.5%（player_controls_height_percent = 0.345）
+- 点击区从 42.5% 开始（lyrics_controls_tap_target_height_percent = 0.425）
+- 中间 8% 是「点了不跳转也不误触」的缓冲带
+- 歌词列表外面套一个 AlphaGradientFrameLayout，gradient_edge=0x0F（四边全开），
+  上下边缘渐隐；进/出歌词页时，边缘渐变位置和控件透明度是一起动画的
+
+━━━━━━━━━━━━━━━━━━━━
+四、控件与颜色（数值速查）
+━━━━━━━━━━━━━━━━━━━━
+
+进度条 MinimalSeekBar：高 7dp，圆角 3.5dp（全圆角胶囊），上下 padding 5dp
+进度 thumb：9dp，按下时 36dp
+进度条左右边距：32dp
+时间文字：Caption1Emphasized + 等宽数字（enableMonospaceDigits=true）
+播放键：wrap_content + padding 11dp（图标 30dp，触控约 52dp）
+上一首/下一首与播放键间距：40dp
+歌词/队列按钮：在播放键左右下方，marginBottom 14dp
+播放页最小宽 320dp，平板最大高 500dp
+
+mini player（mini_player.xml，播放页里也复用了同一份）：
+- 高 48dp
+- 缩略图 30dp，圆角 5dp
+- 按钮 32dp
+- 内边距左右 16dp，外边距左右 16dp
+- 最大宽 600dp
+- 与底部导航间距 8dp
+
+颜色只有白色四档 alpha，不调色相、不加灰：
+- #F0FFFFFF（94%）歌词当前行、曲名
+- #73FFFFFF（45%）艺人名、副标题、进度条已播放
+- #2EFFFFFF（18%）未播放轨道、次要图标
+- #14FFFFFF（8%）分隔线、极弱元素
+
+理由：背景是流动的彩色，任何固定灰都会显脏。
+
+━━━━━━━━━━━━━━━━━━━━
+五、和我现有提案冲突的地方
+━━━━━━━━━━━━━━━━━━━━
+
+我原本的设计提案 vs 这次实测：
+- 背景：提案「封面模糊 48–64dp + 55% 遮罩」 vs 实测「三层旋转 + 饱和度 2.5 + 模糊 25」
+- 歌词字号：提案 20sp vs 实测 34sp
+- 歌词非当前行：提案只有 45% 不透明 vs 实测 45% + scale 0.98
+- 进度条：提案 2dp vs 实测 7dp 胶囊
+- 播放键：提案 56dp 实心 vs 实测 wrap_content + 11dp padding（≈52dp 触控）
+- mini player：提案 72dp vs 实测 48dp
+- 转场：提案 320ms 共享元素 vs 实测 250ms 进 / 300ms 出 整屏位移
+- 逐字羽化：提案 24dp vs 实测 30dp
+
+━━━━━━━━━━━━━━━━━━━━
+六、我没搞明白的（这些不是结论，是缺口）
+━━━━━━━━━━━━━━━━━━━━
+
+1. 三层 drawBitmap 的意义
+   如果 Paint 没有设 xfermode，三层就是纯 SRC_OVER 叠加，后画的会完全覆盖先画的，
+   前两层白画。我的推断是：旋转后 1.3 倍的图在角落会露出空白，三层不同角度正好互补。
+   但这只是推断，没在真机验证。如果是这个目的，那为什么是 3 层不是 2 层？
+
+2. 逐字高亮的时间轴
+   com.apple.android.music.ttml.javanative.LyricsController 是 JNI 包装，
+   TTML 解析和逐字时间对齐都在 native 层。我只能确认它按 syllable 粒度驱动，看不到算法。
+
+3. 歌词滚动的插值曲线
+   RecyclerView 的 smoothScroll 没有显式 duration，走 LinearSmoothScroller 默认速度
+   （按像素/毫秒算），没反编译到具体系数。
+
+4. lyrics_line_scale_highlight 的确切值
+   ARSC 里被解析成 4161536.0px，按 <<8 还原是 1.0f，但同组的 _normal 是未经此变形的 0.98，
+   两者编码方式不一致。保守标注为「≈1.0，待真机核实」。
+
+━━━━━━━━━━━━━━━━━━━━
+七、想请你回答的
+━━━━━━━━━━━━━━━━━━━━
+
+1. 背景在 Compose 里怎么落地才不掉帧？
+   Apple 是每帧重建整张 bitmap（1.3 倍屏宽 × 屏高，ARGB_8888 约 4MB）。
+   我考虑降到 10fps，或者预渲染 8~12 帧循环播放（转速是 70s+/圈，视觉上应该看不出差别）。
+   还有更省的做法吗？RenderEffect 在中低端机上扛得住吗？
+
+2. 34sp 中文这个取舍怎么办？
+   英文 34sp 一行放 12~15 个字母，中文 34sp 在 360dp 宽屏上一行只有 9~10 个汉字，
+   一句歌词经常折两行，一屏只剩 3 行。
+   是坚持 24sp 稳妥，还是做双模式（默认 24 / 「歌词海报模式」34）？双模式的切换点怎么设计？
+
+3. 逐字高亮有没有更合适的实现？
+   Apple 用「每个字一个 View」。英文按单词切，中文按字切，数量会翻倍（一句 10 个字就是 10 个 View）。
+   在 Compose 里用 AnnotatedString + 逐段改 style 可行吗？还是得自定义 Text 绘制？
+   注意那个「共享渐变坐标系做整行羽化」的效果，AnnotatedString 能实现吗？
+
+4. 三层叠加那个问题（第六节第 1 条）你怎么看？有没有别的解释？
+
+5. 250ms 进 / 300ms 出这组不对称时长，在 Material Motion 体系里算合理吗？
+   还是只是 Apple 自己的口味？
+
+━━━━━━━━━━━━━━━━━━━━
+
+补充说明：数值都取自 APK 的默认 values 目录（手机竖屏）。Apple 还有 values-sw600dp、
+values-xxhdpi 等多套限定符覆盖，宽屏和 dpi 下的值不同，不构成矛盾。
+
+如果你觉得哪条结论看起来不可信，直接说——这份东西是从 dalvik 指令和资源表还原的，
+可能有解读错误，我更希望被纠错而不是被认可。
