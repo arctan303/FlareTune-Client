@@ -36,4 +36,4 @@
 
 合并包android/build/deliverables/FlareTune-0.1.0-dev.6-20261113-debug.apk，SHA256 41A70598797BC8EDC6325E68DF5BB8126C25D7B1256CF6F5C6A1F21E9CF6162C，签名v1/v2、16KB ZIP对齐、badging通过。覆盖安装Success；首次启动处于系统PackageUpdateActivity过渡，随后明确start返回com.flaretune.client/.MainActivity、前台与进程存在；回读version6和base.apk摘要一致。未卸载/清data，安装日志android/build/deploy-dev6-20261113.log。
 
-共同工作区同步状态：待本次提交后执行带HEAD/文件摘要检查的快进同步，保留Gemini原始具名恢复stash，随后回读共享/隔离HEAD及远端提交一致。后续双方从共享FlareTune-Client分支codex/android-client-backup-20261112继续，用户负责调度；隔离树不再独立开展新功能。
+共同工作区同步完成：两树已快进到合并输入f42ba1321e5f73bb4034c598ea572bea0fa82efe，忽略CRLF/LF的逐项源码比较与dev.6证据一致，工作树干净。已测试隔离输入仍逐项匹配原始字节摘要；Git检出对两文件执行换行归一化，不改Kotlin语义。Gemini原始快照保留stash 0fbf01198abd4a34cb9fe20f8c2a007d74339b04；两份无实质差异文件另保留原字节，Git索引状态刷新后快进成功，没有丢弃业务改动。本次收尾说明提交只改文档，远程备份沿用同名分支，最终HEAD及两树/远端一致性以Git回读为准。后续双方从共享FlareTune-Client分支codex/android-client-backup-20261112继续，用户负责调度；隔离树不再独立开展新功能。
