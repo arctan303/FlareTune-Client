@@ -1,7 +1,13 @@
 package com.flaretune.client.ui
 
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.staticCompositionLocalOf
 import com.flaretune.client.model.*
 import com.flaretune.client.data.SearchEntity
+import kotlinx.coroutines.flow.StateFlow
 
 enum class ClientScreen { RESTORING, CONNECT, CHANGE_PASSWORD, LIBRARY }
 enum class LibraryTab { CATALOG, FAVORITES, ALBUMS }
@@ -218,4 +224,12 @@ interface ClientActions {
     fun selectSongLanguage(language: String) {}
     fun selectAlbumLanguage(language: String) {}
     fun selectDiscoverLanguage(language: String) {}
+}
+
+internal val LocalPlaybackPositionMs = staticCompositionLocalOf<StateFlow<Long>?> { null }
+
+@Composable
+internal fun rememberPlaybackPositionMsState(fallbackPositionMs: Long): State<Long> {
+    val flow = LocalPlaybackPositionMs.current
+    return flow?.collectAsState() ?: rememberUpdatedState(fallbackPositionMs)
 }

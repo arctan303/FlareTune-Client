@@ -11,7 +11,9 @@ import com.flaretune.client.ui.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.Semaphore
@@ -39,6 +41,8 @@ class ClientViewModel(
     private var translationEnabled = runCatching { translationPreferences?.read() ?: false }.getOrDefault(false)
     private val mutable = MutableStateFlow(ClientUiState(instanceUrl = connections.lastOrigin, translationEnabled = translationEnabled, playback = PlaybackSnapshot(volume = preferredVolume)))
     val state: StateFlow<ClientUiState> = mutable
+    private val mutablePlaybackPositionMs = MutableStateFlow(player.state.value.positionMs.coerceAtLeast(0L))
+    val playbackPositionMs: StateFlow<Long> = mutablePlaybackPositionMs
     val imageLoader: ImageLoader? get() = player.imageLoader
     private val lyrics = LyricsCoordinator(viewModelScope, ioDispatcher)
     private var identity = 0L
@@ -109,6 +113,8 @@ class ClientViewModel(
     private var allStatsReady = false
     private var favoritesReadyForContinue = false
     private var searchHistorySnapshotLocked = false
+    private var playlistsLoadedOnce = false
+    private var favoritesLoadedOnce = false
 
     private enum class SearchSnapshotMode { LOAD_AND_LOCK, RECORD_ONLY, APPLY_TO_VISIBLE }
 
@@ -147,6 +153,8 @@ class ClientViewModel(
         homeHistoryPreviewLocked = false
         recentPlayStats = null
         recentDayPlayStats = null
+        playlistsLoadedOnce = false
+        favoritesLoadedOnce = false
         continueSearchSongs = emptyList()
         continueSearchReady = searchHistoryStore == null
         recentStatsReady = false
@@ -162,8 +170,40 @@ class ClientViewModel(
         historyResolved.clear()
     }
 
+    private data class NavigationStateSignature(
+        val screen: ClientScreen,
+        val navigationIdentity: String?,
+        val destination: MainDestination,
+        val tab: LibraryTab,
+        val query: String,
+        val songLanguage: String,
+        val albumLanguage: String,
+        val songSort: String,
+        val albumId: String?,
+        val playlistId: String?,
+        val artistName: String?,
+        val artistId: String?,
+    )
+
+    private fun navigationStateSignature(ui: ClientUiState) = NavigationStateSignature(
+        screen = ui.screen,
+        navigationIdentity = ui.navigationIdentity,
+        destination = ui.destination,
+        tab = ui.tab,
+        query = ui.query,
+        songLanguage = ui.songLanguage,
+        albumLanguage = ui.albumLanguage,
+        songSort = ui.songSort,
+        albumId = ui.selectedAlbum?.id,
+        playlistId = ui.selectedPlaylist?.id,
+        artistName = ui.selectedArtist?.name,
+        artistId = ui.selectedArtist?.id,
+    )
+
     init {
-        viewModelScope.launch { state.collect { saveNavigationState() } }
+        viewModelScope.launch {
+            state.map(::navigationStateSignature).distinctUntilChanged().collect { saveNavigationState() }
+        }
         systemMediaFavorites?.let { changes -> viewModelScope.launch {
             changes.updates.collect { update ->
                 if (current() !== update.connection) return@collect
@@ -172,9 +212,17 @@ class ClientViewModel(
             }
         } }
         viewModelScope.launch {
+            player.positionMsFlow.collect { posMs ->
+                val clamped = posMs.coerceAtLeast(0L)
+                if (mutablePlaybackPositionMs.value != clamped) mutablePlaybackPositionMs.value = clamped
+                lyrics.updatePosition(clamped)
+            }
+        }
+        viewModelScope.launch {
             player.state.collect { snapshot ->
                 if (snapshot.playing) homeHistoryPreviewLocked = true
                 mutable.value = mutable.value.copy(playback = snapshot)
+                mutablePlaybackPositionMs.value = snapshot.positionMs.coerceAtLeast(0L)
                 lyrics.activate(current(), snapshot.current)
                 lyrics.updatePosition(snapshot.positionMs)
             }
@@ -341,18 +389,48 @@ class ClientViewModel(
     }
 
     override fun navigate(destination: MainDestination) {
-        val previousDestination = mutable.value.destination
-        closeAlbum()
-        closePlaylist()
-        closeArtist()
-        mutable.value = mutable.value.copy(destination = destination)
+        val currentState = mutable.value
+        val previousDestination = currentState.destination
+        val hadDetail = currentState.selectedAlbum != null ||
+            currentState.selectedPlaylist != null ||
+            currentState.selectedArtist != null
+        val hadPickerState = currentState.pickerSongs.isNotEmpty() ||
+            currentState.pickerQuery.isNotEmpty() ||
+            currentState.pickerLoading ||
+            currentState.pickerLoadingMore ||
+            currentState.pickerHasMore ||
+            currentState.pickerNotice != null
+        val needsLibraryCatalogReset = destination == MainDestination.LIBRARY && currentState.tab != LibraryTab.CATALOG
+        val needsDiscoverLangSync = destination == MainDestination.DISCOVER &&
+            (currentState.songLanguage != currentState.discoverLanguage ||
+                currentState.albumLanguage != currentState.discoverLanguage)
+        if (destination == previousDestination && !hadDetail && !needsLibraryCatalogReset && !needsDiscoverLangSync) {
+            if (hadPickerState) closePlaylistSongPicker()
+            if (destination == MainDestination.LIBRARY && currentState.query.isNotBlank()) search("")
+            return
+        }
+        detailRevision++; detailJob?.cancel()
+        playlistRevision++; playlistJob?.cancel()
+        closePlaylistSongPicker()
+        artistRevision++; artistJob?.cancel(); artistOffset = 0
+        artistAlbumsRevision++; artistAlbumsJob?.cancel(); artistAlbumsOffset = 0
+        mutable.value = mutable.value.copy(
+            destination = destination,
+            selectedAlbum = null, albumSongs = emptyList(), albumLoading = false, albumNotice = null,
+            selectedPlaylist = null, playlistSongs = emptyList(), selectedPlaylistEntries = emptyList(),
+            playlistLoading = false, playlistNotice = null,
+            selectedArtist = null, artistSongs = emptyList(), artistLoading = false,
+            artistLoadingMore = false, artistHasMore = false, artistNotice = null,
+            artistAlbums = emptyList(), artistAlbumsLoading = false, artistAlbumsLoadingMore = false,
+            artistAlbumsHasMore = false, artistAlbumsNotice = null,
+        )
         when (destination) {
             MainDestination.HOME -> {
                 val leftSearch = previousDestination == MainDestination.SEARCH
                 if (mutable.value.tab != LibraryTab.CATALOG) selectTab(LibraryTab.CATALOG)
                 else if (mutable.value.query.isNotBlank()) search("")
                 else if (leftSearch) load(true)
-                refreshFavorites()
+                if (!favoritesLoadedOnce || mutable.value.favoritesNotice != null) refreshFavorites()
             }
             MainDestination.DISCOVER -> {
                 val leftSearch = previousDestination == MainDestination.SEARCH
@@ -375,8 +453,9 @@ class ClientViewModel(
                 if (mutable.value.tab != LibraryTab.CATALOG) selectTab(LibraryTab.CATALOG)
             }
             MainDestination.LIBRARY -> {
-                if (mutable.value.query.isNotBlank()) search("")
-                refreshPlaylists()
+                if (mutable.value.tab != LibraryTab.CATALOG) selectTab(LibraryTab.CATALOG)
+                else if (mutable.value.query.isNotBlank()) search("")
+                if (!playlistsLoadedOnce || mutable.value.playlistsNotice != null) refreshPlaylists()
             }
         }
     }
@@ -386,6 +465,8 @@ class ClientViewModel(
         homeContinueLocked = false
         recentPlayStats = null
         recentDayPlayStats = null
+        playlistsLoadedOnce = false
+        favoritesLoadedOnce = false
         continueSearchSongs = emptyList()
         continueSearchReady = searchHistoryStore == null
         recentStatsReady = false
@@ -608,8 +689,10 @@ class ClientViewModel(
                     if (item.kind == "favorite" && knownFavoriteDetail?.playlist?.revision != item.revision && selected?.kind == "favorite") selected else item
                 }
                 if (selected != null && updated == null) closePlaylist()
+                playlistsLoadedOnce = true
                 mutable.value = mutable.value.copy(playlists = retainedItems, playlistShelf = shelf ?: mutable.value.playlistShelf,
                     playlistsLoading = false, selectedPlaylist = updated, playlistsNotice = null)
+                favoritesLoadedOnce = true
                 refreshFavorites()
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
@@ -715,6 +798,7 @@ class ClientViewModel(
             playlistLoading = if (selectedFavorite) false else snapshot.playlistLoading,
             playlistNotice = if (selectedFavorite) null else snapshot.playlistNotice)
         if (notifySystem && detail != null) current()?.let { systemMediaFavorites?.publish(it, detail) }
+        favoritesLoadedOnce = true
         favoritesReadyForContinue = true
         maybeUpdateContinueListeningSnapshot(homeSnapshotEpoch)
         return detail

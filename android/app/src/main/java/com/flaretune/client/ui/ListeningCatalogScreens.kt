@@ -2,11 +2,14 @@ package com.flaretune.client.ui
 
 import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,6 +22,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -123,7 +127,7 @@ internal fun ListeningAlbumTile(album: Album, loader: ImageLoader?, onClick: () 
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Artwork(Song("album:" + album.id, album.title, album.artist, audioUrl = "", coverUrl = album.coverUrl), loader, Modifier.size(60.dp))
+        Artwork(Song("album:" + album.id, album.title, album.artist, audioUrl = "", coverUrl = album.coverUrl), loader, Modifier.size(60.dp), decodeSize = 60.dp)
         Column(Modifier.weight(1f)) {
             Text(album.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(album.artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -136,7 +140,7 @@ internal fun ListeningAlbumTile(album: Album, loader: ImageLoader?, onClick: () 
 @Composable
 private fun ListeningAlbumCard(album: Album, loader: ImageLoader?, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Column(
-        modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick).testTag("browse_album_" + album.id),
+        modifier.flarePressScale(pressedScale = 0.97f).clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick).testTag("browse_album_" + album.id),
     ) {
         Artwork(
             Song("album:" + album.id, album.title, album.artist, audioUrl = "", coverUrl = album.coverUrl),
@@ -182,7 +186,7 @@ private fun ListeningArtistTile(artist: Artist, loader: ImageLoader?, onClick: (
 @Composable
 internal fun ListeningArtistCard(artist: Artist, loader: ImageLoader?, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Column(
-        modifier.clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick)
+        modifier.flarePressScale(pressedScale = 0.96f).clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick)
             .padding(horizontal = 6.dp, vertical = 8.dp).testTag("browse_artist_" + artist.name),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -307,7 +311,17 @@ internal fun ListeningArtistPage(state: ClientUiState, actions: ClientActions, l
 
     Box(Modifier.fillMaxSize().background(bgColor).testTag("artist_detail")) {
         Column(Modifier.fillMaxSize()) {
-            when (subview) {
+            AnimatedContent(
+                targetState = subview,
+                transitionSpec = {
+                    val forward = targetState != "overview"
+                    (fadeIn(tween(180)) + slideInHorizontally(tween(220)) { if (forward) it / 8 else -it / 8 })
+                        .togetherWith(fadeOut(tween(120)))
+                },
+                modifier = Modifier.fillMaxSize(),
+                label = "artist_subview",
+            ) { activeSubview ->
+            when (activeSubview) {
                 "songs" -> {
                     Column(Modifier.fillMaxSize().padding(top = topInset)) {
                         ListeningPageTitle(
@@ -528,24 +542,25 @@ internal fun ListeningArtistPage(state: ClientUiState, actions: ClientActions, l
                                 Icon(ClientIcons.ChevronLeft, stringResource(R.string.ft_back), tint = iconTint)
                             }
                         }
-                        AnimatedVisibility(
-                            visible = scrolledPastHero,
-                            enter = fadeIn(tween(180)),
-                            exit = fadeOut(tween(150)),
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text(
-                                artist.name,
-                                style = MaterialTheme.typography.titleLarge,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.padding(horizontal = 8.dp),
-                            )
+                        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                            androidx.compose.animation.AnimatedVisibility(
+                                visible = scrolledPastHero,
+                                enter = fadeIn(tween(180)),
+                                exit = fadeOut(tween(150)),
+                            ) {
+                                Text(
+                                    artist.name,
+                                    style = MaterialTheme.typography.titleLarge,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(horizontal = 8.dp),
+                                )
+                            }
                         }
-                        if (!scrolledPastHero) Spacer(Modifier.weight(1f))
                     }
                     }
                 }
+            }
             }
         }
     }
@@ -590,10 +605,35 @@ internal fun ListeningStatsSheet(state: ClientUiState, actions: ClientActions, l
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun ListeningSearchPage(state: ClientUiState, actions: ClientActions, loader: ImageLoader?, topInset: Dp, bottomInset: Dp) {
+internal fun ListeningSearchPage(
+    state: ClientUiState,
+    actions: ClientActions,
+    loader: ImageLoader?,
+    topInset: Dp,
+    bottomInset: Dp,
+    scrollToTopNonce: Int = 0,
+) {
     var query by rememberSaveable { mutableStateOf(state.query) }
     var submittedQuery by rememberSaveable { mutableStateOf(state.query.trim()) }
     var sectionDetail by rememberSaveable(submittedQuery) { mutableStateOf("overview") }
+    val preSearchListState = rememberLazyListState()
+    val overviewListState = rememberLazyListState()
+    val artistsDetailListState = rememberLazyListState()
+    val songsDetailListState = rememberLazyListState()
+    val albumsDetailGridState = rememberLazyGridState()
+    LaunchedEffect(scrollToTopNonce) {
+        if (scrollToTopNonce <= 0) return@LaunchedEffect
+        if (submittedQuery.isBlank()) {
+            preSearchListState.animateScrollToItem(0)
+        } else {
+            when (sectionDetail) {
+                "artists" -> artistsDetailListState.animateScrollToItem(0)
+                "songs" -> songsDetailListState.animateScrollToItem(0)
+                "albums" -> albumsDetailGridState.animateScrollToItem(0)
+                else -> overviewListState.animateScrollToItem(0)
+            }
+        }
+    }
     val keyboard = LocalSoftwareKeyboardController.current
     val searchFocusRequester = remember { FocusRequester() }
     BackHandler(enabled = sectionDetail != "overview") { sectionDetail = "overview" }
@@ -766,7 +806,8 @@ internal fun ListeningSearchPage(state: ClientUiState, actions: ClientActions, l
                 // 1) Text search history pills (removable individually) and
                 // 2) Direct picks (opened songs / artists / albums / playlists, no nested card backgrounds).
                 LazyColumn(
-                    Modifier.fillMaxSize().testTag("search_home_feed"),
+                    state = preSearchListState,
+                    modifier = Modifier.fillMaxSize().testTag("search_home_feed"),
                     contentPadding = PaddingValues(top = topClearance + 4.dp, bottom = bottomInset),
                 ) {
                     if (visibleNotice != null) {
@@ -852,7 +893,17 @@ internal fun ListeningSearchPage(state: ClientUiState, actions: ClientActions, l
                 }
             } else {
                 // POST-SEARCH: Web-aligned horizontal multi-section overview + View All subviews.
-                when (sectionDetail) {
+                AnimatedContent(
+                    targetState = sectionDetail,
+                    transitionSpec = {
+                        val forward = targetState != "overview"
+                        (fadeIn(tween(180)) + slideInHorizontally(tween(220)) { if (forward) it / 8 else -it / 8 })
+                            .togetherWith(fadeOut(tween(120)))
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                    label = "search_section_detail",
+                ) { activeSectionDetail ->
+                when (activeSectionDetail) {
                     "artists" -> {
                         Column(Modifier.fillMaxSize().padding(top = topClearance)) {
                             ListeningRetry(notice = visibleNotice, retry = retrySearch, tag = "catalog_retry")
@@ -860,7 +911,7 @@ internal fun ListeningSearchPage(state: ClientUiState, actions: ClientActions, l
                                 label = stringResource(R.string.ft_listening_artists),
                                 onBack = { sectionDetail = "overview" },
                             )
-                            LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("catalog_list"), contentPadding = PaddingValues(bottom = bottomInset)) {
+                            LazyColumn(state = artistsDetailListState, modifier = Modifier.weight(1f).fillMaxWidth().testTag("catalog_list"), contentPadding = PaddingValues(bottom = bottomInset)) {
                                 if (!state.artistsLoading && state.artists.isEmpty()) {
                                     item { Text(stringResource(R.string.ft_listening_empty_artists), Modifier.padding(24.dp)) }
                                 }
@@ -882,7 +933,7 @@ internal fun ListeningSearchPage(state: ClientUiState, actions: ClientActions, l
                                 label = stringResource(R.string.ft_songs),
                                 onBack = { sectionDetail = "overview" },
                             )
-                            LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("catalog_list"), contentPadding = PaddingValues(bottom = bottomInset)) {
+                            LazyColumn(state = songsDetailListState, modifier = Modifier.weight(1f).fillMaxWidth().testTag("catalog_list"), contentPadding = PaddingValues(bottom = bottomInset)) {
                                 if (!state.loading && state.songs.isEmpty()) {
                                     item { Text(stringResource(R.string.ft_empty_search), Modifier.padding(24.dp)) }
                                 }
@@ -908,6 +959,7 @@ internal fun ListeningSearchPage(state: ClientUiState, actions: ClientActions, l
                                 onBack = { sectionDetail = "overview" },
                             )
                             LazyVerticalGrid(
+                                state = albumsDetailGridState,
                                 columns = GridCells.Adaptive(152.dp),
                                 modifier = Modifier.weight(1f).fillMaxWidth().testTag("catalog_list"),
                                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = bottomInset),
@@ -940,7 +992,8 @@ internal fun ListeningSearchPage(state: ClientUiState, actions: ClientActions, l
                             visibleNotice == null
 
                         LazyColumn(
-                            Modifier.fillMaxSize().testTag("catalog_list"),
+                            state = overviewListState,
+                            modifier = Modifier.fillMaxSize().testTag("catalog_list"),
                             contentPadding = PaddingValues(top = topClearance + 2.dp, bottom = bottomInset),
                         ) {
                             if (visibleNotice != null) {
@@ -1024,6 +1077,7 @@ internal fun ListeningSearchPage(state: ClientUiState, actions: ClientActions, l
                             }
                         }
                     }
+                }
                 }
             }
             if (anyLoading) {
@@ -1216,9 +1270,23 @@ private data class LibraryRowModel(
 )
 
 @Composable
-internal fun ListeningLibraryOverview(state: ClientUiState, actions: ClientActions, loader: ImageLoader?, topInset: Dp, bottomInset: Dp) {
+internal fun ListeningLibraryOverview(
+    state: ClientUiState,
+    actions: ClientActions,
+    loader: ImageLoader?,
+    topInset: Dp,
+    bottomInset: Dp,
+    scrollToTopNonce: Int = 0,
+) {
     val interaction = LocalListeningInteractions.current
     var editShelf by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
+    LaunchedEffect(scrollToTopNonce) {
+        if (scrollToTopNonce <= 0) return@LaunchedEffect
+        listState.animateScrollToItem(0)
+        gridState.animateScrollToItem(0)
+    }
     val positions = state.playlistShelf?.items?.mapIndexed { index, item -> item.id to index }?.toMap().orEmpty()
     val playlists = state.playlists.sortedBy { positions[it.id] ?: Int.MAX_VALUE }
     val libraryEntries = buildList {
@@ -1352,6 +1420,7 @@ internal fun ListeningLibraryOverview(state: ClientUiState, actions: ClientActio
 
             if (useListLayout) {
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier.fillMaxSize().testTag("library_playlists"),
                     contentPadding = PaddingValues(top = topClearance + 2.dp, bottom = bottomInset),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -1381,6 +1450,7 @@ internal fun ListeningLibraryOverview(state: ClientUiState, actions: ClientActio
                 }
             } else {
                 LazyVerticalGrid(
+                    state = gridState,
                     columns = GridCells.Adaptive(154.dp),
                     modifier = Modifier.fillMaxSize().testTag("library_playlists"),
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = topClearance + 6.dp, bottom = bottomInset),
@@ -1485,7 +1555,7 @@ private fun PlaylistGridCard(
     loader: ImageLoader?,
 ) {
     Column(
-        Modifier.fillMaxWidth().clickable(
+        Modifier.fillMaxWidth().flarePressScale(pressedScale = 0.97f).clickable(
             interactionSource = remember { MutableInteractionSource() },
             indication = null,
             onClick = item.onOpen,
@@ -1722,6 +1792,7 @@ internal fun ListeningDiscoverySection(
     state: ClientUiState,
     actions: ClientActions,
     loader: ImageLoader?,
+    availableWidth: Dp = Dp.Unspecified,
 ) {
     if (state.discoverySongs.isEmpty() && !state.discoveryLoading && state.discoveryNotice == null) return
     Column(Modifier.fillMaxWidth().testTag("home_discovery")) {
@@ -1753,6 +1824,7 @@ internal fun ListeningDiscoverySection(
                 loader = loader,
                 limit = 16,
                 tagPrefix = "discovery_song_",
+                availableWidth = availableWidth,
             ) { _, index -> actions.playSongs(state.discoverySongs, index) }
         }
     }

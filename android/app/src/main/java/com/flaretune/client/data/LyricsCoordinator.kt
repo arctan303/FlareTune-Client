@@ -79,7 +79,10 @@ class LyricsCoordinator(
         }
         this.positionMs = positionMs.coerceAtLeast(0)
         val current = mutableState.value
-        mutableState.value = current.copy(activeLyricIndex = activeIndex(current))
+        val nextIndex = activeIndex(current)
+        if (nextIndex != current.activeLyricIndex) {
+            mutableState.value = current.copy(activeLyricIndex = nextIndex)
+        }
     }
 
     fun retry() = synchronized(lock) {

@@ -3,6 +3,7 @@ package com.flaretune.client.playback
 import android.content.Context
 import android.content.Intent
 import coil.ImageLoader
+import coil.disk.DiskCache
 import com.flaretune.client.data.ActiveConnection
 import com.flaretune.client.data.HistoryIdentity
 import com.flaretune.client.data.PlaybackHistoryRepository
@@ -27,8 +28,16 @@ class PlaybackRuntime(
         history?.bind(identity)
         queueRepository?.bind(identity)
         playEvents?.bind(identity, next) { connection?.network === next.network && next.network.isActive }
-        imageLoader = ImageLoader.Builder(context).okHttpClient(next.network.mediaClient)
-            .diskCache(null).crossfade(true).build()
+        imageLoader = ImageLoader.Builder(context)
+            .okHttpClient(next.network.mediaClient)
+            .diskCache {
+                DiskCache.Builder()
+                    .directory(context.cacheDir.resolve("coil_image_cache"))
+                    .maxSizeBytes(64L * 1024 * 1024)
+                    .build()
+            }
+            .crossfade(false)
+            .build()
     }
 
     fun clear() {

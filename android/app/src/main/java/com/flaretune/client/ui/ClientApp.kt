@@ -58,6 +58,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -82,15 +83,18 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import coil.ImageLoader
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.flaretune.client.R
 import com.flaretune.client.model.ClientNotice
 import com.flaretune.client.model.Song
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -106,6 +110,22 @@ fun ClientApp(
     state: ClientUiState,
     actions: ClientActions,
     imageLoader: ImageLoader? = null,
+    positionMsFlow: StateFlow<Long>? = null,
+) {
+    CompositionLocalProvider(LocalPlaybackPositionMs provides positionMsFlow) {
+        ClientAppContent(
+            state = state,
+            actions = actions,
+            imageLoader = imageLoader,
+        )
+    }
+}
+
+@Composable
+private fun ClientAppContent(
+    state: ClientUiState,
+    actions: ClientActions,
+    imageLoader: ImageLoader?,
 ) {
     var panel by rememberSaveable { mutableStateOf(PlayerPanel.NONE) }
     var queueReturnPanel by rememberSaveable { mutableStateOf(PlayerPanel.NONE) }
@@ -127,8 +147,8 @@ fun ClientApp(
     val systemDark = isSystemInDarkTheme()
     val useLightBarIcons = systemDark || (state.screen == ClientScreen.LIBRARY && panel != PlayerPanel.NONE)
     val hostView = LocalView.current
-    SideEffect {
-        val activity = hostView.context as? ComponentActivity ?: return@SideEffect
+    LaunchedEffect(useLightBarIcons, hostView) {
+        val activity = hostView.context as? ComponentActivity ?: return@LaunchedEffect
         val barStyle = if (useLightBarIcons) {
             SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
         } else {
@@ -173,6 +193,14 @@ fun ClientApp(
         onNavigateToContent = { panel = PlayerPanel.NONE },
         onFeedback = showFeedback,
     ) {
+    val playerOverlayVisible = state.screen == ClientScreen.LIBRARY &&
+        state.playback.current != null &&
+        (panel == PlayerPanel.PLAYER || (panel == PlayerPanel.QUEUE && queueReturnPanel == PlayerPanel.PLAYER))
+    val shellDepthProgress by animateFloatAsState(
+        targetValue = if (playerOverlayVisible) 1f else 0f,
+        animationSpec = spring(dampingRatio = 0.88f, stiffness = 360f),
+        label = "shell_depth_progress",
+    )
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(Modifier.fillMaxSize()) {
             when (state.screen) {
@@ -180,9 +208,19 @@ fun ClientApp(
                 ClientScreen.CONNECT -> ConnectionScreen(state, actions)
                 ClientScreen.CHANGE_PASSWORD -> PasswordScreen(state, actions)
                 ClientScreen.LIBRARY -> Box(
-                    Modifier.fillMaxSize().then(
-                        if (panel != PlayerPanel.NONE) Modifier.clearAndSetSemantics {} else Modifier,
-                    ),
+                    Modifier.fillMaxSize()
+                        .graphicsLayer {
+                            val depth = shellDepthProgress
+                            if (depth > 0.001f) {
+                                val scale = 1f - 0.036f * depth
+                                scaleX = scale
+                                scaleY = scale
+                                alpha = 1f - 0.14f * depth
+                            }
+                        }
+                        .then(
+                            if (panel != PlayerPanel.NONE) Modifier.clearAndSetSemantics {} else Modifier,
+                        ),
                 ) {
                     BackHandler(enabled = panel == PlayerPanel.NONE && state.selectedArtist == null && state.selectedAlbum == null && state.selectedPlaylist == null && state.destination != MainDestination.HOME) { actions.navigate(MainDestination.HOME) }
                     BackHandler(enabled = panel == PlayerPanel.NONE && state.selectedPlaylist != null) { actions.closePlaylist() }
@@ -212,11 +250,11 @@ fun ClientApp(
                 }
                 AnimatedVisibility(
                     visible = panel == PlayerPanel.PLAYER || (panel == PlayerPanel.QUEUE && queueReturnPanel == PlayerPanel.PLAYER),
-                    enter = slideInVertically(tween(250, easing = LinearOutSlowInEasing)) { it } + fadeIn(tween(180)),
+                    enter = slideInVertically(spring(dampingRatio = 0.88f, stiffness = 360f)) { it } + fadeIn(tween(180)),
                     exit = if (skipPlayerExitAnim) {
                         ExitTransition.None
                     } else {
-                        slideOutVertically(tween(300, easing = LinearOutSlowInEasing)) { it } + fadeOut(tween(240))
+                        slideOutVertically(spring(dampingRatio = 0.92f, stiffness = 380f)) { it } + fadeOut(tween(160))
                     },
                 ) {
                     NowPlayingScreen(
@@ -479,6 +517,7 @@ internal fun SongRow(
     val status = stringResource(if (buffering) R.string.ft_buffering else if (playing) R.string.ft_playing else R.string.ft_paused)
     Row(
         modifier.fillMaxWidth().heightIn(min = 78.dp)
+            .flarePressScale(enabled = clickEnabled, pressedScale = 0.985f)
             .then(if (current) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)) else Modifier)
             .clickable(enabled = clickEnabled, onClick = onClick)
             .then(if (current) Modifier.semantics { stateDescription = status } else Modifier)
@@ -486,7 +525,7 @@ internal fun SongRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Artwork(song, imageLoader, Modifier.size(56.dp), radius = 10.dp, placeholderSize = 26.dp)
+        Artwork(song, imageLoader, Modifier.size(56.dp), radius = 10.dp, placeholderSize = 26.dp, decodeSize = 56.dp)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 song.title,
@@ -530,15 +569,31 @@ internal fun Artwork(
     modifier: Modifier,
     radius: Dp = 8.dp,
     placeholderSize: Dp = 28.dp,
+    decodeSize: Dp = Dp.Unspecified,
 ) {
+    val context = LocalContext.current
+    val density = LocalDensity.current
     Box(
         modifier.clip(RoundedCornerShape(radius)).background(MaterialTheme.colorScheme.surfaceVariant),
         contentAlignment = Alignment.Center,
     ) {
         Icon(ClientIcons.Music, null, Modifier.size(placeholderSize), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         if (loader != null && !song.coverUrl.isNullOrBlank()) {
+            val targetPx = if (decodeSize.isSpecified) {
+                with(density) { decodeSize.roundToPx().coerceAtLeast(1) }
+            } else {
+                0
+            }
+            val request = remember(context, song.coverUrl, targetPx) {
+                ImageRequest.Builder(context)
+                    .data(song.coverUrl)
+                    .apply {
+                        if (targetPx > 0) size(targetPx, targetPx)
+                    }
+                    .build()
+            }
             AsyncImage(
-                model = song.coverUrl, imageLoader = loader, contentDescription = null,
+                model = request, imageLoader = loader, contentDescription = null,
                 contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
             )
         }
@@ -637,17 +692,21 @@ internal fun QueuePanel(
         val key = draggedKey ?: return@LaunchedEffect
         val edgeZonePx = with(density) { 56.dp.toPx() }
         val maxStepPx = with(density) { 14.dp.toPx() }
+        var lastFrameNanos = withFrameNanos { it }
         while (isActive && draggedKey == key) {
+            val nowNanos = withFrameNanos { it }
+            val frameScale = ((nowNanos - lastFrameNanos).coerceIn(1_000_000L, 48_000_000L)) / 16_666_667f
+            lastFrameNanos = nowNanos
             val height = listHeightPx
             if (height > edgeZonePx * 2f) {
                 val delta = when {
                     dragPointerInList < edgeZonePx -> {
                         val factor = ((edgeZonePx - dragPointerInList) / edgeZonePx).coerceIn(0f, 1f)
-                        -maxStepPx * factor
+                        -maxStepPx * factor * frameScale
                     }
                     dragPointerInList > height - edgeZonePx -> {
                         val factor = ((dragPointerInList - (height - edgeZonePx)) / edgeZonePx).coerceIn(0f, 1f)
-                        maxStepPx * factor
+                        maxStepPx * factor * frameScale
                     }
                     else -> 0f
                 }
@@ -656,7 +715,6 @@ internal fun QueuePanel(
                     reorderDraggedTowardPointer(key, dragPointerInList)
                 }
             }
-            delay(24L)
         }
     }
 
@@ -949,7 +1007,7 @@ private fun QueueTrackRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Artwork(song, loader, Modifier.size(48.dp))
+        Artwork(song, loader, Modifier.size(48.dp), decodeSize = 48.dp)
         Column(Modifier.weight(1f)) {
             Text(
                 song.title,

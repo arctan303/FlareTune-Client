@@ -3,7 +3,7 @@
 ## 目标与范围
 
 - **目标**：对 `C:\git\FlareTune-Client` 执行前端性能与交互体验的“治本”级架构重构与微交互补齐，彻底解决首页/发现/曲库上下滚动卡顿、顶栏定位胶囊跳转卡顿与手势冲突、底部 4 Tab 切换重建与卡顿、全屏播放器开关掉帧及逐字歌词高 GPU 消耗问题，并补全统一的触感反馈与横向磁吸体验。
-- **当前适用性**：`planned (ready for execution approval)`（2026-11-13 已完成根因诊断与设计取舍确认，代码尚未修改；实施前在 `android/` 运行 `.\gradlew.bat testDebugUnitTest --no-daemon` 基线为 `BUILD SUCCESSFUL`）。
+- **当前适用性**：`implemented (Phase 1–4 implemented, verified & reviewed)`（2026-11-13 已依次完成 Phase 1–4 实施、全量单测与 Lint 验证，并通过 4 轮独立 `phase-reviewer` 审查；真机高刷手感与暗场模糊观感仍待实机走查）。
 - **风险与路线**：产品与体验架构改造（**R1** — 客户端 UI / 状态流 / 单元测试可控可逆变更，需在 Phase 3/4 同步更新 [Design-Brief.md](../Design-Brief.md) 与 [PlayerLyricsMotionTest.kt](../../android/app/src/test/java/com/flaretune/client/PlayerLyricsMotionTest.kt) 中已被用户覆盖的旧合约）。
 - **非目标**：
   - 不修改后端 API、认证或待后端完成的统计接口（如 `play-stats?days=N`）；
@@ -92,5 +92,13 @@
 
 ## 执行状态与验证记录
 
-- **实施状态**：`planned (waiting for approval before Phase 1)`
-- **基线验证**：`C:\git\FlareTune-Client\android` 下 `.\gradlew.bat testDebugUnitTest --no-daemon` 于 2026-11-13 实施前实测 `BUILD SUCCESSFUL`。
+- **实施状态**：`Phase 1–4 全部完成并通过独立审查`
+- **已完成阶段记录**：
+  - **Phase 1（已通过审查 `5182f36f`）**：分离 `PlaybackGateway.positionMsFlow`、优化 `ClientViewModel` `distinctUntilChanged` 与 `LyricsCoordinator.updatePosition`、稳定 `LocalListeningInteractions`、`PlaybackRuntime` Coil 启用 `64 MiB` 磁盘缓存且关闭列表图全局 `.crossfade(true)`、改造 `ShellMiniPlayer` 与 `StreamlinedTrackBar` 进度条绘制避免每帧布局重算。
+  - **Phase 2（已通过审查 `8b983c08`）**：`FrostedHeaderScaffold` 改用 Spotify 式纯渐变半透明遮罩并移除全屏离屏模糊录制；`ListeningShell` 实现 4 主 Tab 状态保活、柔和 `drawWithContent` 切页与点按已激活当前 Tab 回顶；优化 `HomeScreen` `snapshotFlow` 与可取消 `jumpToSection` 分段预跳；修正 `ClientViewModel.navigate()` 状态重置合并、`PlayHistoryPage` 稳定 key 与 `CollectionDetailScaffold` / `ListeningArtistPage` 标题不瞬跳。
+  - **Phase 3（已通过审查 `0a48ecf1`）**：`ClientApp` 统一播放器开关弹簧景深转场并迁出 `enableEdgeToEdge` 至 `LaunchedEffect`；`ShellMiniPlayer` 增加垂直上滑展开手势；`NowPlayingScreen` 将 `keepScreenOn` 改为仅在全屏打开且 `state.playing == true` 时生效、替换嵌套 `SubcomposeLayout`、引入 `ClassicPlayerBackdrop` `96×96` 预模糊纹理、`ClassicLyricsViewport` 离散固定 `BlurEffect` 层隔离、`KaraokeLyricText` / `InterludeDotsRow` `withFrameNanos` 绘制层卡拉OK裁剪渲染、以及 `pendingSeekMs` 乐观防回弹。
+  - **Phase 4（已通过最终审查 `cbf9ff7b`）**：在 `ListeningComponents.kt` 抽取 `Modifier.flarePressScale` 并接入 `UnifiedSongSectionList` `rememberSnapFlingBehavior` 磁吸；统一接入 `SongRow`、`FeaturedHeroCard`、`CompactCategoryPill`、`ListeningAlbumCard`、`ListeningArtistCard`、`PlaylistGridCard`；`ListeningArtistPage`（`subview`）与 `ListeningSearchPage`（`sectionDetail`）接入轻量 `AnimatedContent` 过渡；`QueuePanel` 边缘自动滚动改用 `withFrameNanos` 帧同步驱动；并随轮收口 `ShellMiniPlayer` 切歌时上滑手势状态稳定性与 `ClassicPlayerBackdrop` 加载失败兜底重置；同步更新 [Design-Brief.md](../Design-Brief.md) 与 [android-frontend-polish-20261113.md](android-frontend-polish-20261113.md)。
+- **非阻塞后续观察项**：`ListeningCatalogScreens.kt` 内 `ListeningSearchPage` 的 `BackHandler(enabled = sectionDetail != "overview")` 在 4-Tab 保活架构下未限定 `SEARCH` 为当前激活 Tab，若从搜索子视图直接切换至其他主 Tab 再按返回会优先退回后台搜索子视图，可于后续 P2 顺带补齐 `state.destination == MainDestination.SEARCH` 条件。
+- **最新全量验证（Phase 4 全部改动与文档同步后）**：
+  - `C:\git\FlareTune-Client\android` 下执行 `.\gradlew.bat testDebugUnitTest lintDebug --no-daemon`：`BUILD SUCCESSFUL`（**37 个测试套件、414 条单元测试 414/414 全部通过，0 失败 / 0 错误 / 0 跳过**；`lintDebug` **0 错误 / 70 警告 / 1 提示**）。
+  - 已知局限：以上验证为本地 JVM / Robolectric 单测与静态 Lint 检查，真机高刷新率滚动跟手感、OLED 暗场预模糊质感与多机窗口适配仍需真机目视/触控走查。

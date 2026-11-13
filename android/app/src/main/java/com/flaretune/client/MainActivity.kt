@@ -30,7 +30,7 @@ class MainActivity : ComponentActivity() {
         model = ViewModelProvider(this, factory)[ClientViewModel::class.java]
         setContent {
             val state by model.state.collectAsStateWithLifecycle()
-            FlareTuneTheme { ClientApp(state, model, model.imageLoader) }
+            FlareTuneTheme { ClientApp(state, model, model.imageLoader, model.playbackPositionMs) }
         }
     }
 

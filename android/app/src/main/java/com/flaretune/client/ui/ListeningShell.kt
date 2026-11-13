@@ -1,12 +1,12 @@
 package com.flaretune.client.ui
 
-import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -16,14 +16,20 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -52,6 +58,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListPrefetchStrategy
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -85,12 +92,15 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -98,34 +108,31 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.BlurEffect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.layer.drawLayer
-import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected as semanticSelected
 import androidx.compose.ui.semantics.semantics
@@ -138,6 +145,7 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.max
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import coil.ImageLoader
 import coil.compose.AsyncImage
 import com.flaretune.client.R
@@ -152,6 +160,9 @@ import com.flaretune.client.model.Song
 import com.flaretune.client.model.isCurrentAlbumTrack
 import com.flaretune.client.ui.theme.FlareTokens
 import com.flaretune.client.ui.theme.floatingDockSurface
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import java.util.Locale
 import kotlin.math.abs
@@ -200,10 +211,36 @@ internal fun ListeningShell(
             state.playback.current != null -> 136.dp + compactNavExtraHeight + compactMiniExtraHeight + compactBottomClearance
             else -> 66.dp + compactNavExtraHeight + compactBottomClearance
         }
+        val initialDestination = remember { state.destination }
+        var homeScrollNonce by rememberSaveable { mutableIntStateOf(0) }
+        var discoverScrollNonce by rememberSaveable { mutableIntStateOf(0) }
+        var searchScrollNonce by rememberSaveable { mutableIntStateOf(0) }
+        var libraryScrollNonce by rememberSaveable { mutableIntStateOf(0) }
+        val visitedTabs = remember { mutableStateMapOf<MainDestination, Boolean>() }
+        LaunchedEffect(state.destination) {
+            visitedTabs[state.destination] = true
+        }
         val navigateMain: (MainDestination) -> Unit = { dest ->
+            val hasSelection = state.selectedArtist != null ||
+                state.selectedAlbum != null ||
+                state.selectedPlaylist != null
+            val atRootSameTab = dest == state.destination &&
+                homeSubpage == HomeSubpage.NONE &&
+                !historyOpen &&
+                !hasSelection &&
+                !(dest == MainDestination.LIBRARY && state.tab != LibraryTab.CATALOG)
             homeSubpage = HomeSubpage.NONE
             historyOpen = false
-            actions.navigate(dest)
+            if (atRootSameTab) {
+                when (dest) {
+                    MainDestination.HOME -> homeScrollNonce++
+                    MainDestination.DISCOVER -> discoverScrollNonce++
+                    MainDestination.SEARCH -> searchScrollNonce++
+                    MainDestination.LIBRARY -> libraryScrollNonce++
+                }
+            } else {
+                actions.navigate(dest)
+            }
         }
         val detailOpen = state.selectedArtist != null ||
             state.selectedAlbum != null ||
@@ -223,107 +260,213 @@ internal fun ListeningShell(
             closeHomeSubpage()
         }
 
-        val routeKey = when {
+        val overlayRouteKey = when {
             state.selectedArtist != null -> "artist:" + (state.selectedArtist.id ?: state.selectedArtist.name)
             state.selectedAlbum != null -> "album:" + state.selectedAlbum.id
             state.selectedPlaylist != null && state.destination != MainDestination.SEARCH -> "playlist:" + state.selectedPlaylist.id
             historyOpen -> "history"
-            state.destination == MainDestination.HOME -> "home:" + homeSubpage.name
-            state.destination == MainDestination.DISCOVER -> "discover:" + homeSubpage.name
-            else -> "dest:" + state.destination.name + ":" + state.tab.name
+            state.destination == MainDestination.HOME && homeSubpage != HomeSubpage.NONE -> "home:" + homeSubpage.name
+            state.destination == MainDestination.DISCOVER && homeSubpage != HomeSubpage.NONE -> "discover:" + homeSubpage.name
+            state.destination == MainDestination.LIBRARY && state.tab != LibraryTab.CATALOG -> "library:" + state.tab.name
+            else -> null
         }
+        val hasOverlay = overlayRouteKey != null
+        val pageBackground = MaterialTheme.colorScheme.background
 
         // Main content spans full height and scrolls underneath both the status bar and the floating dock.
         Box(Modifier.fillMaxSize()) {
-            AnimatedContent(
-                targetState = routeKey,
-                transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(140)) },
-                label = "shell_route",
-            ) { activeRoute ->
-                when {
-                    activeRoute.startsWith("artist:") -> ListeningArtistPage(state, actions, imageLoader, topInset, contentBottomInset)
-                    activeRoute.startsWith("album:") -> AlbumScreen(state, actions, imageLoader, topInset, contentBottomInset)
-                    activeRoute.startsWith("playlist:") -> ListeningPlaylistDetailPage(state, actions, imageLoader, topInset, contentBottomInset)
-                    activeRoute == "history" -> PlayHistoryPage(
-                        state = state,
-                        actions = actions,
-                        loader = imageLoader,
-                        topInset = topInset,
-                        bottomInset = contentBottomInset,
-                        onBack = { historyOpen = false },
-                    )
-                    activeRoute.startsWith("dest:" + MainDestination.SEARCH.name + ":") -> ListeningSearchPage(state, actions, imageLoader, topInset, contentBottomInset)
-                    activeRoute == "dest:" + MainDestination.LIBRARY.name + ":" + LibraryTab.CATALOG.name -> ListeningLibraryOverview(state, actions, imageLoader, topInset, contentBottomInset)
-                    activeRoute == "discover:" + HomeSubpage.ALL_SONGS.name -> HomeAllSongsScreen(
-                        state = state,
-                        actions = actions,
-                        loader = imageLoader,
-                        topInset = topInset,
-                        bottomInset = contentBottomInset,
-                        onBack = ::closeHomeSubpage,
-                    )
-                    activeRoute == "discover:" + HomeSubpage.ALL_ALBUMS.name -> HomeAllAlbumsScreen(
-                        state = state,
-                        actions = actions,
-                        loader = imageLoader,
-                        topInset = topInset,
-                        bottomInset = contentBottomInset,
-                        onBack = ::closeHomeSubpage,
-                    )
-                    activeRoute == "discover:" + HomeSubpage.NONE.name -> DiscoverScreen(
-                        state = state,
-                        actions = actions,
-                        loader = imageLoader,
-                        openAllSongs = { homeSubpage = HomeSubpage.ALL_SONGS },
-                        openAllAlbums = { homeSubpage = HomeSubpage.ALL_ALBUMS },
-                        topInset = topInset,
-                        bottomInset = contentBottomInset,
-                    )
-                    activeRoute == "home:" + HomeSubpage.ALL_SONGS.name -> HomeAllSongsScreen(
-                        state = state,
-                        actions = actions,
-                        loader = imageLoader,
-                        topInset = topInset,
-                        bottomInset = contentBottomInset,
-                        onBack = ::closeHomeSubpage,
-                    )
-                    activeRoute == "home:" + HomeSubpage.ALL_ALBUMS.name -> HomeAllAlbumsScreen(
-                        state = state,
-                        actions = actions,
-                        loader = imageLoader,
-                        topInset = topInset,
-                        bottomInset = contentBottomInset,
-                        onBack = ::closeHomeSubpage,
-                    )
-                    activeRoute == "home:" + HomeSubpage.NONE.name -> HomeScreen(
-                        state = state,
-                        actions = actions,
-                        loader = imageLoader,
-                        openHistory = { historyOpen = true },
-                        openQueue = openQueue,
-                        openAllSongs = { homeSubpage = HomeSubpage.ALL_SONGS },
-                        topInset = topInset,
-                        bottomInset = contentBottomInset,
-                    )
-                    else -> CatalogScreen(state, actions, imageLoader, topInset, contentBottomInset)
+            MainDestination.entries.forEach { tab ->
+                if (tab == state.destination || visitedTabs[tab] == true) {
+                    key(tab) {
+                        val isCurrentTab = state.destination == tab
+                        val isActiveTab = isCurrentTab && !hasOverlay
+                        val initialAlpha = if (tab == initialDestination && !hasOverlay) 1f else 0f
+                        val tabAlphaAnim = remember { Animatable(initialAlpha) }
+                        val initialOffset = if (tab == initialDestination && !hasOverlay) {
+                            0f
+                        } else if (tab.ordinal >= state.destination.ordinal) {
+                            0.024f
+                        } else {
+                            -0.024f
+                        }
+                        val tabOffsetAnim = remember { Animatable(initialOffset) }
+                        LaunchedEffect(isActiveTab, state.destination) {
+                            val targetOffset = when {
+                                isActiveTab -> 0f
+                                tab.ordinal < state.destination.ordinal -> -0.024f
+                                else -> 0.024f
+                            }
+                            launch {
+                                tabAlphaAnim.animateTo(
+                                    targetValue = if (isActiveTab) 1f else 0f,
+                                    animationSpec = tween(
+                                        durationMillis = if (isActiveTab) 190 else 150,
+                                        easing = FastOutSlowInEasing,
+                                    ),
+                                )
+                            }
+                            launch {
+                                tabOffsetAnim.animateTo(
+                                    targetValue = targetOffset,
+                                    animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                                )
+                            }
+                        }
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .zIndex(if (isActiveTab) 1f else 0f)
+                                .then(if (!isActiveTab) Modifier.clearAndSetSemantics {} else Modifier)
+                                .pointerInput(isActiveTab) {
+                                    if (!isActiveTab) {
+                                        awaitPointerEventScope {
+                                            while (true) {
+                                                awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
+                                            }
+                                        }
+                                    }
+                                }
+                                .graphicsLayer {
+                                    alpha = tabAlphaAnim.value
+                                    translationX = size.width * tabOffsetAnim.value
+                                }
+                                .drawWithContent {
+                                    if (tabAlphaAnim.value > 0.005f) {
+                                        drawContent()
+                                    }
+                                }
+                                .background(pageBackground),
+                        ) {
+                            when (tab) {
+                                MainDestination.HOME -> HomeScreen(
+                                    state = state,
+                                    actions = actions,
+                                    loader = imageLoader,
+                                    openHistory = { historyOpen = true },
+                                    openQueue = openQueue,
+                                    openAllSongs = { homeSubpage = HomeSubpage.ALL_SONGS },
+                                    topInset = topInset,
+                                    bottomInset = contentBottomInset,
+                                    scrollToTopNonce = homeScrollNonce,
+                                )
+                                MainDestination.DISCOVER -> DiscoverScreen(
+                                    state = state,
+                                    actions = actions,
+                                    loader = imageLoader,
+                                    openAllSongs = { homeSubpage = HomeSubpage.ALL_SONGS },
+                                    openAllAlbums = { homeSubpage = HomeSubpage.ALL_ALBUMS },
+                                    topInset = topInset,
+                                    bottomInset = contentBottomInset,
+                                    scrollToTopNonce = discoverScrollNonce,
+                                )
+                                MainDestination.SEARCH -> ListeningSearchPage(
+                                    state = state,
+                                    actions = actions,
+                                    loader = imageLoader,
+                                    topInset = topInset,
+                                    bottomInset = contentBottomInset,
+                                    scrollToTopNonce = searchScrollNonce,
+                                )
+                                MainDestination.LIBRARY -> ListeningLibraryOverview(
+                                    state = state,
+                                    actions = actions,
+                                    loader = imageLoader,
+                                    topInset = topInset,
+                                    bottomInset = contentBottomInset,
+                                    scrollToTopNonce = libraryScrollNonce,
+                                )
+                            }
+                        }
+                    }
                 }
             }
-            val hasFrostedHeader = !detailOpen && !historyOpen && (
-                routeKey == "home:" + HomeSubpage.NONE.name ||
-                    routeKey == "discover:" + HomeSubpage.NONE.name ||
-                    routeKey.startsWith("dest:" + MainDestination.SEARCH.name + ":") ||
-                    routeKey == "dest:" + MainDestination.LIBRARY.name + ":" + LibraryTab.CATALOG.name
-                )
-            if (topInset > 0.dp && !hasFrostedHeader) {
-                val bgColor = MaterialTheme.colorScheme.background
+
+            AnimatedContent(
+                targetState = overlayRouteKey,
+                modifier = Modifier.fillMaxSize().zIndex(2f),
+                transitionSpec = {
+                    val enteringOverlay = targetState != null
+                    val exitingOverlay = initialState != null
+                    when {
+                        enteringOverlay && !exitingOverlay ->
+                            (fadeIn(tween(200, easing = FastOutSlowInEasing)) +
+                                slideInHorizontally(tween(220, easing = FastOutSlowInEasing)) { it / 16 }) togetherWith
+                                fadeOut(tween(120))
+                        !enteringOverlay && exitingOverlay ->
+                            fadeIn(tween(140)) togetherWith
+                                (fadeOut(tween(170, easing = FastOutSlowInEasing)) +
+                                    slideOutHorizontally(tween(190, easing = FastOutSlowInEasing)) { it / 16 })
+                        else ->
+                            fadeIn(tween(180)) togetherWith fadeOut(tween(140))
+                    }
+                },
+                label = "shell_overlay_route",
+            ) { activeOverlay ->
+                if (activeOverlay != null) {
+                    Box(Modifier.fillMaxSize().background(pageBackground)) {
+                        when {
+                            activeOverlay.startsWith("artist:") ->
+                                ListeningArtistPage(state, actions, imageLoader, topInset, contentBottomInset)
+                            activeOverlay.startsWith("album:") ->
+                                AlbumScreen(state, actions, imageLoader, topInset, contentBottomInset)
+                            activeOverlay.startsWith("playlist:") ->
+                                ListeningPlaylistDetailPage(state, actions, imageLoader, topInset, contentBottomInset)
+                            activeOverlay == "history" -> PlayHistoryPage(
+                                state = state,
+                                actions = actions,
+                                loader = imageLoader,
+                                topInset = topInset,
+                                bottomInset = contentBottomInset,
+                                onBack = { historyOpen = false },
+                            )
+                            activeOverlay == "discover:" + HomeSubpage.ALL_SONGS.name -> HomeAllSongsScreen(
+                                state = state,
+                                actions = actions,
+                                loader = imageLoader,
+                                topInset = topInset,
+                                bottomInset = contentBottomInset,
+                                onBack = ::closeHomeSubpage,
+                            )
+                            activeOverlay == "discover:" + HomeSubpage.ALL_ALBUMS.name -> HomeAllAlbumsScreen(
+                                state = state,
+                                actions = actions,
+                                loader = imageLoader,
+                                topInset = topInset,
+                                bottomInset = contentBottomInset,
+                                onBack = ::closeHomeSubpage,
+                            )
+                            activeOverlay == "home:" + HomeSubpage.ALL_SONGS.name -> HomeAllSongsScreen(
+                                state = state,
+                                actions = actions,
+                                loader = imageLoader,
+                                topInset = topInset,
+                                bottomInset = contentBottomInset,
+                                onBack = ::closeHomeSubpage,
+                            )
+                            activeOverlay == "home:" + HomeSubpage.ALL_ALBUMS.name -> HomeAllAlbumsScreen(
+                                state = state,
+                                actions = actions,
+                                loader = imageLoader,
+                                topInset = topInset,
+                                bottomInset = contentBottomInset,
+                                onBack = ::closeHomeSubpage,
+                            )
+                            else -> CatalogScreen(state, actions, imageLoader, topInset, contentBottomInset)
+                        }
+                    }
+                }
+            }
+
+            if (topInset > 0.dp && hasOverlay) {
                 Box(
                     Modifier.align(Alignment.TopCenter)
+                        .zIndex(3f)
                         .fillMaxWidth()
                         .height(topInset)
                         .background(
                             Brush.verticalGradient(
-                                0f to bgColor.copy(alpha = 0.88f),
-                                1f to bgColor.copy(alpha = 0f),
+                                0f to pageBackground.copy(alpha = 0.88f),
+                                1f to pageBackground.copy(alpha = 0f),
                             ),
                         ),
                 )
@@ -557,10 +700,7 @@ internal fun FrostedHeaderScaffold(
     bodyContent: @Composable (topClearance: Dp) -> Unit,
 ) {
     val density = LocalDensity.current
-    val hostView = LocalView.current
     val bgColor = MaterialTheme.colorScheme.background
-    val useBackdropBlur = Build.VERSION.SDK_INT >= 31 && hostView.isHardwareAccelerated
-    val contentLayer = if (useBackdropBlur) rememberGraphicsLayer() else null
     val fallbackHeaderHeight = topInset + 60.dp
     var measuredHeaderHeightPx by remember { mutableIntStateOf(0) }
     val topClearance = if (measuredHeaderHeightPx > 0) {
@@ -569,80 +709,24 @@ internal fun FrostedHeaderScaffold(
         fallbackHeaderHeight
     }
     val featherHeight = 18.dp
-    val blurRadiusPx = with(density) { 20.dp.toPx() }
+    val scrimBrush = remember(bgColor) {
+        Brush.verticalGradient(
+            0f to bgColor.copy(alpha = 0.96f),
+            0.58f to bgColor.copy(alpha = 0.88f),
+            0.84f to bgColor.copy(alpha = 0.44f),
+            1f to Color.Transparent,
+        )
+    }
 
     Box(modifier.fillMaxSize()) {
-        Box(
-            Modifier.fillMaxSize().then(
-                if (contentLayer != null) {
-                    Modifier.drawWithContent {
-                        contentLayer.record { this@drawWithContent.drawContent() }
-                        drawLayer(contentLayer)
-                    }
-                } else {
-                    Modifier
-                },
-            ),
-        ) {
-            bodyContent(topClearance)
-        }
+        bodyContent(topClearance)
 
         Box(Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
             Box(
                 Modifier.fillMaxWidth()
                     .height(topClearance + featherHeight)
-                    .then(
-                        if (contentLayer != null) {
-                            Modifier.graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                        } else {
-                            Modifier
-                        },
-                    )
-                    .drawWithContent {
-                        drawContent()
-                        if (contentLayer != null) {
-                            drawRect(
-                                brush = Brush.verticalGradient(
-                                    0f to bgColor.copy(alpha = 0.64f),
-                                    0.66f to bgColor.copy(alpha = 0.46f),
-                                    0.88f to bgColor.copy(alpha = 0.16f),
-                                    1f to Color.Transparent,
-                                ),
-                            )
-                            drawRect(
-                                brush = Brush.verticalGradient(
-                                    0f to Color.Black,
-                                    0.72f to Color.Black,
-                                    1f to Color.Transparent,
-                                ),
-                                blendMode = BlendMode.DstIn,
-                            )
-                        } else {
-                            drawRect(
-                                brush = Brush.verticalGradient(
-                                    0f to bgColor.copy(alpha = 0.88f),
-                                    0.68f to bgColor.copy(alpha = 0.72f),
-                                    0.88f to bgColor.copy(alpha = 0.30f),
-                                    1f to Color.Transparent,
-                                ),
-                            )
-                        }
-                    },
-            ) {
-                if (contentLayer != null) {
-                    Box(
-                        Modifier.matchParentSize()
-                            .clipToBounds()
-                            .graphicsLayer {
-                                renderEffect = BlurEffect(blurRadiusPx, blurRadiusPx, TileMode.Clamp)
-                            }
-                            .drawWithContent {
-                                drawRect(bgColor)
-                                drawLayer(contentLayer)
-                            },
-                    )
-                }
-            }
+                    .background(scrimBrush),
+            )
             ShellTopHeaderRow(
                 topInset = topInset,
                 modifier = Modifier.onSizeChanged { measuredHeaderHeightPx = it.height },
@@ -700,6 +784,74 @@ internal fun AccountAvatar(state: ClientUiState, actions: ClientActions) {
     }
 }
 
+private class HomeScrollJumpCoordinator {
+    var programmaticScroll: Boolean = false
+    var job: Job? = null
+    var generation: Int = 0
+}
+
+@Composable
+private fun HomeAnchorPillsRow(
+    anchorState: State<HomeFeedFilter>,
+    cardsIndex: Int,
+    continueIndex: Int?,
+    discoveryIndex: Int?,
+    libraryIndex: Int?,
+    onJump: (HomeFeedFilter, Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val activeAnchor = anchorState.value
+    val currentAnchor = when {
+        activeAnchor == HomeFeedFilter.CONTINUE && continueIndex == null -> HomeFeedFilter.ALL
+        activeAnchor == HomeFeedFilter.DISCOVERY && discoveryIndex == null -> HomeFeedFilter.ALL
+        activeAnchor == HomeFeedFilter.LIBRARY && libraryIndex == null -> HomeFeedFilter.ALL
+        else -> activeAnchor
+    }
+    Row(
+        modifier
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CompactCategoryPill(
+            label = stringResource(R.string.ft_all),
+            selected = currentAnchor == HomeFeedFilter.ALL,
+            primaryHighlight = true,
+            modifier = Modifier.testTag("home_filter_all"),
+            onClick = { onJump(HomeFeedFilter.ALL, cardsIndex) },
+        )
+        if (continueIndex != null) {
+            CompactCategoryPill(
+                label = stringResource(R.string.ft_continue_listening),
+                selected = currentAnchor == HomeFeedFilter.CONTINUE,
+                primaryHighlight = true,
+                modifier = Modifier.testTag("home_filter_continue"),
+                onClick = { onJump(HomeFeedFilter.CONTINUE, continueIndex) },
+            )
+        }
+        if (discoveryIndex != null) {
+            CompactCategoryPill(
+                label = stringResource(R.string.ft_listening_random),
+                selected = currentAnchor == HomeFeedFilter.DISCOVERY,
+                primaryHighlight = true,
+                modifier = Modifier.testTag("home_filter_discovery"),
+                onClick = { onJump(HomeFeedFilter.DISCOVERY, discoveryIndex) },
+            )
+        }
+        if (libraryIndex != null) {
+            CompactCategoryPill(
+                label = stringResource(R.string.ft_from_your_library),
+                selected = currentAnchor == HomeFeedFilter.LIBRARY,
+                primaryHighlight = true,
+                modifier = Modifier.testTag("home_filter_library"),
+                onClick = { onJump(HomeFeedFilter.LIBRARY, libraryIndex) },
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun HomeScreen(
     state: ClientUiState,
@@ -710,12 +862,16 @@ private fun HomeScreen(
     openAllSongs: () -> Unit,
     topInset: Dp,
     bottomInset: Dp,
+    scrollToTopNonce: Int = 0,
 ) {
     val listeningInteractions = LocalListeningInteractions.current
-    val listState = rememberLazyListState()
+    val prefetchStrategy = remember { LazyListPrefetchStrategy(nestedPrefetchItemCount = 3) }
+    val listState = rememberLazyListState(prefetchStrategy = prefetchStrategy)
     val scope = rememberCoroutineScope()
-    var activeAnchor by rememberSaveable { mutableStateOf(HomeFeedFilter.ALL) }
-    var programmaticScroll by remember { mutableStateOf(false) }
+    val density = LocalDensity.current
+    val topAnchorThresholdPx = with(density) { 48.dp.roundToPx() }
+    val activeAnchorState = rememberSaveable { mutableStateOf(HomeFeedFilter.ALL) }
+    val jumpCoordinator = remember { HomeScrollJumpCoordinator() }
 
     val hasDiscoverySection = state.discoverySongs.isNotEmpty() || state.discoveryLoading || state.discoveryNotice != null
     var nextItemIndex = 0
@@ -729,51 +885,64 @@ private fun HomeScreen(
     val discoveryIndex = if (hasDiscoverySection) nextItemIndex++ else null
     val libraryIndex = if (state.songs.isNotEmpty() || state.loading) nextItemIndex else null
 
-    val currentAnchor = when {
-        activeAnchor == HomeFeedFilter.CONTINUE && continueIndex == null -> HomeFeedFilter.ALL
-        activeAnchor == HomeFeedFilter.DISCOVERY && discoveryIndex == null -> HomeFeedFilter.ALL
-        activeAnchor == HomeFeedFilter.LIBRARY && libraryIndex == null -> HomeFeedFilter.ALL
-        else -> activeAnchor
+    val jumpToSection = remember(listState, scope) {
+        { anchor: HomeFeedFilter, index: Int ->
+            activeAnchorState.value = anchor
+            jumpCoordinator.job?.cancel()
+            val generation = ++jumpCoordinator.generation
+            jumpCoordinator.job = scope.launch {
+                jumpCoordinator.programmaticScroll = true
+                try {
+                    val distance = index - listState.firstVisibleItemIndex
+                    if (abs(distance) >= 3) {
+                        val intermediate = if (distance > 0) (index - 2).coerceAtLeast(0) else index + 2
+                        listState.scrollToItem(intermediate)
+                    }
+                    listState.animateScrollToItem(index)
+                } finally {
+                    if (jumpCoordinator.generation == generation) {
+                        jumpCoordinator.programmaticScroll = false
+                    }
+                }
+            }
+            Unit
+        }
     }
 
-    LaunchedEffect(listState, continueIndex, discoveryIndex, libraryIndex) {
+    LaunchedEffect(scrollToTopNonce) {
+        if (scrollToTopNonce > 0) {
+            jumpToSection(HomeFeedFilter.ALL, 0)
+        }
+    }
+
+    LaunchedEffect(listState, continueIndex, discoveryIndex, libraryIndex, topAnchorThresholdPx) {
         snapshotFlow {
-            val layout = listState.layoutInfo
-            val lastVisible = layout.visibleItemsInfo.lastOrNull()?.index
-            val atBottom = layout.visibleItemsInfo.isNotEmpty() && !listState.canScrollForward
-            Triple(
-                listState.isScrollInProgress,
-                listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset,
-                atBottom to lastVisible,
-            )
-        }.collect { (scrolling, firstPos, bottomPos) ->
-            if (scrolling && !programmaticScroll) {
-                val (firstIdx, firstOffset) = firstPos
-                val (atBottom, lastVisible) = bottomPos
-                activeAnchor = when {
-                    firstIdx == 0 && firstOffset < 120 -> HomeFeedFilter.ALL
-                    libraryIndex != null && (firstIdx >= libraryIndex || (atBottom && (lastVisible ?: -1) >= libraryIndex)) -> HomeFeedFilter.LIBRARY
-                    discoveryIndex != null && (firstIdx >= discoveryIndex || (atBottom && (lastVisible ?: -1) >= discoveryIndex)) -> HomeFeedFilter.DISCOVERY
+            if (!listState.isScrollInProgress || jumpCoordinator.programmaticScroll) {
+                null
+            } else {
+                val layout = listState.layoutInfo
+                val lastVisible = layout.visibleItemsInfo.lastOrNull()?.index ?: -1
+                val atBottom = layout.visibleItemsInfo.isNotEmpty() && !listState.canScrollForward
+                val firstIdx = listState.firstVisibleItemIndex
+                val firstOffset = listState.firstVisibleItemScrollOffset
+                when {
+                    firstIdx == 0 && firstOffset < topAnchorThresholdPx -> HomeFeedFilter.ALL
+                    libraryIndex != null && (firstIdx >= libraryIndex || (atBottom && lastVisible >= libraryIndex)) -> HomeFeedFilter.LIBRARY
+                    discoveryIndex != null && (firstIdx >= discoveryIndex || (atBottom && lastVisible >= discoveryIndex)) -> HomeFeedFilter.DISCOVERY
                     continueIndex != null && firstIdx >= continueIndex -> HomeFeedFilter.CONTINUE
                     else -> HomeFeedFilter.ALL
                 }
             }
         }
-    }
-
-    fun jumpToSection(anchor: HomeFeedFilter, index: Int) {
-        activeAnchor = anchor
-        scope.launch {
-            programmaticScroll = true
-            try {
-                listState.animateScrollToItem(index)
-            } finally {
-                programmaticScroll = false
+            .filterNotNull()
+            .distinctUntilChanged()
+            .collect { anchor ->
+                activeAnchorState.value = anchor
             }
-        }
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().testTag("home_page")) {
+        val shelfAvailableWidth = maxWidth
         val cardWidth = ((maxWidth - 48.dp) / 2.15f).coerceIn(148.dp, 208.dp)
         val quickCardWidth = when {
             maxWidth >= 840.dp -> ((maxWidth - 48.dp) * 0.34f).coerceIn(328.dp, 376.dp)
@@ -786,12 +955,14 @@ private fun HomeScreen(
             else -> (quickCardWidth * 0.58f).coerceIn(160.dp, 200.dp)
         }
         val favoritePlaylist = state.playlists.firstOrNull { it.kind == "favorite" }
-        val toFavorites = {
-            actions.navigate(MainDestination.LIBRARY)
-            if (favoritePlaylist != null) {
-                actions.openPlaylist(favoritePlaylist)
-            } else {
-                actions.selectTab(LibraryTab.FAVORITES)
+        val toFavorites = remember(actions, favoritePlaylist) {
+            {
+                actions.navigate(MainDestination.LIBRARY)
+                if (favoritePlaylist != null) {
+                    actions.openPlaylist(favoritePlaylist)
+                } else {
+                    actions.selectTab(LibraryTab.FAVORITES)
+                }
             }
         }
 
@@ -800,55 +971,15 @@ private fun HomeScreen(
             modifier = Modifier.fillMaxSize(),
             headerContent = {
                 AccountAvatar(state, actions)
-                LazyRow(
-                    Modifier.weight(1f),
-                    contentPadding = PaddingValues(horizontal = 2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    item(key = "home_filter_all") {
-                        CompactCategoryPill(
-                            label = stringResource(R.string.ft_all),
-                            selected = currentAnchor == HomeFeedFilter.ALL,
-                            primaryHighlight = true,
-                            modifier = Modifier.testTag("home_filter_all"),
-                            onClick = { jumpToSection(HomeFeedFilter.ALL, cardsIndex) },
-                        )
-                    }
-                    if (continueIndex != null) {
-                        item(key = "home_filter_continue") {
-                            CompactCategoryPill(
-                                label = stringResource(R.string.ft_continue_listening),
-                                selected = currentAnchor == HomeFeedFilter.CONTINUE,
-                                primaryHighlight = true,
-                                modifier = Modifier.testTag("home_filter_continue"),
-                                onClick = { jumpToSection(HomeFeedFilter.CONTINUE, continueIndex) },
-                            )
-                        }
-                    }
-                    if (discoveryIndex != null) {
-                        item(key = "home_filter_discovery") {
-                            CompactCategoryPill(
-                                label = stringResource(R.string.ft_listening_random),
-                                selected = currentAnchor == HomeFeedFilter.DISCOVERY,
-                                primaryHighlight = true,
-                                modifier = Modifier.testTag("home_filter_discovery"),
-                                onClick = { jumpToSection(HomeFeedFilter.DISCOVERY, discoveryIndex) },
-                            )
-                        }
-                    }
-                    if (libraryIndex != null) {
-                        item(key = "home_filter_library") {
-                            CompactCategoryPill(
-                                label = stringResource(R.string.ft_from_your_library),
-                                selected = currentAnchor == HomeFeedFilter.LIBRARY,
-                                primaryHighlight = true,
-                                modifier = Modifier.testTag("home_filter_library"),
-                                onClick = { jumpToSection(HomeFeedFilter.LIBRARY, libraryIndex) },
-                            )
-                        }
-                    }
-                }
+                HomeAnchorPillsRow(
+                    anchorState = activeAnchorState,
+                    cardsIndex = cardsIndex,
+                    continueIndex = continueIndex,
+                    discoveryIndex = discoveryIndex,
+                    libraryIndex = libraryIndex,
+                    onJump = jumpToSection,
+                    modifier = Modifier.weight(1f),
+                )
             },
         ) { topClearance ->
             LazyColumn(
@@ -963,12 +1094,13 @@ private fun HomeScreen(
                         loader = loader,
                         limit = 12,
                         tagPrefix = "home_continue_song_",
+                        availableWidth = shelfAvailableWidth,
                     ) { _, index -> actions.playSongs(state.continueListeningSongs, index) }
                 }
             }
             if (hasDiscoverySection) {
                 item(key = "listening-discovery") {
-                    ListeningDiscoverySection(state, actions, loader)
+                    ListeningDiscoverySection(state, actions, loader, availableWidth = shelfAvailableWidth)
                 }
             }
             if (state.songs.isNotEmpty() || state.loading) {
@@ -989,6 +1121,7 @@ private fun HomeScreen(
                             loader = loader,
                             limit = 16,
                             tagPrefix = "home_song_",
+                            availableWidth = shelfAvailableWidth,
                         ) { song, _ -> actions.playSong(song) }
                     }
                 }
@@ -1018,9 +1151,20 @@ private fun DiscoverScreen(
     openAllAlbums: () -> Unit,
     topInset: Dp,
     bottomInset: Dp,
+    scrollToTopNonce: Int = 0,
 ) {
     val listeningInteractions = LocalListeningInteractions.current
+    val listState = rememberLazyListState()
+    LaunchedEffect(scrollToTopNonce) {
+        if (scrollToTopNonce > 0) {
+            if (listState.firstVisibleItemIndex > 4) {
+                listState.scrollToItem(3)
+            }
+            listState.animateScrollToItem(0)
+        }
+    }
     BoxWithConstraints(Modifier.fillMaxSize().testTag("discover_page")) {
+        val discoverAvailableWidth = maxWidth
         val cardWidth = ((maxWidth - 48.dp) / 2.15f).coerceIn(148.dp, 208.dp)
 
         FrostedHeaderScaffold(
@@ -1041,7 +1185,8 @@ private fun DiscoverScreen(
             },
         ) { topClearance ->
             LazyColumn(
-                Modifier.fillMaxSize().testTag("discover_feed"),
+                state = listState,
+                modifier = Modifier.fillMaxSize().testTag("discover_feed"),
                 contentPadding = PaddingValues(top = topClearance + 2.dp, bottom = bottomInset),
             ) {
             state.notice?.let { notice ->
@@ -1118,6 +1263,7 @@ private fun DiscoverScreen(
                             loader = loader,
                             limit = 16,
                             tagPrefix = "discover_song_",
+                            availableWidth = discoverAvailableWidth,
                         ) { _, index -> actions.playSongs(state.songs, index) }
                     }
                 }
@@ -1263,7 +1409,7 @@ private fun CompactCategoryPill(
 ) {
     val activeBg = if (primaryHighlight) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
     val activeFg = if (primaryHighlight) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.surface
-    val bg by animateColorAsState(
+    val bgState = animateColorAsState(
         targetValue = if (selected) activeBg else MaterialTheme.colorScheme.surfaceVariant,
         animationSpec = tween(180),
         label = "pill_bg",
@@ -1276,6 +1422,7 @@ private fun CompactCategoryPill(
     Box(
         modifier
             .heightIn(min = 48.dp)
+            .flarePressScale(pressedScale = 0.95f, hapticOnTap = true)
             .semantics { semanticSelected = selected }
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
@@ -1283,7 +1430,7 @@ private fun CompactCategoryPill(
         Box(
             Modifier.heightIn(min = 32.dp)
                 .clip(CircleShape)
-                .background(bg)
+                .drawBehind { drawRect(bgState.value) }
                 .padding(horizontal = 14.dp, vertical = 6.dp),
             contentAlignment = Alignment.Center,
         ) {
@@ -1325,6 +1472,7 @@ private fun FeaturedHeroCard(
         modifier
             .width(width)
             .height(height)
+            .flarePressScale(pressedScale = 0.97f)
             .clip(shape)
             .background(
                 Brush.linearGradient(
@@ -2300,11 +2448,52 @@ private fun ShellMiniPlayer(
         val compactBg = if (dark) Color(0xFF232428) else Color(0xFFEEEEF1)
         Modifier.clip(compactShape).background(compactBg)
     }
+    val verticalLift = remember { Animatable(0f) }
+    val latestOpenPlayer by rememberUpdatedState(openPlayer)
+    LaunchedEffect(song.id) {
+        verticalLift.snapTo(0f)
+    }
+    val density = LocalDensity.current
+    val expandUpThresholdPx = with(density) { 28.dp.toPx() }
+    val maxLiftPx = with(density) { 18.dp.toPx() }
+    val outerHaptic = LocalHapticFeedback.current
     Box(
         modifier
             .fillMaxWidth()
             .height(dockHeight)
+            .graphicsLayer { translationY = verticalLift.value }
             .then(surfaceModifier)
+            .pointerInput(expandUpThresholdPx, maxLiftPx) {
+                var upDragTotal = 0f
+                var triggered = false
+                detectVerticalDragGestures(
+                    onDragStart = {
+                        upDragTotal = 0f
+                        triggered = false
+                    },
+                    onVerticalDrag = { change, dragAmount ->
+                        if (dragAmount < 0f || upDragTotal < 0f) {
+                            change.consume()
+                            upDragTotal = (upDragTotal + dragAmount).coerceAtMost(0f)
+                            val targetLift = (upDragTotal * 0.45f).coerceIn(-maxLiftPx, 0f)
+                            scope.launch { verticalLift.snapTo(targetLift) }
+                            if (!triggered && upDragTotal <= -expandUpThresholdPx) {
+                                triggered = true
+                                outerHaptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                latestOpenPlayer()
+                            }
+                        }
+                    },
+                    onDragEnd = {
+                        upDragTotal = 0f
+                        scope.launch { verticalLift.animateTo(0f, spring(stiffness = Spring.StiffnessMedium)) }
+                    },
+                    onDragCancel = {
+                        upDragTotal = 0f
+                        scope.launch { verticalLift.animateTo(0f, spring(stiffness = Spring.StiffnessMedium)) }
+                    },
+                )
+            }
             .clickable(onClick = openPlayer)
             .testTag("mini_player"),
     ) {
@@ -2314,20 +2503,22 @@ private fun ShellMiniPlayer(
         ) {
             // Only the inner song card slides on horizontal swipe; the outer dock container stays anchored.
             val haptic = LocalHapticFeedback.current
-            val canGoPrevious = playback.currentIndex > 0 || playback.positionMs > 3000 ||
-                playback.repeatMode == 2 || (playback.shuffle && playback.queue.size > 1)
+            val livePositionMsState = rememberPlaybackPositionMsState(playback.positionMs)
+            fun canGoPreviousNow(): Boolean =
+                playback.currentIndex > 0 || livePositionMsState.value > 3000L ||
+                    playback.repeatMode == 2 || (playback.shuffle && playback.queue.size > 1)
             val canGoNext = playback.currentIndex < playback.queue.lastIndex ||
                 playback.repeatMode == 2 || (playback.shuffle && playback.queue.size > 1)
             Box(
                 Modifier.weight(1f)
                     .fillMaxHeight()
                     .clipToBounds()
-                    .pointerInput(song.id, playback.queue.size, playback.currentIndex, playback.repeatMode, playback.shuffle) {
+                    .pointerInput(song.id, playback.queue.size, playback.currentIndex, playback.repeatMode, playback.shuffle, livePositionMsState) {
                         detectHorizontalDragGestures(
                             onHorizontalDrag = { change, dragAmount ->
                                 change.consume()
                                 val target = dragOffset.value + dragAmount * 0.75f
-                                val allowed = (target < 0f && canGoNext) || (target > 0f && canGoPrevious)
+                                val allowed = (target < 0f && canGoNext) || (target > 0f && canGoPreviousNow())
                                 val limit = if (allowed) maxOffsetPx else maxOffsetPx * 0.35f
                                 val scale = if (allowed) 0.75f else 0.25f
                                 val nextOffset = (dragOffset.value + dragAmount * scale).coerceIn(-limit, limit)
@@ -2340,7 +2531,7 @@ private fun ShellMiniPlayer(
                                     if (delta < 0f && canGoNext) {
                                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                         actions.next()
-                                    } else if (delta > 0f && canGoPrevious) {
+                                    } else if (delta > 0f && canGoPreviousNow()) {
                                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                         actions.previous()
                                     }
@@ -2367,7 +2558,14 @@ private fun ShellMiniPlayer(
                             .clip(RoundedCornerShape(if (wideStyle) 12.dp else 8.dp))
                             .border(0.6.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f), RoundedCornerShape(if (wideStyle) 12.dp else 8.dp)),
                     ) {
-                        Artwork(song, loader, Modifier.fillMaxSize(), radius = if (wideStyle) 12.dp else 8.dp, placeholderSize = 20.dp)
+                        Artwork(
+                            song,
+                            loader,
+                            Modifier.fillMaxSize(),
+                            radius = if (wideStyle) 12.dp else 8.dp,
+                            placeholderSize = 20.dp,
+                            decodeSize = if (wideStyle) 50.dp else 44.dp,
+                        )
                     }
                     Spacer(Modifier.width(if (wideStyle) 14.dp else 10.dp))
                     // Two-line slot matching web PlayerBarLyricPreview (word karaoke / synced line / title+artist).
@@ -2382,9 +2580,10 @@ private fun ShellMiniPlayer(
                     ) { slot ->
                         Column(Modifier.fillMaxWidth()) {
                             if (slot.wordSynced && slot.line != null) {
+                                val livePositionMs by rememberPlaybackPositionMsState(playback.positionMs)
                                 KaraokeLyricText(
                                     line = slot.line,
-                                    basePositionMs = playback.positionMs,
+                                    basePositionMs = livePositionMs,
                                     playing = miniPlayerActive && playback.playing && !playback.buffering,
                                     fontSize = if (wideStyle) 16.sp else 14.5.sp,
                                     lineHeight = if (wideStyle) 21.sp else 19.sp,
@@ -2426,21 +2625,38 @@ private fun ShellMiniPlayer(
                 modifier = Modifier.size(if (wideStyle) 52.dp else 48.dp).testTag("mini_play"),
             )
         }
-        // Subtle hairline progress indicator flush inside the bottom edge.
-        Box(
-            Modifier.align(Alignment.BottomCenter)
+        // Subtle hairline progress indicator flush inside the bottom edge (drawn without per-tick re-layout).
+        MiniPlayerProgressBar(
+            fallbackPositionMs = playback.positionMs,
+            durationMs = playback.durationMs,
+            trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+            fillColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .height(2.dp)
-                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)),
-        ) {
-            val progress = if (playback.durationMs > 0) {
-                (playback.positionMs.toFloat() / playback.durationMs).coerceIn(0f, 1f)
-            } else 0f
-            Box(
-                Modifier.fillMaxHeight()
-                    .fillMaxWidth(progress)
-                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f)),
-            )
-        }
+                .height(2.dp),
+        )
     }
+}
+
+@Composable
+private fun MiniPlayerProgressBar(
+    fallbackPositionMs: Long,
+    durationMs: Long,
+    trackColor: Color,
+    fillColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    val livePositionMsState = rememberPlaybackPositionMsState(fallbackPositionMs)
+    Box(
+        modifier.drawBehind {
+            drawRect(color = trackColor)
+            val progress = if (durationMs > 0) {
+                (livePositionMsState.value.toFloat() / durationMs).coerceIn(0f, 1f)
+            } else 0f
+            if (progress > 0f) {
+                drawRect(color = fillColor, size = Size(size.width * progress, size.height))
+            }
+        },
+    )
 }

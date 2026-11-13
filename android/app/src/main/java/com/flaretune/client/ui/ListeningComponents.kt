@@ -3,7 +3,10 @@ package com.flaretune.client.ui
 import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -11,6 +14,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
@@ -35,10 +42,14 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -50,12 +61,58 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isSpecified
 import coil.ImageLoader
 import coil.compose.AsyncImage
 import com.flaretune.client.R
 import com.flaretune.client.model.ClientNotice
 import com.flaretune.client.model.PlaylistSummary
 import com.flaretune.client.model.Song
+import kotlinx.coroutines.launch
+
+/**
+ * Spring press-scale micro-interaction applied exclusively on [graphicsLayer] so touch feedback
+ * never triggers layout or recomposition, and springs back cleanly if an ancestor claims a drag.
+ */
+@Composable
+internal fun Modifier.flarePressScale(
+    enabled: Boolean = true,
+    pressedScale: Float = 0.97f,
+    hapticOnTap: Boolean = false,
+): Modifier {
+    if (!enabled) return this
+    val scale = remember { Animatable(1f) }
+    val scope = rememberCoroutineScope()
+    val haptic = LocalHapticFeedback.current
+    return this
+        .graphicsLayer {
+            val s = scale.value
+            scaleX = s
+            scaleY = s
+        }
+        .pointerInput(enabled, pressedScale, hapticOnTap) {
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false)
+                val pressJob = scope.launch {
+                    scale.animateTo(
+                        pressedScale,
+                        spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessMedium),
+                    )
+                }
+                val up = waitForUpOrCancellation()
+                pressJob.cancel()
+                if (up != null && hapticOnTap) {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                }
+                scope.launch {
+                    scale.animateTo(
+                        1f,
+                        spring(dampingRatio = 0.65f, stiffness = Spring.StiffnessMediumLow),
+                    )
+                }
+            }
+        }
+}
 
 /**
  * Shared nested scroll connection that absorbs downward overscroll at the bottom of sheet lists
@@ -362,44 +419,95 @@ internal fun UnifiedSongSectionList(
     limit: Int = 16,
     rowsPerColumn: Int = 4,
     tagPrefix: String = "shelf_song_",
+    availableWidth: Dp = Dp.Unspecified,
     onSelect: (Song, Int) -> Unit,
 ) {
     val visible = remember(songs, limit) { songs.take(limit) }
     if (visible.isEmpty()) return
     val safeRows = rowsPerColumn.coerceAtLeast(1)
     val columns = remember(visible, safeRows) { visible.chunked(safeRows) }
-    BoxWithConstraints(modifier.fillMaxWidth()) {
-        val columnWidth = if (maxWidth >= 700.dp) {
-            ((maxWidth - 26.dp) * 0.40f).coerceIn(272.dp, 540.dp)
-        } else {
-            ((maxWidth - 20.dp) * 0.86f).coerceIn(264.dp, 360.dp)
+    if (availableWidth.isSpecified) {
+        val columnWidth = resolveUnifiedShelfColumnWidth(availableWidth)
+        UnifiedSongSectionListContent(
+            columns = columns,
+            safeRows = safeRows,
+            columnWidth = columnWidth,
+            currentSongId = currentSongId,
+            playing = playing,
+            buffering = buffering,
+            loader = loader,
+            tagPrefix = tagPrefix,
+            onSelect = onSelect,
+            modifier = modifier.fillMaxWidth(),
+        )
+    } else {
+        BoxWithConstraints(modifier.fillMaxWidth()) {
+            val columnWidth = resolveUnifiedShelfColumnWidth(maxWidth)
+            UnifiedSongSectionListContent(
+                columns = columns,
+                safeRows = safeRows,
+                columnWidth = columnWidth,
+                currentSongId = currentSongId,
+                playing = playing,
+                buffering = buffering,
+                loader = loader,
+                tagPrefix = tagPrefix,
+                onSelect = onSelect,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
-        LazyRow(
-            Modifier.fillMaxWidth(),
-            contentPadding = PaddingValues(horizontal = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            itemsIndexed(columns, key = { colIdx, col -> "col_${colIdx}_${col.firstOrNull()?.id}" }) { colIdx, columnSongs ->
-                Column(
-                    Modifier.width(columnWidth),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    columnSongs.forEachIndexed { rowIdx, song ->
-                        val flatIndex = colIdx * safeRows + rowIdx
-                        val current = song.id == currentSongId
-                        SongRow(
-                            song = song,
-                            imageLoader = loader,
-                            current = current,
-                            playing = playing,
-                            buffering = current && buffering,
-                            horizontalPadding = 6.dp,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .testTag(tagPrefix + song.id),
-                            onClick = { onSelect(song, flatIndex) },
-                        )
-                    }
+    }
+}
+
+private fun resolveUnifiedShelfColumnWidth(availableWidth: Dp): Dp =
+    if (availableWidth >= 700.dp) {
+        ((availableWidth - 26.dp) * 0.40f).coerceIn(272.dp, 540.dp)
+    } else {
+        ((availableWidth - 20.dp) * 0.86f).coerceIn(264.dp, 360.dp)
+    }
+
+@Composable
+private fun UnifiedSongSectionListContent(
+    columns: List<List<Song>>,
+    safeRows: Int,
+    columnWidth: Dp,
+    currentSongId: String?,
+    playing: Boolean,
+    buffering: Boolean,
+    loader: ImageLoader?,
+    tagPrefix: String,
+    onSelect: (Song, Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val rowState = rememberLazyListState()
+    val snapFlingBehavior = rememberSnapFlingBehavior(lazyListState = rowState)
+    LazyRow(
+        state = rowState,
+        flingBehavior = snapFlingBehavior,
+        modifier = modifier,
+        contentPadding = PaddingValues(horizontal = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        itemsIndexed(columns, key = { colIdx, col -> "col_${colIdx}_${col.firstOrNull()?.id}" }) { colIdx, columnSongs ->
+            Column(
+                Modifier.width(columnWidth),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                columnSongs.forEachIndexed { rowIdx, song ->
+                    val flatIndex = colIdx * safeRows + rowIdx
+                    val current = song.id == currentSongId
+                    SongRow(
+                        song = song,
+                        imageLoader = loader,
+                        current = current,
+                        playing = playing,
+                        buffering = current && buffering,
+                        horizontalPadding = 6.dp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .testTag(tagPrefix + song.id),
+                        onClick = { onSelect(song, flatIndex) },
+                    )
                 }
             }
         }
@@ -496,22 +604,20 @@ internal fun CollectionDetailScaffold(
                     onBack,
                     modifier = Modifier.testTag(backTag),
                 )
-                AnimatedVisibility(
-                    visible = scrolledPastHero,
-                    enter = fadeIn(tween(180)),
-                    exit = fadeOut(tween(150)),
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text(
-                        title,
-                        style = MaterialTheme.typography.titleLarge,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = 6.dp),
-                    )
-                }
-                if (!scrolledPastHero) {
-                    Spacer(Modifier.weight(1f))
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = scrolledPastHero,
+                        enter = fadeIn(tween(180)),
+                        exit = fadeOut(tween(150)),
+                    ) {
+                        Text(
+                            title,
+                            style = MaterialTheme.typography.titleLarge,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 6.dp),
+                        )
+                    }
                 }
                 headerExtraActions()
             }
@@ -682,6 +788,14 @@ internal fun PlayHistoryPage(
 ) {
     val listeningInteractions = LocalListeningInteractions.current
     val historyItems = state.playHistory
+    val historyKeys = remember(historyItems) {
+        val seen = HashMap<String, Int>(historyItems.size)
+        historyItems.map { item ->
+            val count = (seen[item.id] ?: 0) + 1
+            seen[item.id] = count
+            if (count == 1) item.id else "${item.id}#$count"
+        }
+    }
     val leadCover = historyItems.firstOrNull { !it.coverUrl.isNullOrBlank() }?.coverUrl
     val previewCovers = remember(historyItems) {
         historyItems.mapNotNull { it.coverUrl?.takeIf(String::isNotBlank) }.distinct().take(4)
@@ -730,7 +844,7 @@ internal fun PlayHistoryPage(
         isEmpty = historyItems.isEmpty(),
         listTestTag = "history_list",
     ) {
-        itemsIndexed(historyItems, key = { index, song -> "$index:${song.id}" }) { _, song ->
+        itemsIndexed(historyItems, key = { index, _ -> historyKeys[index] }) { _, song ->
             val playedAt = listeningTime(state.playHistoryPlayedAt[song.id])
             Column(Modifier.fillMaxWidth()) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {

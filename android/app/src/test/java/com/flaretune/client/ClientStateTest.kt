@@ -1,5 +1,6 @@
 package com.flaretune.client
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import coil.ImageLoader
 import com.flaretune.client.data.*
@@ -546,6 +547,118 @@ class ClientStateTest {
         } finally { model.viewModelScope.cancel(); Dispatchers.resetMain() }
     }
 
+    @Test fun playbackPositionFlowUpdatesWithoutReEmittingUiState() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val progressFlow = MutableStateFlow(0L)
+        val player = object : PlaybackGateway by FakePlayback() {
+            override val state = MutableStateFlow(PlaybackSnapshot(current = song, queue = listOf(song), currentIndex = 0, playing = true, durationMs = 180_000L))
+            override val positionMsFlow = progressFlow
+        }
+        val saved = SavedStateHandle()
+        val model = ClientViewModel(
+            FakeConnections(active(FakeAccountApi(listOf(song)))),
+            player,
+            dispatcher,
+            savedStateHandle = saved,
+        )
+        try {
+            advanceUntilIdle()
+            val savedSnapshot = saved.get<ArrayList<String>>(ClientNavigationState.KEY)
+            assertNotNull(savedSnapshot)
+            var uiEmissions = 0
+            val collector = launch(dispatcher) {
+                var first = true
+                model.state.collect {
+                    if (first) first = false else uiEmissions++
+                }
+            }
+            advanceUntilIdle()
+            val emissionsBeforeTicks = uiEmissions
+            progressFlow.value = 250L; advanceUntilIdle()
+            progressFlow.value = 500L; advanceUntilIdle()
+            progressFlow.value = 1200L; advanceUntilIdle()
+            assertEquals(1200L, model.playbackPositionMs.value)
+            assertEquals(emissionsBeforeTicks, uiEmissions)
+            assertEquals(savedSnapshot, saved.get<ArrayList<String>>(ClientNavigationState.KEY))
+            collector.cancel()
+        } finally { model.viewModelScope.cancel(); Dispatchers.resetMain() }
+    }
+
+    @Test fun navigateSkipsRedundantHomeLibraryRefetchAndRestoresDiscoverAfterSearch() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val extraSongs = listOf(
+            song,
+            song.copy(id = "two", title = "Blue hour", language = "en"),
+        )
+        val api = FakeAccountApi(extraSongs).apply {
+            favoritePlaylistSongs = listOf(song)
+        }
+        val model = ClientViewModel(
+            FakeConnections(active(api)),
+            FakePlayback(),
+            dispatcher,
+        )
+        try {
+            advanceUntilIdle()
+            val initialSongRequests = api.requests
+            val initialPlaylistRequests = api.playlistsRequests
+            val initialPlaylistDetailRequests = api.playlistDetailRequests
+            assertTrue(initialSongRequests >= 1)
+            assertTrue(initialPlaylistRequests >= 1)
+            assertTrue(initialPlaylistDetailRequests >= 1)
+
+            // Switching HOME -> LIBRARY -> HOME should not trigger redundant catalog/playlist/favorites fetches.
+            model.navigate(MainDestination.LIBRARY)
+            advanceUntilIdle()
+            model.navigate(MainDestination.HOME)
+            advanceUntilIdle()
+            assertEquals(initialSongRequests, api.requests)
+            assertEquals(initialPlaylistRequests, api.playlistsRequests)
+            assertEquals(initialPlaylistDetailRequests, api.playlistDetailRequests)
+
+            // Searching in SEARCH then leaving SEARCH -> DISCOVER must clear query and reload catalog.
+            model.navigate(MainDestination.SEARCH)
+            advanceUntilIdle()
+            model.search("rain")
+            advanceUntilIdle()
+            assertEquals("rain", model.state.value.query)
+            val beforeLeaveSearch = api.requests
+
+            model.navigate(MainDestination.DISCOVER)
+            advanceUntilIdle()
+            assertEquals("", model.state.value.query)
+            assertEquals(MainDestination.DISCOVER, model.state.value.destination)
+            assertTrue(api.requests > beforeLeaveSearch)
+
+            // Changing subpage song/album language inside DISCOVER then tapping DISCOVER tab again
+            // must resync songLanguage and albumLanguage back to discoverLanguage.
+            model.selectDiscoverLanguage("zh")
+            advanceUntilIdle()
+            model.selectSongLanguage("en")
+            advanceUntilIdle()
+            assertEquals("en", model.state.value.songLanguage)
+            assertEquals("zh", model.state.value.discoverLanguage)
+            val beforeSyncDiscover = api.requests
+            model.navigate(MainDestination.DISCOVER)
+            advanceUntilIdle()
+            assertEquals("zh", model.state.value.songLanguage)
+            assertEquals("zh", model.state.value.albumLanguage)
+            assertTrue(api.requests > beforeSyncDiscover)
+
+            // Entering LibraryTab.FAVORITES then calling navigate(LIBRARY) must exit back to CATALOG.
+            model.navigate(MainDestination.LIBRARY)
+            advanceUntilIdle()
+            model.selectTab(LibraryTab.FAVORITES)
+            advanceUntilIdle()
+            assertEquals(LibraryTab.FAVORITES, model.state.value.tab)
+            model.navigate(MainDestination.LIBRARY)
+            advanceUntilIdle()
+            assertEquals(LibraryTab.CATALOG, model.state.value.tab)
+        } finally { model.viewModelScope.cancel(); Dispatchers.resetMain() }
+    }
+
     private fun active(api: AccountApi) = ActiveConnection(
         SessionNetwork(InstanceAddress.parse("https://music.example")), api, auth)
 }
@@ -593,10 +706,16 @@ private class FakeAccountApi(private val songs: List<Song>) : AccountApi {
         if (fail) throw ApiFailure(Failure.NETWORK)
         return songs
     }
-    override fun playlists(): List<PlaylistSummary> = if (favoritePlaylistSongs.isEmpty()) emptyList() else {
-        listOf(PlaylistSummary("fav-id", "Liked", "favorite", songCount = favoritePlaylistSongs.size, revision = 1))
+    var playlistsRequests = 0
+    var playlistDetailRequests = 0
+    override fun playlists(): List<PlaylistSummary> {
+        playlistsRequests++
+        return if (favoritePlaylistSongs.isEmpty()) emptyList() else {
+            listOf(PlaylistSummary("fav-id", "Liked", "favorite", songCount = favoritePlaylistSongs.size, revision = 1))
+        }
     }
     override fun playlist(id: String): PlaylistDetail {
+        playlistDetailRequests++
         if (id != "fav-id" || favoritePlaylistSongs.isEmpty()) throw ApiFailure(Failure.REQUEST)
         return PlaylistDetail(
             PlaylistSummary("fav-id", "Liked", "favorite", songCount = favoritePlaylistSongs.size, revision = 1),

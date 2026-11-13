@@ -257,20 +257,30 @@ class PlayerLyricsMotionTest {
         rule.onNodeWithText("Translation could not be loaded. The original lyrics are still available.").assertExists()
         rule.onNodeWithText("Secure storage is unavailable. Please try again.").assertDoesNotExist()
     }
-    @Test fun fullScreenPlayerKeepsScreenAwakeWhileMountedAndRestoresOnDispose() {
+    @Test fun fullScreenPlayerKeepsScreenAwakeOnlyWhilePlayingAndRestoresOnPauseOrDispose() {
         var visible by mutableStateOf(true)
+        var isPlaying by mutableStateOf(false)
         rule.mainClock.autoAdvance = false
         rule.setContent { FlareTuneTheme {
             val hostView = LocalView.current
             SideEffect { contentView = hostView }
             if (visible) {
                 NowPlayingScreen(
-                    state = PlaybackSnapshot(current, listOf(current), 0, false, positionMs = 0, durationMs = 180000),
+                    state = PlaybackSnapshot(current, listOf(current), 0, isPlaying, positionMs = 0, durationMs = 180000),
                     lyricState = lyrics, translationEnabled = translated, actions = actions,
                     imageLoader = null, onClose = {}, onQueue = {},
                 )
             }
         } }
+        settle()
+        rule.runOnIdle { assertFalse(contentView.keepScreenOn) }
+        rule.runOnIdle { isPlaying = true }
+        settle()
+        rule.runOnIdle { assertTrue(contentView.keepScreenOn) }
+        rule.runOnIdle { isPlaying = false }
+        settle()
+        rule.runOnIdle { assertFalse(contentView.keepScreenOn) }
+        rule.runOnIdle { isPlaying = true }
         settle()
         rule.runOnIdle { assertTrue(contentView.keepScreenOn) }
         rule.runOnIdle { visible = false }
@@ -568,6 +578,51 @@ class PlayerLyricsMotionTest {
         assertTrue("Active advancing line must remain visibly drawn mid-flight without clip vanishing (lit=$midLit)", midLit > 50)
         settle(1200)
         assertFocused(1)
+    }
+    @Test fun seekBarHoldsTargetOptimisticallyUntilPlaybackCatchesUp() {
+        var posMs by mutableStateOf(0L)
+        val resources = rule.activity.resources
+        val loader = coil.ImageLoader.Builder(rule.activity).components {
+            add(object : coil.intercept.Interceptor {
+                override suspend fun intercept(chain: coil.intercept.Interceptor.Chain): coil.request.ImageResult {
+                    val bmp = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+                    val canvas = android.graphics.Canvas(bmp)
+                    canvas.drawColor(0xFF31596B.toInt())
+                    return coil.request.SuccessResult(
+                        android.graphics.drawable.BitmapDrawable(resources, bmp),
+                        chain.request,
+                        coil.decode.DataSource.MEMORY,
+                    )
+                }
+            })
+        }.build()
+        rule.mainClock.autoAdvance = false
+        rule.setContent {
+            FlareTuneTheme {
+                NowPlayingScreen(
+                    state = PlaybackSnapshot(current, listOf(current), 0, true, positionMs = posMs, durationMs = 180_000L),
+                    lyricState = lyrics,
+                    translationEnabled = translated,
+                    actions = actions,
+                    imageLoader = loader,
+                    onClose = {},
+                    onQueue = {},
+                )
+            }
+        }
+        settle(200)
+        rule.onNodeWithText("0:00").assertExists()
+        rule.onNodeWithTag("player_seek").performSemanticsAction(
+            androidx.compose.ui.semantics.SemanticsActions.SetProgress,
+        ) { it(60_000f) }
+        settle(64)
+        rule.runOnIdle { assertEquals(60_000L, lastSeek) }
+        // Even before PlaybackSnapshot.positionMs advances off 0ms, UI holds "1:00" without 1-frame snap-back.
+        rule.onNodeWithText("1:00").assertExists()
+        rule.onNodeWithText("0:00").assertDoesNotExist()
+        rule.runOnIdle { posMs = 60_500L }
+        settle(200)
+        rule.onNodeWithText("1:00").assertExists()
     }
     private fun screenshot(name: String) {
         settle(800)

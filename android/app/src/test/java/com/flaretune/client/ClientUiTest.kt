@@ -16,6 +16,7 @@ import androidx.compose.ui.unit.dp
 import com.flaretune.client.model.*
 import com.flaretune.client.ui.*
 import com.flaretune.client.ui.theme.FlareTuneTheme
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -610,16 +611,142 @@ class ClientUiTest {
         assertTrue("Word preview strip should stay compact (<=90dp), was ${previewBounds.height / density}dp", previewBounds.height / density <= 90f)
         rule.onNodeWithText(longLineText).assertExists()
     }
+
+    @Test fun positionMsFlowDrivesMiniPlayerPreviousSwipeAndTransportTime() {
+        val positionFlow = MutableStateFlow(1_000L)
+        val uiState = fixture(MainDestination.HOME).copy(
+            playback = PlaybackSnapshot(
+                current = songs[0],
+                queue = listOf(songs[0], songs[1]),
+                currentIndex = 0,
+                playing = true,
+                positionMs = 0L,
+                durationMs = 180_000L,
+            ),
+        )
+        rule.setContent {
+            FlareTuneTheme {
+                ClientApp(uiState, actions, imageLoader = null, positionMsFlow = positionFlow)
+            }
+        }
+        rule.onNodeWithTag("mini_player").performTouchInput { swipeRight(startX = centerLeft.x + 20f, endX = centerRight.x - 20f) }
+        rule.waitForIdle()
+        assertEquals(0, actions.previousCalls)
+
+        positionFlow.value = 4_500L
+        rule.waitForIdle()
+        rule.onNodeWithTag("mini_player").performTouchInput { swipeRight(startX = centerLeft.x + 20f, endX = centerRight.x - 20f) }
+        rule.waitForIdle()
+        assertEquals(1, actions.previousCalls)
+
+        rule.onNodeWithTag("mini_player").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithText("0:04").assertExists()
+        assertTrue(rule.onNodeWithTag("player_previous").fetchSemanticsNode().let { true })
+    }
+
+    @Test fun tabKeepAlivePreservesHomeScrollAndActiveTapScrollsToTop() {
+        val longCatalog = (0 until 24).map { index ->
+            Song(
+                "keepalive-song-$index",
+                "Keepalive Track $index",
+                "FlareTune",
+                "Echoes",
+                180.0,
+                "https://fixture.invalid/keepalive-$index.mp3",
+                "https://fixture.invalid/art/${index % 4}",
+            )
+        }
+        val currentState = mutableStateOf(
+            fixture(MainDestination.HOME).copy(
+                songs = longCatalog,
+                continueListeningSongs = longCatalog.take(3),
+                discoverySongs = longCatalog.drop(3).take(3),
+            ),
+        )
+        actions.onNavigate = { destination ->
+            currentState.value = currentState.value.copy(
+                destination = destination,
+                selectedAlbum = null,
+                selectedArtist = null,
+                selectedPlaylist = null,
+            )
+        }
+        rule.setContent {
+            FlareTuneTheme {
+                ClientApp(currentState.value, actions, imageLoader = null)
+            }
+        }
+        rule.waitForIdle()
+        rule.onNodeWithTag("home_page").assertExists()
+        rule.onNodeWithTag("home_featured_cards").assertIsDisplayed()
+        rule.onNodeWithTag("home_filter_all").assertIsSelected()
+
+        // Jump to Library section inside Home so the feed is clearly scrolled past top cards.
+        rule.onNodeWithTag("home_filter_library").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("home_filter_library").assertIsSelected()
+        rule.onNodeWithTag("home_song_keepalive-song-0").assertIsDisplayed()
+
+        // Switch to Discover tab: Home semantics must disappear immediately while keeping scroll state alive.
+        rule.onNodeWithTag("nav_discover").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("discover_page").assertExists()
+        rule.onNodeWithTag("home_page").assertDoesNotExist()
+
+        // Switch back to Home tab: preserved scrolled section must remain active.
+        rule.onNodeWithTag("nav_home").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("home_page").assertExists()
+        rule.onNodeWithTag("discover_page").assertDoesNotExist()
+        rule.onNodeWithTag("home_filter_library").assertIsSelected()
+        rule.onNodeWithTag("home_song_keepalive-song-0").assertIsDisplayed()
+
+        // Tap active Home tab again while at root: must scroll smoothly back to top.
+        rule.onNodeWithTag("nav_home").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("home_filter_all").assertIsSelected()
+        rule.onNodeWithTag("home_featured_cards").assertIsDisplayed()
+    }
+
+    @Test fun miniPlayerSwipeUpOpensFullScreenPlayer() {
+        render(fixture(MainDestination.HOME))
+        rule.onNodeWithTag("full_player").assertDoesNotExist()
+        rule.onNodeWithTag("mini_player").performTouchInput {
+            swipeUp(startY = bottom - 6f, endY = top - 80f)
+        }
+        rule.waitForIdle()
+        rule.onNodeWithTag("full_player").assertExists()
+    }
+
+    @Test fun searchSubviewTransitionAndUnifiedShelfClickWorkWithPressScale() {
+        render(fixture(MainDestination.SEARCH).copy(query = "After", songs = songs, hasMore = true))
+        rule.onNodeWithTag("song_track-0").performClick()
+        rule.waitForIdle()
+        assertEquals("track-0", actions.playedList?.first?.getOrNull(actions.playedList?.second ?: -1)?.id)
+
+        val seeAllLabel = rule.activity.getString(R.string.ft_see_all)
+        val backLabel = rule.activity.getString(R.string.ft_back)
+        rule.onNodeWithText(seeAllLabel).performClick()
+        rule.waitForIdle()
+        rule.onNodeWithText(backLabel).assertExists()
+
+        rule.onNodeWithText(backLabel).performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("search_play_all").assertExists()
+    }
 }
 
 private class RecordingActions : ClientActions {
     var credentials: List<String>? = null
     var song: Song? = null
+    var playedList: Pair<List<Song>, Int>? = null
     var album: Album? = null
     var refreshes = 0
     var query = ""
     var toggles = 0
     var nexts = 0
+    var previousCalls = 0
     var seekPosition = -1L
     var lastVolume = -1f
     var queueIndex = -1
@@ -651,9 +778,13 @@ private class RecordingActions : ClientActions {
     override fun refresh() { refreshes++ }
     override fun loadMore() {}
     override fun playSong(song: Song) { this.song = song }
+    override fun playSongs(songs: List<Song>, startIndex: Int, shuffle: Boolean) {
+        this.playedList = songs to startIndex
+        songs.getOrNull(startIndex)?.let { this.song = it }
+    }
     override fun togglePlay() { toggles++ }
     override fun next() { nexts++ }
-    override fun previous() {}
+    override fun previous() { previousCalls++ }
     override fun seekTo(positionMs: Long) { seekPosition = positionMs }
     override fun toggleShuffle() {}
     override fun cycleRepeat() {}

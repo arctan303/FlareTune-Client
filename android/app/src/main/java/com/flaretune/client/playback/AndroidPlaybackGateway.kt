@@ -27,6 +27,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -37,6 +38,8 @@ import kotlin.coroutines.resumeWithException
 
 class AndroidPlaybackGateway(private val context: Context, private val runtime: PlaybackRuntime) : PlaybackGateway {
     override val state = MutableStateFlow(PlaybackSnapshot())
+    private val livePositionMs = MutableStateFlow(0L)
+    override val positionMsFlow: StateFlow<Long> = livePositionMs
     override val imageLoader: ImageLoader? get() = runtime.imageLoader
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val visible = MutableStateFlow(false)
@@ -48,14 +51,22 @@ class AndroidPlaybackGateway(private val context: Context, private val runtime: 
     init {
         scope.launch {
             visible.collectLatest { shown ->
-                if (shown) while (isActive) {
-                    controller?.let { player ->
-                        state.value = state.value.copy(positionMs = player.currentPosition.coerceAtLeast(0),
-                            durationMs = player.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0)
-                    }
-                    delay(350)
+                if (!shown) return@collectLatest
+                syncProgressFromController()
+                while (isActive) {
+                    delay(200)
+                    syncProgressFromController()
                 }
             }
+        }
+    }
+    private fun syncProgressFromController() {
+        val player = controller ?: return
+        val pos = player.currentPosition.coerceAtLeast(0L)
+        if (livePositionMs.value != pos) livePositionMs.value = pos
+        val dur = player.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0L
+        if (dur > 0L && dur != state.value.durationMs) {
+            state.value = state.value.copy(positionMs = pos, durationMs = dur)
         }
     }
     override suspend fun connect(connection: ActiveConnection) {
@@ -84,7 +95,11 @@ class AndroidPlaybackGateway(private val context: Context, private val runtime: 
         connected.addListener(listener)
         update(connected)
     }
-    private fun update(player: Player) { state.value = player.playbackSnapshot() }
+    private fun update(player: Player) {
+        val snapshot = player.playbackSnapshot()
+        state.value = snapshot
+        livePositionMs.value = snapshot.positionMs
+    }
     override fun play(songs: List<Song>, index: Int) {
         if (songs.isEmpty() || index !in songs.indices) return
         controller?.run { setMediaItems(songs.map { it.item() }, index, 0); prepare(); play() }
@@ -99,6 +114,7 @@ class AndroidPlaybackGateway(private val context: Context, private val runtime: 
     override fun clearQueue() {
         controller?.run { stop(); clearMediaItems() }
         runtime.queueRepository?.save(PlaybackSnapshot())
+        livePositionMs.value = 0L
         state.value = state.value.copy(current = null, queue = emptyList(), currentIndex = -1,
             playing = false, buffering = false, positionMs = 0, durationMs = 0, failed = false)
     }
@@ -106,7 +122,15 @@ class AndroidPlaybackGateway(private val context: Context, private val runtime: 
     override fun togglePlay() { controller?.run { if (isPlaying || (playWhenReady && playbackState == Player.STATE_BUFFERING)) pause() else { if (playbackState == Player.STATE_ENDED) seekToDefaultPosition(); play() } } }
     override fun next() { controller?.run { if (hasNextMediaItem()) seekToNextMediaItem() } }
     override fun previous() { controller?.let(::previousTrack) }
-    override fun seekTo(positionMs: Long) { controller?.run { if (duration > 0) seekTo(positionMs.coerceIn(0, duration)) } }
+    override fun seekTo(positionMs: Long) {
+        controller?.run {
+            if (duration > 0) {
+                val clamped = positionMs.coerceIn(0, duration)
+                seekTo(clamped)
+                livePositionMs.value = clamped
+            }
+        }
+    }
     override fun toggleShuffle() { controller?.run { shuffleModeEnabled = !shuffleModeEnabled } }
     override fun cycleRepeat() { controller?.run { repeatMode = (repeatMode + 1) % 3 } }
     override fun setPlaybackMode(shuffle: Boolean, repeatMode: Int) {
@@ -129,6 +153,7 @@ class AndroidPlaybackGateway(private val context: Context, private val runtime: 
         controller?.run { stop(); clearMediaItems() }
         disconnect()
         runtime.clear()
+        livePositionMs.value = 0L
         state.value = PlaybackSnapshot()
     }
     private fun disconnect() {

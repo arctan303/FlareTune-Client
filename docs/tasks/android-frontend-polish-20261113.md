@@ -71,13 +71,14 @@
 - **共同基线（`1ebbd7a` / `0.1.0-dev.8 / versionCode 8`）**：
   - 据 [README](../../README.md) 与 [歌曲关联与版本修复任务](android-song-relations-20261113.md)：原基线实现 **348/348** 自动测试通过、`assembleDebug` 与 `Lint`（0 错误 / 65 警告 / 1 提示）通过；本地工作区中除 `research/README.md` 与 `research/gemini-brief-am-instrumental-dots.txt` 外保持干净。
 - **本轮已落地边界与保留项说明**：
-  - **P0 / P1 完成**：已完成 4 Tab（`HOME` / `DISCOVER` / `SEARCH` / `LIBRARY`）导航、主页与发现页重排及状态隔离、`SavedStateHandle` 恢复、继续收听列表连播、顶部不遮挡轻提示、`HapticFeedback`、一级/二级页 `AnimatedContent` 过渡、`PlaylistOrderSheet` `LazyColumn` + 未修改禁用保存、歌单详情页直达排序、搜索 350ms 防抖、子视图 `BackHandler` 与歌词页切歌保留、背景调色板平滑渐变、缓冲态封面比例稳定、翻译加载旋转指示、`QueuePanel` 收敛至 `ClientApp` 单一宿主。
-  - **显式保留项（受已有 `1ebbd7a` 回归单测锁定）**：
-    - `NowPlayingScreen` 歌词离焦微模糊：受 `PlayerLyricsMotionTest`（`blurRadius` 断言）锁定，本轮保留原样，待确认后再决定是否调整单测一并去除；
-    - `NowPlayingScreen` 挂载期 `keepScreenOn`：受 `PlayerLyricsMotionTest.fullScreenPlayerKeepsScreenAwakeWhileMountedAndRestoresOnDispose` 锁定，本轮恢复既有“打开即常亮、退出恢复”契约；
-    - `PlayHistoryPage` 单曲移除保留直接点击+顶部轻提示反馈，兼容已有 `ListeningFeaturesUiTest`。
-  - **验证与审查收敛（2026-11-13）**：已完成独立代码复审提出的 3 项交互/状态缺陷与 `Design-Brief.md` 快捷入口顺序同步，并完成后续体验优化：主页与“继续收听”乐观视图快照锁（`继续收听` 与 `播放历史` 语义拆分并接入 `GET /api/account/play-stats?days=7&view=summary&limit=30` 兼容混排）、发现页移除“焦点音乐人”、搜索页“最近搜索”乐观视图快照锁，以及**真机/分屏/自由浮窗连续两轮视觉调优**：
-    1. 宽屏/歌曲架调优：主页“我的收藏”改用 `latestFavoriteCoverUrl` 最新收藏封面；`UnifiedSongSectionList` 维持 `78dp` 行高回归 4 行一列横向流，宽屏单列 ~2/5 宽露第三列 ~1/5，字体回正 `15sp/13sp`；宽屏底栏扩至 `86%` 宽 × `78dp` 高且主导航明显长于播控条（`~58% : 42%`）。
-    2. 手机端/小窗/顶栏叠压与锚点滚动修复：窄底栏实色背景内加入 `max(navigationBarsBottom, 14dp)` 底部安全净空，随后按实机小窗反馈将紧凑导航放大至 `56dp`（`22dp` 图标 + `12sp` 标签）、迷你播控卡放大至 `62dp`（`44dp` 封面，无系统导航栏时总高约 `138.6dp`，`contentBottomInset` 同步增至 `136dp`/`66dp` 防底列表遮挡，并在 `fontScale > 1.3f` 时动态增高紧凑导航避免 200% 字号裁切）；手机端（`< 600dp`）与中屏（`600–839dp`）快捷卡同步放大至 `264–344dp × 160–200dp` / `300–360dp × 174–208dp`；主页与发现页借鉴 Spotify 改为常驻顶部紧致单行顶栏并同步推广至搜索页与个人歌单库（共用 `ShellTopHeaderRow` 与左侧同位置 `AccountAvatar`；搜索页接 `48dp` 胶囊搜索条与焦点直达及不回滚输入的受保护防抖，歌单库接“个人歌单库 / + 创建歌单 / 调整歌单库顺序”胶囊；个人歌单库在 `< 600dp` 切换为 `PlaylistListRow` 列表样式，`>= 600dp` 保持多列网格），发现页语种胶囊仅显示纯语种名称（`showCounts = false`），各页面及详情页/弹窗统一移除右上角刷新按钮（保留头像下拉菜单全局刷新 `account_refresh`），顶栏安全净空升级为 `max(WindowInsets.safeDrawing.top, 24.dp)` 避开分屏/自由小窗顶部把手（`• • •`）与 `captionBar`/`displayCutout`，并以 `FrostedHeaderScaffold` 磨砂透明浮动顶栏（`API 31+` 实时背景采集模糊 + 底部 18dp 透明羽化，低版本平滑渐变兜底）替换硬色断层；主页胶囊保持全页内容不断层、仅在存在随机推荐区块时展示对应胶囊并随滚动（含触底判定）自动同步高亮。
-    最新全量跑测中 **35 个测试套件、381 条单测 381/381 全部通过**（0 失败 / 0 错误 / 0 跳过），`lintDebug` 0 错误（67 警告 / 1 提示），`assembleDebug` 编译通过（按用户指示本轮暂未部署至真机）。
+  - **P0 / P1 完成**：已完成 4 Tab（`HOME` / `DISCOVER` / `SEARCH` / `LIBRARY`）导航、主页与发现页重排及状态隔离、`SavedStateHandle` 恢复、继续收听列表连播、顶部不遮挡轻提示、`HapticFeedback`、一级/二级页过渡、`PlaylistOrderSheet` `LazyColumn` + 未修改禁用保存、歌单详情页直达排序、搜索 350ms 防抖、子视图 `BackHandler` 与歌词页切歌保留、背景调色板平滑渐变、缓冲态封面比例稳定、翻译加载旋转指示、`QueuePanel` 收敛至 `ClientApp` 单一宿主。
+  - **已于治本重构轮（[android-root-cause-perf-ux-20261113.md](android-root-cause-perf-ux-20261113.md)）升级/替代的旧保留项**：
+    - `NowPlayingScreen` 歌词离散模糊与背景：保留 `0 / 0.5 / 1.2 / 2.2dp` 离散模糊档位与全屏流光质感，重构为降采样一次性预模糊背景 + 离散固定 `BlurEffect` 层隔离 + 绘制层卡拉OK裁剪渲染；
+    - `NowPlayingScreen` 常亮规则（已替代旧单测契约）：`keepScreenOn` 已改为仅在全屏播放器挂载且 `state.playing == true` 时启用，暂停或退出立即恢复（同步更新 `PlayerLyricsMotionTest`）；
+    - `FrostedHeaderScaffold` 顶栏遮罩（已替代第 81 条实时模糊）：统一为 Spotify 式纯渐变半透明遮罩，彻底消除列表滚动全屏离屏采集开销；
+    - `PlayHistoryPage` 单曲移除继续保留直接点击 + 顶部轻提示反馈，兼容已有 `ListeningFeaturesUiTest`。
+  - **验证与审查收敛（2026-11-13）**：已完成独立代码复审提出的 3 项交互/状态缺陷与 `Design-Brief.md` 快捷入口顺序同步，并完成后续体验优化：主页与“继续收听”乐观视图快照锁（`继续收听` 与 `播放历史` 语义拆分并接入 `GET /api/account/play-stats?days=7&view=summary&limit=30` 兼容混排）、发现页移除“焦点音乐人”、搜索页“最近搜索”乐观视图快照锁，以及**真机/分屏/自由浮窗连续两轮视觉调优**与**前端性能/微交互治本 4-Phase 重构**。
+    1. 宽屏/歌曲架调优：主页“我的收藏”改用 `latestFavoriteCoverUrl` 最新收藏封面；`UnifiedSongSectionList` 维持 `78dp` 行高回归 4 行一列横向流 + 磁吸对齐（`rememberSnapFlingBehavior`），宽屏单列 ~2/5 宽露第三列 ~1/5，字体回正 `15sp/13sp`；宽屏底栏扩至 `86%` 宽 × `78dp` 高且主导航明显长于播控条（`~58% : 42%`）。
+    2. 手机端/小窗/顶栏与治本性能调优：窄底栏实色背景内加入 `max(navigationBarsBottom, 14dp)` 底部安全净空（导航 `56dp`、`62dp` 播控卡、`136dp`/`66dp` 底留白，`fontScale > 1.3f` 自适应增高）；4 主 Tab 改用懒加载状态保活 + `drawWithContent` 零重组柔切与点按激活 Tab 平滑回顶；主页与发现等采用 Spotify 式常驻顶部紧致单行顶栏（共用 `ShellTopHeaderRow` 与 `FrostedHeaderScaffold` 纯渐变半透明遮罩，安全净空 `max(WindowInsets.safeDrawing.top, 24.dp)`）；全屏播放开关采用弹簧景深过渡、MiniPlayer 支持上滑展开、全站卡片/胶囊/歌曲行统一 `flarePressScale` 按压回弹、`positionMs` 与 `PlaybackSnapshot` 解耦且 `Coil` 启用 `64 MiB` 磁盘缓存。
+    关于当前轮次单测、Lint 与独立复审最新结果见 [android-root-cause-perf-ux-20261113.md](android-root-cause-perf-ux-20261113.md)。
   - **待续事项（P2 与后端/实机联调）**：待后端 `worker` 歌词任务结束后由 GPT 在 `GET /api/account/play-stats` 补充 `?days=N` 窗口过滤以激活近期重复收听实时排序；P2 历史死代码与未使用资源清理，以及平板/手机真机视觉走查。

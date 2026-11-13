@@ -40,6 +40,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
@@ -100,28 +101,34 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
@@ -142,20 +149,18 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.ResolvedTextDirection
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Velocity
@@ -181,10 +186,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.PI
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -229,9 +236,10 @@ internal fun NowPlayingScreen(
     val atmospheric = artworkAvailable
     val scope = rememberCoroutineScope()
     val hostView = LocalView.current
-    DisposableEffect(hostView) {
+    val keepAwake = state.playing
+    DisposableEffect(hostView, keepAwake) {
         val previous = hostView.keepScreenOn
-        hostView.keepScreenOn = true
+        hostView.keepScreenOn = keepAwake
         onDispose {
             hostView.keepScreenOn = previous
         }
@@ -442,70 +450,77 @@ internal fun NowPlayingScreen(
                         canToggleInlineTranslation(lyricState)
                     }
                     val useCompactTransport = bodyHeight < 400.dp
-                    SubcomposeLayout(Modifier.width(narrowContentWidth)) { constraints ->
+                    val stageMinCompactHeight = 260.dp
+                    Layout(
+                        modifier = Modifier.width(narrowContentWidth),
+                        contents = listOf(
+                            {
+                                SharedTransitionLayout(Modifier.fillMaxWidth()) {
+                                    AnimatedContent(
+                                        targetState = mobilePane,
+                                        transitionSpec = {
+                                            (fadeIn(tween(240)) togetherWith fadeOut(tween(180)))
+                                                .using(SizeTransform(clip = false))
+                                        },
+                                        label = "classic_mobile_pane",
+                                    ) { pane ->
+                                        val sharedScope = this@SharedTransitionLayout
+                                        val animatedScope = this@AnimatedContent
+                                        if (pane == ClassicMobilePane.LYRICS) {
+                                            ClassicMobileLyricsStage(
+                                                song = song,
+                                                lyricState = lyricState,
+                                                translationEnabled = translationEnabled,
+                                                translationNotice = translationNotice,
+                                                showTranslationToggle = showDisplayToggle,
+                                                playbackPositionMs = state.positionMs,
+                                                playing = state.playing,
+                                                buffering = state.buffering,
+                                                imageLoader = imageLoader,
+                                                actions = actions,
+                                                onBackToArtwork = { mobilePane = ClassicMobilePane.SONG },
+                                                sharedTransitionScope = sharedScope,
+                                                animatedVisibilityScope = animatedScope,
+                                            )
+                                        } else {
+                                            ClassicMobileSongStage(
+                                                song = song,
+                                                lyricState = lyricState,
+                                                translationEnabled = translationEnabled,
+                                                playbackPositionMs = state.positionMs,
+                                                playing = state.playing,
+                                                buffering = state.buffering,
+                                                imageLoader = imageLoader,
+                                                onOpenLyrics = { mobilePane = ClassicMobilePane.LYRICS },
+                                                sharedTransitionScope = sharedScope,
+                                                animatedVisibilityScope = animatedScope,
+                                            )
+                                        }
+                                    }
+                                }
+                            },
+                            {
+                                ClassicPlayerTransportPanel(
+                                    state = state,
+                                    actions = actions,
+                                    onQueue = onQueue,
+                                    compactVertical = useCompactTransport,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            },
+                        ),
+                    ) { measurables, constraints ->
                         val widthPx = constraints.maxWidth
                         val bodyPx = bodyHeight.roundToPx()
                         val bottomPadPx = 12.dp.roundToPx()
                         val widthConstraints = Constraints.fixedWidth(widthPx)
-                        val transportPlaceable = subcompose("mobile_transport") {
-                            ClassicPlayerTransportPanel(
-                                state = state,
-                                actions = actions,
-                                onQueue = onQueue,
-                                compactVertical = useCompactTransport,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }.first().measure(widthConstraints)
-                        val stageHeightPx = (bodyPx - bottomPadPx - transportPlaceable.height).coerceAtLeast(0)
-                        val stagePlaceable = subcompose("mobile_stage") {
-                            SharedTransitionLayout(Modifier.fillMaxWidth()) {
-                                AnimatedContent(
-                                    targetState = mobilePane,
-                                    transitionSpec = {
-                                        (fadeIn(tween(240)) togetherWith fadeOut(tween(180)))
-                                            .using(SizeTransform(clip = false))
-                                    },
-                                    label = "classic_mobile_pane",
-                                ) { pane ->
-                                    val sharedScope = this@SharedTransitionLayout
-                                    val animatedScope = this@AnimatedContent
-                                    if (pane == ClassicMobilePane.LYRICS) {
-                                        ClassicMobileLyricsStage(
-                                            widthPx = widthPx,
-                                            stageHeightPx = stageHeightPx,
-                                            song = song,
-                                            lyricState = lyricState,
-                                            translationEnabled = translationEnabled,
-                                            translationNotice = translationNotice,
-                                            showTranslationToggle = showDisplayToggle,
-                                            playbackPositionMs = state.positionMs,
-                                            playing = state.playing,
-                                            buffering = state.buffering,
-                                            imageLoader = imageLoader,
-                                            actions = actions,
-                                            onBackToArtwork = { mobilePane = ClassicMobilePane.SONG },
-                                            sharedTransitionScope = sharedScope,
-                                            animatedVisibilityScope = animatedScope,
-                                        )
-                                    } else {
-                                        ClassicMobileSongStage(
-                                            widthPx = widthPx,
-                                            stageHeightPx = stageHeightPx,
-                                            song = song,
-                                            lyricState = lyricState,
-                                            translationEnabled = translationEnabled,
-                                            playbackPositionMs = state.positionMs,
-                                            playing = state.playing,
-                                            buffering = state.buffering,
-                                            imageLoader = imageLoader,
-                                            onOpenLyrics = { mobilePane = ClassicMobilePane.LYRICS },
-                                            sharedTransitionScope = sharedScope,
-                                            animatedVisibilityScope = animatedScope,
-                                        )
-                                    }
-                                }
-                            }
-                        }.first().measure(widthConstraints)
+                        val transportPlaceable = measurables[1].first().measure(widthConstraints)
+                        val minCompactPx = stageMinCompactHeight.roundToPx()
+                        val remainingStagePx = (bodyPx - bottomPadPx - transportPlaceable.height)
+                            .coerceAtLeast(if (useCompactTransport) minCompactPx else 0)
+                        val stagePlaceable = measurables[0].first().measure(
+                            Constraints.fixed(widthPx, remainingStagePx),
+                        )
                         val totalHeight = maxOf(bodyPx, stagePlaceable.height + transportPlaceable.height + bottomPadPx)
                         layout(widthPx, totalHeight) {
                             stagePlaceable.placeRelative(0, 0)
@@ -521,8 +536,6 @@ internal fun NowPlayingScreen(
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 private fun ClassicMobileLyricsStage(
-    widthPx: Int,
-    stageHeightPx: Int,
     song: Song,
     lyricState: LyricState,
     translationEnabled: Boolean,
@@ -537,56 +550,39 @@ private fun ClassicMobileLyricsStage(
     sharedTransitionScope: SharedTransitionScope,
     animatedVisibilityScope: AnimatedVisibilityScope,
 ) {
-    SubcomposeLayout(Modifier.fillMaxWidth()) {
-        val widthConstraints = Constraints.fixedWidth(widthPx)
-        val minViewportPx = minOf(
-            200.dp.roundToPx(),
-            maxOf(140.dp.roundToPx(), (stageHeightPx * 0.55f).roundToInt()),
+    Column(Modifier.fillMaxSize()) {
+        ClassicLyricsTopRow(
+            song = song,
+            imageLoader = imageLoader,
+            onBackToArtwork = onBackToArtwork,
+            showTranslationToggle = showTranslationToggle,
+            translationEnabled = translationEnabled,
+            onToggleTranslation = { actions.setTranslationEnabled(!translationEnabled) },
+            sharedTransitionScope = sharedTransitionScope,
+            animatedVisibilityScope = animatedVisibilityScope,
         )
-        val topPlaceable = subcompose("lyrics_top_row") {
-            ClassicLyricsTopRow(
-                song = song,
-                imageLoader = imageLoader,
-                onBackToArtwork = onBackToArtwork,
-                showTranslationToggle = showTranslationToggle,
-                translationEnabled = translationEnabled,
-                onToggleTranslation = { actions.setTranslationEnabled(!translationEnabled) },
-                sharedTransitionScope = sharedTransitionScope,
-                animatedVisibilityScope = animatedVisibilityScope,
-            )
-        }.first().measure(widthConstraints)
-        val viewportHeightPx = (stageHeightPx - topPlaceable.height).coerceAtLeast(minViewportPx)
-        val viewportPlaceable = subcompose("lyrics_viewport") {
-            ClassicLyricsViewport(
-                song = song,
-                lyricState = lyricState,
-                translationEnabled = translationEnabled,
-                translationNotice = translationNotice,
-                playbackPositionMs = playbackPositionMs,
-                playing = playing,
-                buffering = buffering,
-                twoColumns = false,
-                onSeekTo = actions::seekTo,
-                onRetry = actions::retryLyrics,
-                onSetTranslationEnabled = actions::setTranslationEnabled,
-                onTranslate = actions::requestLyricTranslation,
-                showInlineTranslationToggle = false,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }.first().measure(Constraints.fixed(widthPx, viewportHeightPx))
-        val resolvedHeight = maxOf(stageHeightPx, topPlaceable.height + viewportHeightPx)
-        layout(widthPx, resolvedHeight) {
-            topPlaceable.placeRelative(0, 0)
-            viewportPlaceable.placeRelative(0, topPlaceable.height)
-        }
+        ClassicLyricsViewport(
+            song = song,
+            lyricState = lyricState,
+            translationEnabled = translationEnabled,
+            translationNotice = translationNotice,
+            playbackPositionMs = playbackPositionMs,
+            playing = playing,
+            buffering = buffering,
+            twoColumns = false,
+            onSeekTo = actions::seekTo,
+            onRetry = actions::retryLyrics,
+            onSetTranslationEnabled = actions::setTranslationEnabled,
+            onTranslate = actions::requestLyricTranslation,
+            showInlineTranslationToggle = false,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+        )
     }
 }
 
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 private fun ClassicMobileSongStage(
-    widthPx: Int,
-    stageHeightPx: Int,
     song: Song,
     lyricState: LyricState,
     translationEnabled: Boolean,
@@ -598,56 +594,37 @@ private fun ClassicMobileSongStage(
     sharedTransitionScope: SharedTransitionScope,
     animatedVisibilityScope: AnimatedVisibilityScope,
 ) {
-    SubcomposeLayout(Modifier.fillMaxWidth()) {
-        val topPadPx = 4.dp.roundToPx()
-        val metadataGapPx = 10.dp.roundToPx()
-        val controlsGapPx = 10.dp.roundToPx()
-        val previewGapPx = 12.dp.roundToPx()
-        val widthConstraints = Constraints.fixedWidth(widthPx)
-        val metadataPlaceable = subcompose("song_metadata") {
-            Column(Modifier.fillMaxWidth()) {
-                ClassicSongMetadataRow(
-                    song = song,
-                    showLyricsButton = false,
-                    onToggleLyrics = {},
-                )
-                Spacer(Modifier.height(10.dp))
+    val fontScale = LocalDensity.current.fontScale.coerceAtLeast(1f)
+    Column(Modifier.fillMaxSize().padding(top = 4.dp)) {
+        BoxWithConstraints(
+            Modifier.weight(1f).fillMaxWidth(),
+            contentAlignment = Alignment.Center,
+        ) {
+            val previewGap = 12.dp
+            val minArt = minOf(maxWidth, 136.dp)
+            val artSize = minOf(maxWidth, maxHeight.coerceAtLeast(minArt))
+            val remainingHeight = (maxHeight - artSize - previewGap).coerceAtLeast(0.dp)
+            val previewMaxLines = when {
+                remainingHeight >= 56.dp * fontScale -> 2
+                remainingHeight >= 30.dp * fontScale -> 1
+                else -> 0
             }
-        }.first().measure(widthConstraints)
-        val availableUpperPx = (stageHeightPx - topPadPx - metadataPlaceable.height - metadataGapPx)
-            .coerceAtLeast(0)
-        val minArtPx = minOf(widthPx, 136.dp.roundToPx())
-        val artSizePx = minOf(widthPx, availableUpperPx.coerceAtLeast(minArtPx))
-        val artworkPlaceable = subcompose("song_artwork") {
-            ClassicArtwork(
-                song = song,
-                imageLoader = imageLoader,
-                playing = playing,
-                buffering = buffering,
-                modifier = Modifier.size(artSizePx.toDp()),
-                onClick = onOpenLyrics,
-                sharedTransitionScope = sharedTransitionScope,
-                animatedVisibilityScope = animatedVisibilityScope,
-            )
-        }.first().measure(Constraints.fixed(artSizePx, artSizePx))
-        val middleFreePx = (availableUpperPx - artworkPlaceable.height - previewGapPx).coerceAtLeast(0)
-        val selectedPreview = if (middleFreePx > 0) {
-            val twoLinePlaceable = subcompose("song_preview_2") {
-                ClassicLyricPreviewStrip(
+            Column(
+                Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                ClassicArtwork(
                     song = song,
-                    lyricState = lyricState,
-                    translationEnabled = translationEnabled,
-                    playbackPositionMs = playbackPositionMs,
+                    imageLoader = imageLoader,
                     playing = playing,
                     buffering = buffering,
-                    maxLines = 2,
+                    modifier = Modifier.size(artSize),
                     onClick = onOpenLyrics,
+                    sharedTransitionScope = sharedTransitionScope,
+                    animatedVisibilityScope = animatedVisibilityScope,
                 )
-            }.first().measure(widthConstraints)
-            if (twoLinePlaceable.height <= middleFreePx) {
-                twoLinePlaceable
-            } else {
-                val oneLinePlaceable = subcompose("song_preview_1") {
+                if (previewMaxLines > 0) {
+                    Spacer(Modifier.height(previewGap))
                     ClassicLyricPreviewStrip(
                         song = song,
                         lyricState = lyricState,
@@ -655,29 +632,19 @@ private fun ClassicMobileSongStage(
                         playbackPositionMs = playbackPositionMs,
                         playing = playing,
                         buffering = buffering,
-                        maxLines = 1,
+                        maxLines = previewMaxLines,
                         onClick = onOpenLyrics,
                     )
-                }.first().measure(widthConstraints)
-                if (oneLinePlaceable.height <= middleFreePx) oneLinePlaceable else null
+                }
             }
-        } else {
-            null
         }
-        val upperGroupHeight = artworkPlaceable.height +
-            if (selectedPreview != null) previewGapPx + selectedPreview.height else 0
-        val upperY = topPadPx + ((availableUpperPx - upperGroupHeight).coerceAtLeast(0) / 2)
-        val metadataY = maxOf(
-            stageHeightPx - metadataPlaceable.height,
-            upperY + upperGroupHeight + controlsGapPx,
+        Spacer(Modifier.height(10.dp))
+        ClassicSongMetadataRow(
+            song = song,
+            showLyricsButton = false,
+            onToggleLyrics = {},
         )
-        val resolvedHeight = maxOf(stageHeightPx, metadataY + metadataPlaceable.height)
-        val artX = ((widthPx - artworkPlaceable.width) / 2).coerceAtLeast(0)
-        layout(widthPx, resolvedHeight) {
-            artworkPlaceable.placeRelative(artX, upperY)
-            selectedPreview?.placeRelative(0, upperY + artworkPlaceable.height + previewGapPx)
-            metadataPlaceable.placeRelative(0, metadataY)
-        }
+        Spacer(Modifier.height(10.dp))
     }
 }
 
@@ -875,12 +842,13 @@ private fun ClassicLyricPreviewStrip(
         ) { strip ->
             Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                 if (strip.wordSynced && strip.line != null) {
+                    val livePositionMs by rememberPlaybackPositionMsState(playbackPositionMs)
                     val lineHeight = MaterialTheme.typography.titleMedium.lineHeight.let {
                         if (it.isSpecified) it else 22.sp
                     }
                     KaraokeLyricText(
                         line = strip.line,
-                        basePositionMs = playbackPositionMs,
+                        basePositionMs = livePositionMs,
                         playing = playing && !buffering,
                         fontSize = 17.sp,
                         lineHeight = lineHeight,
@@ -1037,7 +1005,7 @@ private fun ClassicLyricsViewport(
     var userScrolling by remember(lyricState.songId) { mutableStateOf(false) }
     val interactionSource = remember(lyricState.songId) { MutableInteractionSource() }
     var scrollGeneration by remember(lyricState.songId) { mutableIntStateOf(0) }
-    val livePositionMsState = rememberUpdatedState(playbackPositionMs)
+    val livePositionMsState = rememberPlaybackPositionMsState(playbackPositionMs)
 
     class AnchorSnapshot(var key: Any? = null, var baselineY: Float? = null, var slotIdx: Int = 0)
     class SceneTracker(
@@ -1104,6 +1072,7 @@ private fun ClassicLyricsViewport(
         activeIdx,
         userScrolling,
         lyricState.syncMode,
+        livePositionMsState,
     ) {
         derivedStateOf {
             if (lyricState.status == LyricStatus.READY && lyricState.lines.isNotEmpty() && activeIdx <= 0) {
@@ -1224,6 +1193,18 @@ private fun ClassicLyricsViewport(
                     }
                     val blurPxList = remember(presentations, density) {
                         presentations.map { with(density) { it.blurRadius.toPx() } }
+                    }
+                    // Cache discrete GPU BlurEffect shaders once per density so scroll & line transitions
+                    // never recompile continuous blur radii on every frame while preserving 0 / 0.5 / 1.2 / 2.2dp depth.
+                    val cachedBlurEffects = remember(density) {
+                        if (Build.VERSION.SDK_INT >= 31) {
+                            listOf(0.dp, 0.5.dp, 1.2.dp, 2.2.dp, 5.dp).map { radius ->
+                                val px = with(density) { radius.toPx() }
+                                if (px > 0.25f) BlurEffect(px, px, TileMode.Decal) else null
+                            }
+                        } else {
+                            emptyList()
+                        }
                     }
 
                     SubcomposeLayout(
@@ -1413,12 +1394,13 @@ private fun ClassicLyricsViewport(
                                     Modifier
                                 }
 
-                                val rowBlurPx = controller.visualStateFor(key)?.displayBlurPx ?: blurPxList[slotIndex]
-                                val rowBlurDp = with(density) { rowBlurPx.toDp() }
-                                val lyricHiddenProgress = (1f - lyricRevealProgress).coerceIn(0f, 1f)
-                                val textSwapBlurDp = (6f * lyricHiddenProgress).dp
-                                val combinedTextBlurDp = if (textSwapBlurDp > rowBlurDp) textSwapBlurDp else rowBlurDp
-                                val dotsSwapBlurDp = (5f * (1f - dotsBlurReveal).coerceIn(0f, 1f)).dp
+                                val targetBlurDp = presentations[slotIndex].blurRadius
+                                val baseBlurTier = when {
+                                    targetBlurDp <= 0.1.dp -> 0
+                                    targetBlurDp <= 0.85.dp -> 1
+                                    targetBlurDp <= 1.7.dp -> 2
+                                    else -> 3
+                                }
 
                                 Box(
                                     Modifier.fillMaxWidth()
@@ -1430,19 +1412,18 @@ private fun ClassicLyricsViewport(
                                     Column(
                                         Modifier.fillMaxWidth()
                                             .graphicsLayer {
-                                                alpha = lyricRevealProgress.coerceIn(0f, 1f)
-                                                val scale = 1f - 0.03f * lyricHiddenProgress
+                                                val reveal = lyricRevealProgress.coerceIn(0f, 1f)
+                                                val hidden = 1f - reveal
+                                                alpha = reveal
+                                                val scale = 1f - 0.03f * hidden
                                                 scaleX = scale
                                                 scaleY = scale
                                                 transformOrigin = TransformOrigin(0f, 0.5f)
+                                                if (cachedBlurEffects.isNotEmpty()) {
+                                                    val tier = if (hidden > 0.35f) 4 else baseBlurTier
+                                                    renderEffect = cachedBlurEffects[tier]
+                                                }
                                             }
-                                            .then(
-                                                if (Build.VERSION.SDK_INT >= 31 && combinedTextBlurDp > 0.2.dp) {
-                                                    Modifier.blur(combinedTextBlurDp, BlurredEdgeTreatment.Unbounded)
-                                                } else {
-                                                    Modifier
-                                                },
-                                            )
                                             .padding(vertical = 4.dp),
                                     ) {
                                         val wordSynced = isActive && lyricState.syncMode == "word" && line.words.isNotEmpty()
@@ -1508,14 +1489,10 @@ private fun ClassicLyricsViewport(
                                                         scaleX = dotsScale
                                                         scaleY = dotsScale
                                                         transformOrigin = TransformOrigin(0f, 0.5f)
-                                                    }
-                                                    .then(
-                                                        if (Build.VERSION.SDK_INT >= 31 && dotsSwapBlurDp > 0.2.dp) {
-                                                            Modifier.blur(dotsSwapBlurDp, BlurredEdgeTreatment.Unbounded)
-                                                        } else {
-                                                            Modifier
-                                                        },
-                                                    ),
+                                                        if (cachedBlurEffects.isNotEmpty()) {
+                                                            renderEffect = if (dotsBlurReveal < 0.65f) cachedBlurEffects[4] else null
+                                                        }
+                                                    },
                                                 contentAlignment = Alignment.CenterStart,
                                             ) {
                                                 InterludeDotsRow(
@@ -1761,102 +1738,130 @@ internal fun KaraokeLyricText(
     trackHorizontalFocus: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
-    var displayPosMs by remember(line) { mutableLongStateOf(basePositionMs) }
+    val fullText = remember(line) {
+        if (line.words.isNotEmpty()) line.words.joinToString(separator = "") { it.text } else line.text
+    }
+    val displayPosMsState = remember(line) { mutableLongStateOf(basePositionMs) }
     val endMs = remember(line) {
         ((line.endTimeSeconds ?: line.words.lastOrNull()?.endTimeSeconds ?: 0.0) * 1000.0).toLong() + 300L
     }
     LaunchedEffect(line, basePositionMs, playing) {
-        displayPosMs = basePositionMs
+        displayPosMsState.longValue = basePositionMs
         if (!playing || basePositionMs >= endMs) return@LaunchedEffect
         val startWall = SystemClock.uptimeMillis()
-        while (displayPosMs < endMs) {
-            delay(40L)
-            displayPosMs = basePositionMs + (SystemClock.uptimeMillis() - startWall)
+        while (isActive && displayPosMsState.longValue < endMs) {
+            withFrameNanos {
+                displayPosMsState.longValue = basePositionMs + (SystemClock.uptimeMillis() - startWall)
+            }
         }
     }
 
-    val currentSec = displayPosMs / 1000.0
-    val annotated: AnnotatedString = buildAnnotatedString {
-        line.words.forEach { word ->
-            val wordColor = when {
-                currentSec >= word.endTimeSeconds -> sungColor
-                currentSec <= word.startTimeSeconds -> unsungColor
-                else -> {
-                    val span = (word.endTimeSeconds - word.startTimeSeconds).coerceAtLeast(0.05)
-                    val fraction = ((currentSec - word.startTimeSeconds) / span).toFloat().coerceIn(0f, 1f)
-                    lerp(unsungColor, sungColor, fraction)
-                }
-            }
-            withStyle(
-                SpanStyle(
-                    color = wordColor,
-                    fontWeight = fontWeight,
-                    shadow = shadow,
-                ),
-            ) {
-                append(word.text)
-            }
-        }
-    }
     val textStyle = MaterialTheme.typography.headlineSmall.copy(
         fontSize = fontSize,
         lineHeight = lineHeight,
         fontWeight = fontWeight,
+        shadow = shadow,
     )
+    var textLayout by remember(line) { mutableStateOf<TextLayoutResult?>(null) }
+
+    // Draw-layer word-by-word sweep: overlays a static sung Text above a static unsung Text
+    // and clips per visual line using TextLayoutResult, eliminating AnnotatedString rebuilds.
+    val sungSweepModifier = Modifier.drawWithContent {
+        val layout = textLayout
+        val totalChars = fullText.length
+        if (layout == null || totalChars == 0 || line.words.isEmpty()) {
+            drawContent()
+            return@drawWithContent
+        }
+        val focusChar = computeKaraokeFocusCharOffset(line.words, displayPosMsState.longValue / 1000.0)
+            .coerceIn(0f, totalChars.toFloat())
+        if (focusChar <= 0.001f) return@drawWithContent
+        if (focusChar >= totalChars - 0.001f) {
+            drawContent()
+            return@drawWithContent
+        }
+        val lowIdx = floor(focusChar).toInt().coerceIn(0, totalChars)
+        val highIdx = ceil(focusChar).toInt().coerceIn(0, totalChars)
+        val activeVisualLine = layout.getLineForOffset(lowIdx).coerceIn(0, layout.lineCount - 1)
+        for (l in 0 until activeVisualLine) {
+            clipRect(
+                left = -4f,
+                top = layout.getLineTop(l),
+                right = size.width + 4f,
+                bottom = layout.getLineBottom(l),
+            ) {
+                this@drawWithContent.drawContent()
+            }
+        }
+        val isRtl = layout.getParagraphDirection(activeVisualLine) == ResolvedTextDirection.Rtl
+        val lineLeft = layout.getLineLeft(activeVisualLine)
+        val lineRight = layout.getLineRight(activeVisualLine)
+        val lowX = layout.getHorizontalPosition(lowIdx, usePrimaryDirection = true)
+        val highX = if (layout.getLineForOffset(highIdx) == activeVisualLine) {
+            layout.getHorizontalPosition(highIdx, usePrimaryDirection = true)
+        } else if (isRtl) {
+            lineLeft
+        } else {
+            lineRight
+        }
+        val sweepX = lowX + (highX - lowX) * (focusChar - lowIdx)
+        val lineTop = layout.getLineTop(activeVisualLine)
+        val lineBottom = layout.getLineBottom(activeVisualLine)
+        if (isRtl) {
+            clipRect(left = sweepX, top = lineTop, right = size.width + 4f, bottom = lineBottom) {
+                this@drawWithContent.drawContent()
+            }
+        } else {
+            clipRect(left = -4f, top = lineTop, right = sweepX, bottom = lineBottom) {
+                this@drawWithContent.drawContent()
+            }
+        }
+    }
 
     if (!trackHorizontalFocus) {
-        Text(
-            text = annotated,
-            style = textStyle,
-            maxLines = maxLines,
-            overflow = overflow,
-            textAlign = textAlign,
-            modifier = modifier,
-        )
+        Box(modifier) {
+            Text(
+                text = fullText,
+                style = textStyle,
+                color = unsungColor,
+                maxLines = maxLines,
+                overflow = overflow,
+                textAlign = textAlign,
+                modifier = Modifier.clearAndSetSemantics {},
+            )
+            Text(
+                text = fullText,
+                style = textStyle,
+                color = sungColor,
+                maxLines = maxLines,
+                overflow = overflow,
+                textAlign = textAlign,
+                onTextLayout = { textLayout = it },
+                modifier = sungSweepModifier,
+            )
+        }
         return
     }
 
-    var textLayout by remember(line) { mutableStateOf<TextLayoutResult?>(null) }
     var overflowMetrics by remember(line) { mutableStateOf(0 to 0) }
     val containerW = overflowMetrics.first
     val textW = overflowMetrics.second
     val maxScrollPx = (textW - containerW).coerceAtLeast(0)
-    val targetScrollPx = remember(textLayout, containerW, textW, currentSec) {
+    val scrollOffsetState = remember(line) { mutableFloatStateOf(0f) }
+
+    fun resolveHorizontalScroll(): Float {
         val layout = textLayout
-        if (layout == null || maxScrollPx <= 0) {
-            0f
-        } else {
-            val totalChars = layout.layoutInput.text.length
-            if (totalChars <= 0) {
-                0f
-            } else {
-                val focusChar = computeKaraokeFocusCharOffset(line.words, currentSec)
-                    .coerceIn(0f, totalChars.toFloat())
-                val lowIdx = floor(focusChar).toInt().coerceIn(0, totalChars)
-                val highIdx = ceil(focusChar).toInt().coerceIn(0, totalChars)
-                val lowX = layout.getHorizontalPosition(lowIdx, usePrimaryDirection = true)
-                val highX = layout.getHorizontalPosition(highIdx, usePrimaryDirection = true)
-                val focusX = lowX + (highX - lowX) * (focusChar - lowIdx)
-                (focusX - containerW / 2f).coerceIn(0f, maxScrollPx.toFloat())
-            }
-        }
-    }
-    val scrollAnim = remember(line) { Animatable(0f) }
-    var snappedLine by remember(line) { mutableStateOf(false) }
-    LaunchedEffect(line, maxScrollPx, targetScrollPx) {
-        if (maxScrollPx <= 0) {
-            scrollAnim.snapTo(0f)
-            return@LaunchedEffect
-        }
-        if (!snappedLine) {
-            scrollAnim.snapTo(targetScrollPx)
-            snappedLine = true
-        } else {
-            scrollAnim.animateTo(
-                targetScrollPx,
-                animationSpec = tween(durationMillis = 120, easing = LinearEasing),
-            )
-        }
+        if (layout == null || maxScrollPx <= 0) return 0f
+        val totalChars = fullText.length
+        if (totalChars <= 0) return 0f
+        val focusChar = computeKaraokeFocusCharOffset(line.words, displayPosMsState.longValue / 1000.0)
+            .coerceIn(0f, totalChars.toFloat())
+        val lowIdx = floor(focusChar).toInt().coerceIn(0, totalChars)
+        val highIdx = ceil(focusChar).toInt().coerceIn(0, totalChars)
+        val lowX = layout.getHorizontalPosition(lowIdx, usePrimaryDirection = true)
+        val highX = layout.getHorizontalPosition(highIdx, usePrimaryDirection = true)
+        val focusX = lowX + (highX - lowX) * (focusChar - lowIdx)
+        return (focusX - containerW / 2f).coerceIn(0f, maxScrollPx.toFloat())
     }
 
     Layout(
@@ -1871,8 +1876,9 @@ internal fun KaraokeLyricText(
                             drawContent()
                             val edgePx = 14.dp.toPx().coerceAtMost(size.width * 0.16f)
                             val edgeFrac = (edgePx / size.width.coerceAtLeast(1f)).coerceIn(0.01f, 0.25f)
-                            val leftFaded = scrollAnim.value > 1f
-                            val rightFaded = scrollAnim.value < maxScrollPx - 1f
+                            val currentScroll = scrollOffsetState.floatValue
+                            val leftFaded = currentScroll > 1f
+                            val rightFaded = currentScroll < maxScrollPx - 1f
                             drawRect(
                                 brush = Brush.horizontalGradient(
                                     0f to Color.Black.copy(alpha = if (leftFaded) 0f else 1f),
@@ -1888,18 +1894,35 @@ internal fun KaraokeLyricText(
                 },
             ),
         content = {
-            Text(
-                text = annotated,
-                style = textStyle,
-                maxLines = 1,
-                softWrap = false,
-                onTextLayout = { textLayout = it },
-                modifier = Modifier.graphicsLayer {
+            Box(
+                Modifier.graphicsLayer {
                     if (maxScrollPx > 0) {
-                        translationX = -scrollAnim.value
+                        val targetScroll = resolveHorizontalScroll()
+                        scrollOffsetState.floatValue = targetScroll
+                        translationX = -targetScroll
+                    } else {
+                        scrollOffsetState.floatValue = 0f
                     }
                 },
-            )
+            ) {
+                Text(
+                    text = fullText,
+                    style = textStyle,
+                    color = unsungColor,
+                    maxLines = 1,
+                    softWrap = false,
+                    modifier = Modifier.clearAndSetSemantics {},
+                )
+                Text(
+                    text = fullText,
+                    style = textStyle,
+                    color = sungColor,
+                    maxLines = 1,
+                    softWrap = false,
+                    onTextLayout = { textLayout = it },
+                    modifier = sungSweepModifier,
+                )
+            }
         },
     ) { measurables, constraints ->
         val textPlaceable = measurables.first().measure(
@@ -1956,9 +1979,10 @@ private fun InterludeDotsRow(
         displayPosMs = playbackPositionMs
         if (!active || !animatorsEnabled || !window.active || playbackPositionMs >= endMs) return@LaunchedEffect
         val startWall = SystemClock.uptimeMillis()
-        while (displayPosMs < endMs) {
-            delay(33L)
-            displayPosMs = (playbackPositionMs + (SystemClock.uptimeMillis() - startWall)).coerceAtMost(endMs)
+        while (isActive && displayPosMs < endMs) {
+            withFrameNanos {
+                displayPosMs = (playbackPositionMs + (SystemClock.uptimeMillis() - startWall)).coerceAtMost(endMs)
+            }
         }
     }
 
@@ -2255,11 +2279,25 @@ private fun ClassicPlayerTransportPanel(
 ) {
     val song = state.current ?: return
     var dragging by remember(song.id) { mutableStateOf<Float?>(null) }
-    LaunchedEffect(state.durationMs) {
-        if (state.durationMs <= 0) dragging = null
-    }
+    var pendingSeekMs by remember(song.id) { mutableStateOf<Long?>(null) }
+    val livePositionMs by rememberPlaybackPositionMsState(state.positionMs)
     val duration = state.durationMs.coerceAtLeast(0)
-    val position = (dragging?.toLong() ?: state.positionMs).coerceIn(0, duration)
+    LaunchedEffect(duration) {
+        if (duration <= 0) {
+            dragging = null
+            pendingSeekMs = null
+        }
+    }
+    LaunchedEffect(pendingSeekMs) {
+        val target = pendingSeekMs ?: return@LaunchedEffect
+        withTimeoutOrNull(1200L) {
+            snapshotFlow { livePositionMs }.first { kotlin.math.abs(it - target) <= 750L }
+        }
+        if (pendingSeekMs == target) {
+            pendingSeekMs = null
+        }
+    }
+    val position = (dragging?.toLong() ?: pendingSeekMs ?: livePositionMs).coerceIn(0, duration)
 
     Column(modifier) {
         if (state.failed) {
@@ -2291,8 +2329,10 @@ private fun ClassicPlayerTransportPanel(
                 description = stringResource(R.string.ft_seek_position),
                 onChange = { dragging = it },
                 onFinished = { target ->
-                    actions.seekTo(target.toLong().coerceIn(0, duration))
+                    val clamped = target.toLong().coerceIn(0, duration)
+                    pendingSeekMs = clamped
                     dragging = null
+                    actions.seekTo(clamped)
                 },
                 modifier = Modifier.weight(1f).testTag("player_seek"),
             )
@@ -2438,11 +2478,15 @@ private fun ClassicTransportRow(
                 tint = if (mode != ClassicPlaybackMode.SEQUENCE) FlareTokens.ClassicIconActive else FlareTokens.ClassicIcon,
             )
         }
+        val livePositionMsState = rememberPlaybackPositionMsState(state.positionMs)
+        val pastRestartThreshold by remember(livePositionMsState) {
+            derivedStateOf { livePositionMsState.value > 3000L }
+        }
         ClassicGlyphButton(
             icon = ClientIcons.Previous,
             description = stringResource(R.string.ft_previous),
             onClick = actions::previous,
-            enabled = state.currentIndex > 0 || state.positionMs > 3000 ||
+            enabled = state.currentIndex > 0 || pastRestartThreshold ||
                 state.repeatMode == 2 || (state.shuffle && state.queue.size > 1),
             iconSize = 28.dp,
             buttonSize = 48.dp,
@@ -2670,21 +2714,24 @@ private fun StreamlinedTrackBar(
             ),
         contentAlignment = Alignment.Center,
     ) {
+        val activeColor = if (enabled) FlareTokens.ClassicTrackActive else FlareTokens.ClassicTrackActive.copy(alpha = 0.35f)
         Box(
-            Modifier.fillMaxWidth().height(trackHeight)
-                .clip(CircleShape)
-                .background(FlareTokens.ClassicTrackInactive),
-        ) {
-            Box(
-                Modifier.fillMaxHeight()
-                    .fillMaxWidth(fraction)
-                    .background(
-                        if (enabled) FlareTokens.ClassicTrackActive
-                        else FlareTokens.ClassicTrackActive.copy(alpha = 0.35f),
-                        CircleShape,
-                    ),
-            )
-        }
+            Modifier.fillMaxWidth().height(trackHeight).drawBehind {
+                val radius = size.height / 2f
+                val corner = CornerRadius(radius, radius)
+                drawRoundRect(
+                    color = FlareTokens.ClassicTrackInactive,
+                    cornerRadius = corner,
+                )
+                if (fraction > 0f) {
+                    drawRoundRect(
+                        color = activeColor,
+                        size = Size(size.width * fraction, size.height),
+                        cornerRadius = corner,
+                    )
+                }
+            },
+        )
     }
 }
 
@@ -2764,34 +2811,164 @@ private suspend fun extractBackdropPalette(bitmap: Bitmap): ClassicBackdropPalet
         )
     }
 
+private data class BackdropArtworkState(
+    val coverUrl: String,
+    val imageBitmap: ImageBitmap?,
+)
+
+private fun stackBlurArgb(pixels: IntArray, width: Int, height: Int, radius: Int) {
+    if (radius < 1 || width <= 0 || height <= 0) return
+    val wm = width - 1
+    val hm = height - 1
+    val wh = width * height
+    val div = radius + radius + 1
+    val r = IntArray(wh)
+    val g = IntArray(wh)
+    val b = IntArray(wh)
+    val vmin = IntArray(max(width, height))
+    var divsum = (div + 1) shr 1
+    divsum *= divsum
+    val dv = IntArray(256 * divsum) { it / divsum }
+    val stack = Array(div) { IntArray(3) }
+    val r1 = radius + 1
+
+    var yw = 0
+    var yi = 0
+    for (y in 0 until height) {
+        var rsum = 0; var gsum = 0; var bsum = 0
+        var rinsum = 0; var ginsum = 0; var binsum = 0
+        var routsum = 0; var goutsum = 0; var boutsum = 0
+        for (i in -radius..radius) {
+            val p = pixels[yi + min(wm, max(i, 0))]
+            val sir = stack[i + radius]
+            sir[0] = (p and 0xff0000) shr 16
+            sir[1] = (p and 0x00ff00) shr 8
+            sir[2] = p and 0x0000ff
+            val rbs = r1 - kotlin.math.abs(i)
+            rsum += sir[0] * rbs; gsum += sir[1] * rbs; bsum += sir[2] * rbs
+            if (i > 0) {
+                rinsum += sir[0]; ginsum += sir[1]; binsum += sir[2]
+            } else {
+                routsum += sir[0]; goutsum += sir[1]; boutsum += sir[2]
+            }
+        }
+        var stackpointer = radius
+        for (x in 0 until width) {
+            r[yi] = dv[rsum]; g[yi] = dv[gsum]; b[yi] = dv[bsum]
+            rsum -= routsum; gsum -= goutsum; bsum -= boutsum
+            val stackstart = stackpointer - radius + div
+            var sir = stack[stackstart % div]
+            routsum -= sir[0]; goutsum -= sir[1]; boutsum -= sir[2]
+            if (y == 0) vmin[x] = min(x + radius + 1, wm)
+            val p = pixels[yw + vmin[x]]
+            sir[0] = (p and 0xff0000) shr 16
+            sir[1] = (p and 0x00ff00) shr 8
+            sir[2] = p and 0x0000ff
+            rinsum += sir[0]; ginsum += sir[1]; binsum += sir[2]
+            rsum += rinsum; gsum += ginsum; bsum += binsum
+            stackpointer = (stackpointer + 1) % div
+            sir = stack[stackpointer % div]
+            routsum += sir[0]; goutsum += sir[1]; boutsum += sir[2]
+            rinsum -= sir[0]; ginsum -= sir[1]; binsum -= sir[2]
+            yi++
+        }
+        yw += width
+    }
+
+    for (x in 0 until width) {
+        var rsum = 0; var gsum = 0; var bsum = 0
+        var rinsum = 0; var ginsum = 0; var binsum = 0
+        var routsum = 0; var goutsum = 0; var boutsum = 0
+        var yp = -radius * width
+        for (i in -radius..radius) {
+            val idx = max(0, yp) + x
+            val sir = stack[i + radius]
+            sir[0] = r[idx]; sir[1] = g[idx]; sir[2] = b[idx]
+            val rbs = r1 - kotlin.math.abs(i)
+            rsum += r[idx] * rbs; gsum += g[idx] * rbs; bsum += b[idx] * rbs
+            if (i > 0) {
+                rinsum += sir[0]; ginsum += sir[1]; binsum += sir[2]
+            } else {
+                routsum += sir[0]; goutsum += sir[1]; boutsum += sir[2]
+            }
+            if (i < hm) yp += width
+        }
+        yi = x
+        var stackpointer = radius
+        for (y in 0 until height) {
+            pixels[yi] = (0xff shl 24) or (dv[rsum] shl 16) or (dv[gsum] shl 8) or dv[bsum]
+            rsum -= routsum; gsum -= goutsum; bsum -= boutsum
+            val stackstart = stackpointer - radius + div
+            var sir = stack[stackstart % div]
+            routsum -= sir[0]; goutsum -= sir[1]; boutsum -= sir[2]
+            if (x == 0) vmin[y] = min(y + r1, hm) * width
+            val p = x + vmin[y]
+            sir[0] = r[p]; sir[1] = g[p]; sir[2] = b[p]
+            rinsum += sir[0]; ginsum += sir[1]; binsum += sir[2]
+            rsum += rinsum; gsum += ginsum; bsum += binsum
+            stackpointer = (stackpointer + 1) % div
+            sir = stack[stackpointer]
+            routsum += sir[0]; goutsum += sir[1]; boutsum += sir[2]
+            rinsum -= sir[0]; ginsum -= sir[1]; binsum -= sir[2]
+            yi += width
+        }
+    }
+}
+
+private suspend fun createBlurredBackdropBitmap(bitmap: Bitmap): ImageBitmap =
+    withContext(Dispatchers.Default) {
+        val targetSize = 96
+        val scaled = Bitmap.createScaledBitmap(bitmap, targetSize, targetSize, true)
+        val pixels = IntArray(targetSize * targetSize)
+        scaled.getPixels(pixels, 0, targetSize, 0, 0, targetSize, targetSize)
+        if (scaled !== bitmap) scaled.recycle()
+        stackBlurArgb(pixels, targetSize, targetSize, radius = 14)
+        val blurred = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
+        blurred.setPixels(pixels, 0, targetSize, 0, 0, targetSize, targetSize)
+        blurred.asImageBitmap()
+    }
+
 @Composable
 private fun ClassicPlayerBackdrop(song: Song, imageLoader: ImageLoader?, atmospheric: Boolean) {
     val context = LocalContext.current
     var palette by remember { mutableStateOf(ClassicBackdropPalette.Default) }
+    var backdropArtwork by remember { mutableStateOf(BackdropArtworkState("", null)) }
     val animDominant by animateColorAsState(palette.dominant, tween(650), label = "backdrop_dominant")
     val animSecondary by animateColorAsState(palette.secondary, tween(650), label = "backdrop_secondary")
     val animDeep by animateColorAsState(palette.deep, tween(650), label = "backdrop_deep")
 
     LaunchedEffect(song.id, song.coverUrl, atmospheric, imageLoader) {
-        if (!atmospheric || imageLoader == null || song.coverUrl.isNullOrBlank()) {
+        val cover = song.coverUrl.orEmpty()
+        if (!atmospheric || imageLoader == null || cover.isBlank()) {
             palette = ClassicBackdropPalette.Default
+            backdropArtwork = BackdropArtworkState("", null)
+            return@LaunchedEffect
+        }
+        if (backdropArtwork.coverUrl == cover && backdropArtwork.imageBitmap != null) {
             return@LaunchedEffect
         }
         try {
             val request = ImageRequest.Builder(context)
-                .data(song.coverUrl)
+                .data(cover)
                 .size(96)
                 .allowHardware(false)
                 .build()
             val result = imageLoader.execute(request)
             val bmp = ((result as? SuccessResult)?.drawable as? BitmapDrawable)?.bitmap
             if (bmp != null) {
-                palette = extractBackdropPalette(bmp)
+                val extracted = extractBackdropPalette(bmp)
+                val blurred = createBlurredBackdropBitmap(bmp)
+                palette = extracted
+                backdropArtwork = BackdropArtworkState(cover, blurred)
+            } else {
+                palette = ClassicBackdropPalette.Default
+                backdropArtwork = BackdropArtworkState("", null)
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Throwable) {
             palette = ClassicBackdropPalette.Default
+            backdropArtwork = BackdropArtworkState("", null)
         }
     }
 
@@ -2812,30 +2989,23 @@ private fun ClassicPlayerBackdrop(song: Song, imageLoader: ImageLoader?, atmosph
             ),
         )
         if (atmospheric && imageLoader != null) {
+            // Draw pre-blurred 96x96 ambient texture with hardware scaling instead of live full-screen GPU blur.
             Crossfade(
-                targetState = song.coverUrl.orEmpty(),
+                targetState = backdropArtwork,
                 animationSpec = tween(700),
                 label = "backdrop_cover_crossfade",
-            ) { cover ->
-                val layerModifier = Modifier.fillMaxSize().let {
-                    if (Build.VERSION.SDK_INT >= 31) it.blur(50.dp, BlurredEdgeTreatment.Unbounded) else it
-                }
-                val coverRequest = remember(context, cover) {
-                    ImageRequest.Builder(context).data(cover).size(256).build()
-                }
-                // A single static, bounded cover layer preserves atmosphere without continuously
-                // invalidating several full-screen blur targets during lyric scrolling.
-                Box(layerModifier) {
-                    AsyncImage(
-                        model = coverRequest,
-                        imageLoader = imageLoader,
+            ) { art ->
+                if (art.imageBitmap != null) {
+                    Image(
+                        bitmap = art.imageBitmap,
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
+                        filterQuality = FilterQuality.Medium,
                         alpha = 0.66f,
                         colorFilter = saturationFilter,
                         modifier = Modifier.fillMaxSize().graphicsLayer {
-                            scaleX = 1.25f
-                            scaleY = 1.25f
+                            scaleX = 1.18f
+                            scaleY = 1.18f
                         },
                     )
                 }
@@ -2845,9 +3015,9 @@ private fun ClassicPlayerBackdrop(song: Song, imageLoader: ImageLoader?, atmosph
             Box(
                 Modifier.fillMaxSize().background(
                     Brush.verticalGradient(
-                        0f to palette.deep.copy(alpha = 0.34f),
+                        0f to animDeep.copy(alpha = 0.34f),
                         0.45f to Color.Black.copy(alpha = 0.28f),
-                        1f to palette.deep.copy(alpha = 0.72f),
+                        1f to animDeep.copy(alpha = 0.72f),
                     ),
                 ),
             )

@@ -4,10 +4,14 @@ import coil.ImageLoader
 import com.flaretune.client.data.ActiveConnection
 import com.flaretune.client.model.Song
 import com.flaretune.client.ui.PlaybackSnapshot
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 
 interface PlaybackGateway {
     val state: StateFlow<PlaybackSnapshot>
+    val positionMsFlow: Flow<Long> get() = state.map { it.positionMs }.distinctUntilChanged()
     val imageLoader: ImageLoader?
     suspend fun connect(connection: ActiveConnection)
     fun play(songs: List<Song>, index: Int)

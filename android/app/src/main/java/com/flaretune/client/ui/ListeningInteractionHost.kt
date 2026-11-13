@@ -152,20 +152,23 @@ internal fun ListeningInteractionHost(
             waitingPickerId = null; waitingOrderId = null
         }
     }
-    val interactions = ListeningInteractions(
-        song = { beginIntent(); song = it },
-        createPlaylist = { ids -> beginIntent(); initialIds = ids; formPlaylist = null; formOpen = true },
-        addToPlaylists = { songs -> beginIntent(); targetSongs = songs.distinctBy { it.id } },
-        playlist = { beginIntent(); playlistOptions = it },
-        orderPlaylist = ::openOrderEditor,
-        addSongs = ::openSongPicker,
-        artists = { artistsOpen = true; actions.refreshArtists() },
-        albums = { query -> albumsOpen = true; actions.searchAlbums(query) },
-        statistics = { statsOpen = true; actions.refreshPlayStats() },
-        clearHistory = { confirm = ListeningConfirmation.CLEAR_HISTORY },
-        clearQueue = { confirm = ListeningConfirmation.CLEAR_QUEUE },
-        feedback = onFeedback,
-    )
+    val latestFeedback by rememberUpdatedState(onFeedback)
+    val interactions = remember(actions, owner) {
+        ListeningInteractions(
+            song = { beginIntent(); song = it },
+            createPlaylist = { ids -> beginIntent(); initialIds = ids; formPlaylist = null; formOpen = true },
+            addToPlaylists = { songs -> beginIntent(); targetSongs = songs.distinctBy { it.id } },
+            playlist = { beginIntent(); playlistOptions = it },
+            orderPlaylist = ::openOrderEditor,
+            addSongs = ::openSongPicker,
+            artists = { artistsOpen = true; actions.refreshArtists() },
+            albums = { query -> albumsOpen = true; actions.searchAlbums(query) },
+            statistics = { statsOpen = true; actions.refreshPlayStats() },
+            clearHistory = { confirm = ListeningConfirmation.CLEAR_HISTORY },
+            clearQueue = { confirm = ListeningConfirmation.CLEAR_QUEUE },
+            feedback = { message -> latestFeedback(message) },
+        )
+    }
     CompositionLocalProvider(LocalListeningInteractions provides interactions) { content() }
     if (state.screen != ClientScreen.LIBRARY) return
 
@@ -395,7 +398,7 @@ private fun PlaylistSongPickerSheet(
                     val toggle = { if (checked) selected = selected - candidate.id else if (selected.size < 100) selected = selected + candidate.id }
                     Row(Modifier.fillMaxWidth().clickable(enabled = !state.libraryMutationBusy, onClick = toggle).padding(vertical = 8.dp).testTag("picker_song_" + candidate.id), verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(checked, onCheckedChange = { toggle() }, enabled = !state.libraryMutationBusy && (checked || selected.size < 100))
-                        Artwork(candidate, loader, Modifier.size(44.dp))
+                        Artwork(candidate, loader, Modifier.size(44.dp), decodeSize = 44.dp)
                         Column(Modifier.weight(1f).padding(start = 12.dp)) {
                             Text(candidate.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             Text(candidate.artist, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
