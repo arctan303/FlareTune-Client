@@ -217,6 +217,33 @@ class ClientApiContractsTest {
         assertEquals("$SESSION_COOKIE_NAME=$token", request.getHeader("Cookie"))
     }
 
+    @Test fun optionalTranslationLanguagesArePreservedWithoutGuessingMissingOrUnknownTags() {
+        val api = api()
+        val examples = listOf("zh-CN" to "zh", "en" to "zh-Hant", "x-future" to "future-target", "" to "", null to null)
+        for ((language, target) in examples) {
+            val payload = lyric("idle")
+            payload.getJSONObject("translation").apply {
+                put("language", language ?: JSONObject.NULL)
+                put("targetLanguage", target ?: JSONObject.NULL)
+            }
+            server.enqueue(response(catalog(payload)))
+            val doc = api.lyrics("track-one")
+            assertEquals(language, doc.translationLanguage)
+            assertEquals(target, doc.translationTargetLanguage)
+            take()
+        }
+        server.enqueue(response(catalog(lyric())))
+        val legacy = api.lyrics("track-one")
+        assertNull(legacy.translationLanguage)
+        assertNull(legacy.translationTargetLanguage)
+        assertEquals("你好，世界", legacy.lines.single().translation)
+        take()
+        val pending = lyric("pending").apply { getJSONObject("translation").put("targetLanguage", "en") }
+        server.enqueue(response(catalog(pending)))
+        assertEquals("en", api.translateLyrics("current.result-ref").translationTargetLanguage)
+        take()
+    }
+
     @Test fun invalidWordTimelineSafelyFallsBackWithoutInventingTimeAndPlainLyricsRemainUntimed() {
         val api = api()
         val malformed = lyric("idle")

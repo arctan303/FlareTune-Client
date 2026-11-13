@@ -244,20 +244,27 @@ class LyricsCoordinator(
                         clearLocked()
                         return
                     }
-                    if (reference != null && (retiredReference ||
-                            (failure?.httpStatus == 400 && failure.code == "LYRIC_RESULT_INVALID"))) {
+                    val invalidReference = retiredReference ||
+                        (failure?.httpStatus == 400 && failure.code == "LYRIC_RESULT_INVALID")
+                    if (reference != null && invalidReference) {
                         resultRef = null
                     }
                     if (failure?.httpStatus == 404 && failure.reason == "lyrics_not_found") {
                         resultRef = null
                         mutableState.value = LyricState(songId = songId, status = LyricStatus.EMPTY)
                     } else {
-                        mutableState.value = mutableState.value.copy(
-                            status = LyricStatus.FAILED,
-                            activeLyricIndex = -1,
-                            polling = false,
-                            notice = safeNotice(error),
-                        )
+                        val previous = mutableState.value
+                        val translationOperation = initialTranslation ||
+                            (reference != null && previous.translationState == LyricTranslationStatus.PENDING)
+                        val keepOriginal = translationOperation && !invalidReference &&
+                            previous.status == LyricStatus.READY && previous.lines.isNotEmpty() &&
+                            failure?.failure != Failure.FORBIDDEN &&
+                            !(failure?.httpStatus == 404 && failure.reason == "song_not_found")
+                        mutableState.value = if (keepOriginal) previous.copy(
+                            translationState = LyricTranslationStatus.FAILED,
+                            polling = false, notice = safeNotice(error),
+                        ) else previous.copy(status = LyricStatus.FAILED, activeLyricIndex = -1,
+                            polling = false, notice = safeNotice(error))
                     }
                 }
                 return
@@ -282,6 +289,8 @@ class LyricsCoordinator(
                         syncMode = document.syncMode,
                         polling = pollAgain,
                         notice = if (pending && nextReference == null) ClientNotice.INVALID_RESPONSE else null,
+                        translationLanguage = document.translationLanguage,
+                        translationTargetLanguage = document.translationTargetLanguage,
                     )
                     mutableState.value = next.copy(activeLyricIndex = activeIndex(next))
                 }

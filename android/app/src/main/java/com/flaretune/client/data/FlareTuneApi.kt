@@ -740,7 +740,9 @@ class FlareTuneApi(val network: SessionNetwork) : AccountApi {
             requestedMode == "word" && !badWords && lines.any { it.words.isNotEmpty() } -> "word"
             else -> "line"
         }
-        return LyricDocument(lines, false, ref, translationState, supported, sourceId, mode)
+        return LyricDocument(lines, false, ref, translationState, supported, sourceId, mode,
+            translationLanguage = nullableString(translation, "language"),
+            translationTargetLanguage = nullableString(translation, "targetLanguage"))
     }
 
     private fun parseWords(rows: JSONArray?, text: String, time: Double?, end: Double?): List<LyricWord> {

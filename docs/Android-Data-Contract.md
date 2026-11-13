@@ -44,6 +44,7 @@
 - `songId: String?`；`status: LyricStatus`；`lines: List<LyricLine>`。
 - `activeLyricIndex: Int = -1`；`translationState: LyricTranslationStatus`；`translationSupported: Boolean`。
 - `syncMode: String`（word/line/none）；`polling: Boolean`；`notice: ClientNotice?`。
+- dev.5新增 `translationLanguage: String? = null` 与 `translationTargetLanguage: String? = null`，原样解析 `translation.language/targetLanguage`，只供显示服务端目标语言及诊断，不在客户端推断翻译资格。
 
 `LyricLine`有 `text: String`、`translation: String?`、`timeSeconds: Double?`、`endTimeSeconds: Double?`、`words: List<LyricWord>`。`LyricWord`包含text/startTimeSeconds/endTimeSeconds，时间均为**秒**；播放器positionMs是毫秒。UI使用已经解析的时间与激活索引，不猜测无时间歌词的时间，不把毫秒当秒。
 
@@ -64,7 +65,9 @@
 - 其他歌曲调用宿主 `GET /api/lyrics?songId=...`；客户端不绕过来源链直读工作台或本地文件。服务端返回的纯音乐联合类型同样支持。
 - 切歌、账号/实例、会话代次或歌曲language变化均撤销旧请求；晚返回不能污染新曲目/账号。401/精确account_changed与歌词resultRef冲突分别处理，不通过message子串注销账号。
 - pending由协调器最多追加20次GET轮询，默认3秒间隔；UI只显示polling和状态，不自行无限轮询。409 LYRIC_RESULT_RETIRED/CHANGED最多做一次新来源选择恢复；失败可显式retryLyrics。
-- 只有 `requestLyricTranslation()` 触发当前有效resultRef的 `POST /api/lyrics/translation`。resultRef由协调器内部保管，不出现在ClientUiState，不由UI持久化或拼装。
+- Android与Web共用歌词接口和工作台来源链。服务端决定有无歌词、已有译文、是否支持/需要翻译；客户端不根据Song.language、歌名或字符覆盖这一结论。GET可按服务端既有自动补全策略产生pending，客户端只消费/有界轮询，不因进入播放器或显示开关主动POST。仅严格instrumental的既有零请求分支保持原约定。
+- 只有用户明确调用 `requestLyricTranslation()` 才触发当前有效resultRef的 `POST /api/lyrics/translation`。resultRef由协调器内部保管，不出现在ClientUiState，不由UI持久化或拼装。服务端supported且state为IDLE/PENDING/FAILED才有生成状态入口；NOT_NEEDED不显示翻译入口。译文显示开关还要求确有返回的译文行，不能用supported替代实际译文。
+- 生成/补译轮询失败但当前引用仍有效时，保留READY原文、激活行和播放，translationState=FAILED并显示独立安全提示；无效/退役引用、越权、歌曲删除、退出/切号仍优先执行原有清理/失败规则，不能用旧词掩盖。
 - `toggleTranslation/setTranslationEnabled` 默认关闭，通过设备私有 `playback_display_v1` 偏好保存，仅控制显示；不会POST生成、切换来源、修改服务端AI设置。保存失败保留原开关值并设置translationNotice。
 - 无译文/上游不可用/结构错误不能通过放宽parser、强行改sourceId或修改实例来源顺序掩盖；宿主资产/工作台问题独立排障。
 
@@ -181,4 +184,4 @@ setPlaylistCover(playlist,sourceUri)只接系统照片选择器临时content URI
 
 ## 12. 当前补全验收边界
 
-dev.4/code4已通过本机验证，并在2026-11-13用户返回明确授权后覆盖安装到平板、启动MainActivity及回读APK摘要一致。挂机期间禁止自动覆盖的限制适用于此前开发阶段；本次安装不等同全部真机功能验收，也不以云端私人数据写入代替本地TLS/状态/播放器/Compose测试。当前实现、失败修复、独立复核、最终APK摘要和备份由[补全任务](tasks/android-listening-capabilities-20261112.md)统一记账；不要把默认空actions或单纯编译通过当成功能力。
+dev.4/code4补全已通过本机验证并覆盖安装；后续隔离的dev.5/code5修复已通过255项测试、构建与Lint（0错），2026-11-13覆盖安装并回读版本/摘要一致。当前独立工作树不包含Gemini持续写入的共享前端增量，详见[播放器歌词修复](tasks/android-player-lyrics-20261113.md)。挂机期间禁止自动覆盖的限制适用于此前开发阶段；本次安装不等同全部真机功能验收，也不以云端私人数据写入代替本地TLS/状态/播放器/Compose测试。当前实现、失败修复、独立复核、最终APK摘要和备份由[补全任务](tasks/android-listening-capabilities-20261112.md)统一记账；不要把默认空actions或单纯编译通过当成功能力。

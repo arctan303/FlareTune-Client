@@ -1,5 +1,6 @@
 package com.flaretune.client.model
 
+
 data class LyricWord(val text: String, val startTimeSeconds: Double, val endTimeSeconds: Double)
 
 data class LyricLine(
@@ -21,6 +22,8 @@ data class LyricDocument(
     val translationSupported: Boolean = false,
     val sourceId: String? = null,
     val syncMode: String = "none",
+    val translationLanguage: String? = null,
+    val translationTargetLanguage: String? = null,
 )
 
 data class LyricState(
@@ -33,4 +36,6 @@ data class LyricState(
     val syncMode: String = "none",
     val polling: Boolean = false,
     val notice: ClientNotice? = null,
+    val translationLanguage: String? = null,
+    val translationTargetLanguage: String? = null,
 )

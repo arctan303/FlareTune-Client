@@ -5,10 +5,12 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
 import android.os.Build
+import android.os.SystemClock
 import android.provider.Settings
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
@@ -30,6 +32,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -66,6 +70,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -75,6 +80,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.BlurredEdgeTreatment
@@ -93,7 +100,6 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Shadow
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -105,6 +111,7 @@ import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -124,6 +131,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.os.ConfigurationCompat
 import coil.ImageLoader
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -138,16 +146,18 @@ import com.flaretune.client.model.Song
 import com.flaretune.client.ui.theme.FlareTokens
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withContext
-import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
-import kotlin.math.sin
 
 private enum class ClassicMobilePane { SONG, LYRICS }
+private val ClassicTransportHeight = 68.dp
 
 /**
  * Full-screen player modeled after the web classic player (`MobileClassicPlayer` / `ClassicDesktopLayout`):
@@ -177,6 +187,8 @@ internal fun NowPlayingScreen(
     var containerHeightPx by remember { mutableFloatStateOf(0f) }
     var draggingDismiss by remember { mutableStateOf(false) }
     var closingSheet by remember { mutableStateOf(false) }
+    var leftRailHeightPx by remember { mutableIntStateOf(0) }
+    val density = LocalDensity.current
     val scrollState = rememberScrollState()
     val maxDragThresholdPx = with(LocalDensity.current) { 148.dp.toPx() }
     val settleSpring = remember { spring<Float>(dampingRatio = 0.8f, stiffness = 308f) }
@@ -300,8 +312,9 @@ internal fun NowPlayingScreen(
                 if (twoColumns) {
                     val stagePaddingH = (screenMaxWidth * 0.045f).coerceIn(28.dp, 68.dp)
                     val columnGap = (screenMaxWidth * 0.04f).coerceIn(28.dp, 56.dp)
-                    val artSize = minOf(screenMaxWidth * 0.34f, (bodyHeight - 196.dp).coerceAtLeast(210.dp))
-                        .coerceIn(220.dp, 460.dp)
+                    val controlsAllowance = 196.dp * density.fontScale.coerceAtLeast(1f)
+                    val artSize = minOf(screenMaxWidth * 0.34f, (bodyHeight - controlsAllowance).coerceAtLeast(160.dp))
+                        .coerceIn(160.dp, 460.dp)
                     Row(
                         Modifier.width(pageWidth).height(bodyHeight)
                             .padding(start = stagePaddingH, end = stagePaddingH, bottom = 12.dp),
@@ -314,7 +327,7 @@ internal fun NowPlayingScreen(
                             contentAlignment = Alignment.Center,
                         ) {
                             Column(
-                                Modifier.width(artSize),
+                                Modifier.width(artSize).onSizeChanged { leftRailHeightPx = it.height },
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.Center,
                             ) {
@@ -360,7 +373,9 @@ internal fun NowPlayingScreen(
                                 modifier = Modifier
                                     .widthIn(max = (artSize * 1.32f).coerceAtLeast(420.dp))
                                     .fillMaxWidth()
-                                    .fillMaxHeight(),
+                                    .then(if (leftRailHeightPx > 0) {
+                                        Modifier.height(with(density) { leftRailHeightPx.toDp() })
+                                    } else Modifier.fillMaxHeight()),
                             )
                         }
                     }
@@ -720,29 +735,49 @@ private fun ClassicLyricsViewport(
     onTranslate: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val listState = rememberLazyListState()
+    val listState = key(lyricState.songId) { rememberLazyListState() }
     val density = LocalDensity.current
     var viewportHeightPx by remember { mutableIntStateOf(0) }
-    var userScrolling by remember { mutableStateOf(false) }
+    var userScrolling by remember(lyricState.songId) { mutableStateOf(false) }
 
-    LaunchedEffect(listState.isScrollInProgress, lyricState.songId) {
-        if (listState.isScrollInProgress) {
-            userScrolling = true
-        } else if (userScrolling) {
-            delay(2600L)
-            userScrolling = false
+    // Programmatic scrolls must never start the user's browsing pause or cancel themselves.
+    LaunchedEffect(listState) {
+        var resume: Job? = null
+        listState.interactionSource.interactions.collect { interaction ->
+            when (interaction) {
+                is DragInteraction.Start -> {
+                    resume?.cancel()
+                    userScrolling = true
+                }
+                is DragInteraction.Stop, is DragInteraction.Cancel -> {
+                    resume?.cancel()
+                    resume = launch {
+                        snapshotFlow { listState.isScrollInProgress }.first { !it }
+                        delay(2600L)
+                        userScrolling = false
+                    }
+                }
+            }
         }
     }
 
-    LaunchedEffect(lyricState.activeLyricIndex, lyricState.songId, userScrolling, viewportHeightPx) {
+    LaunchedEffect(lyricState.activeLyricIndex, lyricState.songId, lyricState.status,
+        lyricState.lines, translationEnabled, userScrolling, viewportHeightPx) {
         if (!userScrolling && lyricState.status == LyricStatus.READY && lyricState.activeLyricIndex >= 0 && lyricState.lines.isNotEmpty()) {
             val target = lyricState.activeLyricIndex.coerceIn(0, lyricState.lines.lastIndex)
-            listState.animateScrollToItem(target, 0)
+            // Let translated rows finish measuring before calculating their actual distance.
+            withFrameNanos { }
+            val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == target }
+            if (item == null) {
+                listState.scrollToItem(target, 0)
+            } else if (kotlin.math.abs(item.offset) > 1) {
+                listState.animateScrollBy(item.offset.toFloat(), tween(220, easing = FastOutSlowInEasing))
+            }
         }
     }
 
     val topFocusPad = with(density) { (viewportHeightPx * 0.30f).toDp() }.coerceAtLeast(if (twoColumns) 72.dp else 44.dp)
-    val bottomFocusPad = with(density) { (viewportHeightPx * 0.46f).toDp() }.coerceAtLeast(if (twoColumns) 128.dp else 88.dp)
+    val bottomFocusPad = with(density) { (viewportHeightPx * 0.70f).toDp() }.coerceAtLeast(if (twoColumns) 128.dp else 88.dp)
     val primarySize = if (twoColumns) 30.sp else 26.sp
     val primaryLineHeight = if (twoColumns) 39.sp else 34.sp
     val secondarySize = if (twoColumns) 18.sp else 16.sp
@@ -752,7 +787,7 @@ private fun ClassicLyricsViewport(
         lyricState.lines.any { !it.translation.isNullOrBlank() }
     }
     val showDisplayToggle = lyricState.status == LyricStatus.READY &&
-        (lyricState.translationSupported || hasInlineTranslation)
+        lyricState.translationState != LyricTranslationStatus.NOT_NEEDED && hasInlineTranslation
     val showGenerateAction = lyricState.status == LyricStatus.READY &&
         lyricState.translationSupported &&
         lyricState.translationState in setOf(
@@ -826,6 +861,7 @@ private fun ClassicLyricsViewport(
                         state = listState,
                         modifier = Modifier
                             .fillMaxSize()
+                            .testTag("player_lyrics_list")
                             .nestedScroll(absorbLyricsOverscroll)
                             .onSizeChanged { viewportHeightPx = it.height }
                             .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
@@ -861,23 +897,7 @@ private fun ClassicLyricsViewport(
                                 diff == 2 -> 0.42f
                                 else -> (0.36f - (diff - 3) * 0.05f).coerceAtLeast(0.16f)
                             }
-                            val targetBlur = when {
-                                clearFocus -> 0.dp
-                                diff < -1 -> 3.4.dp
-                                diff == -1 -> 1.8.dp
-                                diff == 0 -> 0.dp
-                                diff == 1 -> 0.7.dp
-                                diff == 2 -> 1.4.dp
-                                else -> (1.6f + (diff - 2) * 0.5f).coerceAtMost(3.4.dp.value).dp
-                            }
-                            val targetScale = when {
-                                clearFocus -> 1f
-                                diff == 0 -> 1f
-                                else -> 0.98f
-                            }
-                            val lineAlpha by animateFloatAsState(targetAlpha, tween(420), label = "lyric_alpha_$index")
-                            val lineBlur by animateDpAsState(targetBlur, tween(420), label = "lyric_blur_$index")
-                            val lineScale by animateFloatAsState(targetScale, tween(420), label = "lyric_scale_$index")
+                            val lineAlpha by animateFloatAsState(targetAlpha, tween(180), label = "lyric_alpha_$index")
                             val clickableModifier = line.timeSeconds?.let { sec ->
                                 Modifier.clickable {
                                     userScrolling = false
@@ -894,29 +914,18 @@ private fun ClassicLyricsViewport(
 
                             Column(
                                 Modifier.fillMaxWidth()
+                                    .testTag("player_lyric_$index")
+                                    .semantics { selected = isActive }
                                     .clip(RoundedCornerShape(12.dp))
                                     .then(clickableModifier)
                                     .graphicsLayer {
                                         alpha = lineAlpha
-                                        scaleX = lineScale
-                                        scaleY = lineScale
-                                        transformOrigin = TransformOrigin(0f, 0.5f)
                                     }
-                                    .then(
-                                        if (Build.VERSION.SDK_INT >= 31 && lineBlur > 0.2.dp) {
-                                            Modifier.blur(lineBlur, BlurredEdgeTreatment.Unbounded)
-                                        } else Modifier,
-                                    )
                                     .padding(vertical = 4.dp),
                             ) {
                                 val wordSynced = isActive && lyricState.syncMode == "word" && line.words.isNotEmpty()
                                 val primaryColor = if (isActive) FlareTokens.ClassicVibrantPrimary else Color.White
-                                val primaryShadow = if (isActive) {
-                                    Shadow(
-                                        color = Color.White.copy(alpha = 0.28f),
-                                        blurRadius = 18f,
-                                    )
-                                } else null
+                                val primaryShadow: Shadow? = null
 
                                 if (wordSynced) {
                                     KaraokeLyricText(
@@ -933,7 +942,7 @@ private fun ClassicLyricsViewport(
                                         style = MaterialTheme.typography.headlineSmall.copy(
                                             fontSize = primarySize,
                                             lineHeight = primaryLineHeight,
-                                            fontWeight = if (isActive) FontWeight.ExtraBold else FontWeight.Bold,
+                                            fontWeight = FontWeight.Bold,
                                             shadow = primaryShadow,
                                         ),
                                         color = primaryColor,
@@ -947,7 +956,7 @@ private fun ClassicLyricsViewport(
                                         style = MaterialTheme.typography.titleMedium.copy(
                                             fontSize = secondarySize,
                                             lineHeight = secondaryLineHeight,
-                                            fontWeight = if (isActive) FontWeight.Medium else FontWeight.Normal,
+                                            fontWeight = FontWeight.Normal,
                                         ),
                                         color = if (isActive) Color(0xCCFFFFFF) else Color(0xA6FFFFFF),
                                         modifier = Modifier.padding(top = 5.dp),
@@ -972,17 +981,19 @@ private fun ClassicLyricsViewport(
         }
 
         // Web-matching bottom-left lyric tool strip: display preference switch vs independent generation trigger.
-        if (showDisplayToggle || showGenerateAction || translationNotice != null) {
-            Column(Modifier.fillMaxWidth().padding(top = 6.dp, start = 4.dp, bottom = 2.dp)) {
+        val translationFailed = lyricState.status == LyricStatus.READY &&
+            lyricState.translationState == LyricTranslationStatus.FAILED
+        if (showDisplayToggle || showGenerateAction || translationNotice != null || translationFailed) {
+            Box(Modifier.fillMaxWidth().height(ClassicTransportHeight).padding(start = 4.dp),
+                contentAlignment = Alignment.CenterStart) {
                 Row(
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (showDisplayToggle) {
                         ClassicTranslationButton(
-                            translationState = lyricState.translationState,
                             translationEnabled = translationEnabled,
-                            polling = lyricState.polling,
                             onClick = { onSetTranslationEnabled(!translationEnabled) },
                         )
                     }
@@ -990,19 +1001,20 @@ private fun ClassicLyricsViewport(
                         ClassicGenerateTranslationButton(
                             translationState = lyricState.translationState,
                             polling = lyricState.polling,
+                            targetLanguage = lyricState.translationTargetLanguage,
                             onClick = onTranslate,
                         )
                     }
-                }
-                translationNotice?.let {
-                    Text(
-                        text = stringResource(R.string.ft_notice_storage_failed),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xDCFDE68A),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
+                    if (translationNotice != null || translationFailed) {
+                        Text(
+                            text = stringResource(if (translationNotice != null) R.string.ft_notice_storage_failed else R.string.ft_lyric_translation_failed),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = FlareTokens.ClassicVibrantSecondary,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
             }
         }
@@ -1018,17 +1030,17 @@ private fun KaraokeLyricText(
     lineHeight: androidx.compose.ui.unit.TextUnit,
     shadow: Shadow?,
 ) {
-    var displayPosMs by remember(line, basePositionMs) { mutableLongStateOf(basePositionMs) }
+    var displayPosMs by remember(line) { mutableLongStateOf(basePositionMs) }
     val endMs = remember(line) {
         ((line.endTimeSeconds ?: line.words.lastOrNull()?.endTimeSeconds ?: 0.0) * 1000.0).toLong() + 300L
     }
     LaunchedEffect(line, basePositionMs, playing) {
         displayPosMs = basePositionMs
         if (!playing || basePositionMs >= endMs) return@LaunchedEffect
-        val startWall = System.currentTimeMillis()
+        val startWall = SystemClock.uptimeMillis()
         while (displayPosMs < endMs) {
             delay(40L)
-            displayPosMs = basePositionMs + (System.currentTimeMillis() - startWall)
+            displayPosMs = basePositionMs + (SystemClock.uptimeMillis() - startWall)
         }
     }
 
@@ -1047,7 +1059,7 @@ private fun KaraokeLyricText(
             withStyle(
                 SpanStyle(
                     color = wordColor,
-                    fontWeight = FontWeight.ExtraBold,
+                    fontWeight = FontWeight.Bold,
                     shadow = shadow,
                 ),
             ) {
@@ -1107,94 +1119,49 @@ private fun InterludeDotsRow(active: Boolean) {
 
 @Composable
 private fun ClassicTranslationButton(
-    translationState: LyricTranslationStatus,
     translationEnabled: Boolean,
-    polling: Boolean,
     onClick: () -> Unit,
 ) {
-    val ready = translationState == LyricTranslationStatus.READY
-    val pending = translationState == LyricTranslationStatus.PENDING || polling
-    val failed = translationState == LyricTranslationStatus.FAILED
-    val active = translationEnabled
-    val context = LocalContext.current
-    val animatorsEnabled = remember(context) { systemAnimatorsEnabled(context) }
-    val pulseAlpha = if (pending && animatorsEnabled) {
-        val transition = rememberInfiniteTransition(label = "translate_pulse")
-        val value by transition.animateFloat(
-            initialValue = 0.25f,
-            targetValue = 0.85f,
-            animationSpec = infiniteRepeatable(tween(800), RepeatMode.Reverse),
-            label = "translate_pulse_alpha",
-        )
-        value
-    } else 0f
-
-    val bg = when {
-        active -> Color(0x333B82F6)
-        ready -> Color(0x1A3B82F6)
-        failed -> Color(0x1AFBBF24)
-        else -> Color(0x0DFFFFFF)
-    }
-    val tint = when {
-        active -> Color(0xFF93C5FD)
-        ready -> Color(0xBFBFDBFE)
-        failed -> Color(0xDCFDE68A)
-        else -> Color(0x73FFFFFF)
-    }
-    val description = stringResource(R.string.ft_translate_lyrics)
-
-    Box(
-        Modifier
-            .height(28.dp)
-            .widthIn(min = 34.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(bg)
-            .then(
-                if (pulseAlpha > 0f) {
-                    Modifier.border(1.dp, Color(0xFF60A5FA).copy(alpha = pulseAlpha), RoundedCornerShape(8.dp))
-                } else Modifier,
-            )
-            .clickable(onClick = onClick)
-            .semantics {
-                contentDescription = description
-                selected = active
-            }
-            .testTag("player_translate_button")
-            .padding(horizontal = 9.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            ClientIcons.Translate,
-            contentDescription = null,
-            modifier = Modifier.size(15.dp),
-            tint = tint,
-        )
-    }
+    ClassicGlyphButton(
+        icon = ClientIcons.Translate,
+        description = stringResource(R.string.ft_translate_lyrics),
+        onClick = onClick,
+        selected = translationEnabled,
+        iconSize = 22.dp,
+        buttonSize = 48.dp,
+        modifier = Modifier.testTag("player_translate_button"),
+    )
 }
 
 @Composable
 private fun ClassicGenerateTranslationButton(
     translationState: LyricTranslationStatus,
     polling: Boolean,
+    targetLanguage: String?,
     onClick: () -> Unit,
 ) {
     val pending = translationState == LyricTranslationStatus.PENDING || polling
     val failed = translationState == LyricTranslationStatus.FAILED
-    val label = stringResource(
+    val displayLocale = ConfigurationCompat.getLocales(LocalConfiguration.current)[0] ?: java.util.Locale.ROOT
+    val targetName = remember(targetLanguage, displayLocale) {
+        targetLanguage?.replace('_', '-')?.let(java.util.Locale::forLanguageTag)
+            ?.takeIf { it.language in java.util.Locale.getISOLanguages() }
+            ?.getDisplayName(displayLocale)
+            ?.takeIf(String::isNotBlank)
+    }
+    val label = if (!pending && !failed && targetName != null) stringResource(R.string.ft_translate_to_language, targetName) else stringResource(
         when {
             pending -> R.string.ft_translating_lyrics
             failed -> R.string.ft_retry
             else -> R.string.ft_request_translation
         },
     )
-    val bg = if (failed) Color(0x1AFBBF24) else Color(0x0DFFFFFF)
-    val tint = if (failed) Color(0xDCFDE68A) else Color(0x99FFFFFF)
+    val tint = FlareTokens.ClassicIcon
 
     Box(
         Modifier
-            .height(28.dp)
+            .heightIn(min = 48.dp)
             .clip(RoundedCornerShape(8.dp))
-            .background(bg)
             .clickable(enabled = !pending, onClick = onClick)
             .testTag("player_generate_translation")
             .padding(horizontal = 10.dp),
@@ -1422,7 +1389,7 @@ private fun ClassicTransportRow(
     }
 
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 68.dp),
+        Modifier.fillMaxWidth().heightIn(min = ClassicTransportHeight),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1749,7 +1716,6 @@ private suspend fun extractBackdropPalette(bitmap: Bitmap): ClassicBackdropPalet
 private fun ClassicPlayerBackdrop(song: Song, imageLoader: ImageLoader?, atmospheric: Boolean) {
     val context = LocalContext.current
     var palette by remember(song.id) { mutableStateOf(ClassicBackdropPalette.Default) }
-    val animatorsEnabled = remember(context) { systemAnimatorsEnabled(context) }
 
     LaunchedEffect(song.id, song.coverUrl, atmospheric, imageLoader) {
         if (!atmospheric || imageLoader == null || song.coverUrl.isNullOrBlank()) {
@@ -1774,42 +1740,12 @@ private fun ClassicPlayerBackdrop(song: Song, imageLoader: ImageLoader?, atmosph
         }
     }
 
-    val angle1: Float
-    val angle2: Float
-    val angle3: Float
-    if (atmospheric && animatorsEnabled) {
-        // Non-divisible rotation cycles (120s / 90s / 70s) yield non-repeating slow fluid motion.
-        val flow = rememberInfiniteTransition(label = "fluid_backdrop_flow")
-        angle1 = flow.animateFloat(
-            initialValue = 0f,
-            targetValue = 360f,
-            animationSpec = infiniteRepeatable(tween(120_000, easing = LinearEasing), RepeatMode.Restart),
-            label = "fluid_angle_1",
-        ).value
-        angle2 = flow.animateFloat(
-            initialValue = 360f,
-            targetValue = 0f,
-            animationSpec = infiniteRepeatable(tween(90_000, easing = LinearEasing), RepeatMode.Restart),
-            label = "fluid_angle_2",
-        ).value
-        angle3 = flow.animateFloat(
-            initialValue = 0f,
-            targetValue = 360f,
-            animationSpec = infiniteRepeatable(tween(70_000, easing = LinearEasing), RepeatMode.Restart),
-            label = "fluid_angle_3",
-        ).value
-    } else {
-        angle1 = 12f
-        angle2 = -28f
-        angle3 = 44f
-    }
-
     val saturationFilter = remember {
         ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(2.0f) })
     }
     val base = if (atmospheric) FlareTokens.ClassicBase else FlareTokens.ClassicSolidBase
     Box(Modifier.fillMaxSize().clipToBounds().background(if (atmospheric) FlareTokens.ClassicFallbackBase else base)) {
-        Box(
+        if (atmospheric) Box(
             Modifier.fillMaxSize().background(
                 Brush.linearGradient(
                     listOf(
@@ -1826,53 +1762,25 @@ private fun ClassicPlayerBackdrop(song: Song, imageLoader: ImageLoader?, atmosph
                 animationSpec = tween(700),
                 label = "backdrop_cover_crossfade",
             ) { cover ->
-                val rad2 = Math.toRadians(angle2.toDouble()).toFloat()
-                val rad3 = Math.toRadians(angle3.toDouble()).toFloat()
                 val layerModifier = Modifier.fillMaxSize().let {
-                    if (Build.VERSION.SDK_INT >= 31) it.blur(78.dp, BlurredEdgeTreatment.Unbounded) else it
+                    if (Build.VERSION.SDK_INT >= 31) it.blur(50.dp, BlurredEdgeTreatment.Unbounded) else it
                 }
+                val coverRequest = remember(context, cover) {
+                    ImageRequest.Builder(context).data(cover).size(256).build()
+                }
+                // A single static, bounded cover layer preserves atmosphere without continuously
+                // invalidating several full-screen blur targets during lyric scrolling.
                 Box(layerModifier) {
                     AsyncImage(
-                        model = cover,
+                        model = coverRequest,
                         imageLoader = imageLoader,
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
                         alpha = 0.66f,
                         colorFilter = saturationFilter,
                         modifier = Modifier.fillMaxSize().graphicsLayer {
-                            scaleX = 1.55f
-                            scaleY = 1.55f
-                            rotationZ = angle1
-                        },
-                    )
-                    AsyncImage(
-                        model = cover,
-                        imageLoader = imageLoader,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        alpha = 0.48f,
-                        colorFilter = saturationFilter,
-                        modifier = Modifier.fillMaxSize().graphicsLayer {
-                            scaleX = 1.45f
-                            scaleY = 1.45f
-                            rotationZ = angle2
-                            translationX = -size.width * 0.14f + sin(rad2) * size.width * 0.10f
-                            translationY = -size.height * 0.10f + cos(rad2) * size.height * 0.08f
-                        },
-                    )
-                    AsyncImage(
-                        model = cover,
-                        imageLoader = imageLoader,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        alpha = 0.40f,
-                        colorFilter = saturationFilter,
-                        modifier = Modifier.fillMaxSize().graphicsLayer {
-                            scaleX = 1.38f
-                            scaleY = 1.38f
-                            rotationZ = angle3
-                            translationX = size.width * 0.14f + cos(rad3) * size.width * 0.12f
-                            translationY = size.height * 0.12f + sin(rad3) * size.height * 0.10f
+                            scaleX = 1.25f
+                            scaleY = 1.25f
                         },
                     )
                 }

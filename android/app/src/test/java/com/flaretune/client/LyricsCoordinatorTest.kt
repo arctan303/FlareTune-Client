@@ -275,6 +275,152 @@ class LyricsCoordinatorTest {
         assertEquals(1, api.translations.size)
     }
 
+    @Test fun serverCapabilityControlsGenerationWithoutClientLanguageJudgement() = runTest {
+        val original = listOf(LyricLine("original", "existing foreign translation", 1.0))
+        val api = LyricsFakeApi().apply {
+            read = { _, _ -> lyricDoc(lines = original, supported = true, translationState = LyricTranslationStatus.IDLE,
+                translationLanguage = "en", translationTargetLanguage = "zh_CN") }
+            translate = { lyricDoc(lines = original, supported = true, translationState = LyricTranslationStatus.READY,
+                translationLanguage = "en", translationTargetLanguage = "zh_CN") }
+        }
+        val coordinator = LyricsCoordinator(this, StandardTestDispatcher(testScheduler))
+        coordinator.activate(LyricsFakeConnections(api).current, song.copy(language = "ZH-cn"))
+        advanceUntilIdle()
+        assertEquals("en", coordinator.state.value.translationLanguage)
+        assertEquals("zh_CN", coordinator.state.value.translationTargetLanguage)
+        coordinator.requestTranslation(); advanceUntilIdle()
+        assertEquals(1, api.translations.size)
+        assertEquals(LyricStatus.READY, coordinator.state.value.status)
+        assertEquals(original, coordinator.state.value.lines)
+        coordinator.clear()
+    }
+
+    @Test fun differentOrUnknownTranslationLanguagesStillPermitAnExplicitPost() = runTest {
+        for ((source, target) in listOf("zh" to "zh", "zh" to "en", "zh" to "zh-Hant", null to "zh", "zh" to null,
+            "unknown" to "unknown", "en" to "future-target")) {
+            val api = LyricsFakeApi().apply {
+                read = { _, _ -> lyricDoc(ref = "current", supported = true, translationState = LyricTranslationStatus.IDLE,
+                    translationTargetLanguage = target) }
+            }
+            val coordinator = LyricsCoordinator(this, StandardTestDispatcher(testScheduler))
+            coordinator.activate(LyricsFakeConnections(api).current, song.copy(language = source))
+            advanceUntilIdle()
+            assertTrue(api.translations.isEmpty())
+            coordinator.requestTranslation(); advanceUntilIdle()
+            assertEquals("$source / $target", listOf("current"), api.translations)
+            coordinator.clear()
+        }
+    }
+
+    @Test fun activationAndPendingReadsNeverInitiateTranslationPosts() = runTest {
+        val api = LyricsFakeApi().apply {
+            read = { _, _ -> lyricDoc(ref = "read-${reads.size}", supported = true,
+                translationState = if (reads.size < 3) LyricTranslationStatus.PENDING else LyricTranslationStatus.IDLE,
+                translationTargetLanguage = "zh") }
+        }
+        val coordinator = LyricsCoordinator(this, StandardTestDispatcher(testScheduler), 1_000, 3)
+        coordinator.activate(LyricsFakeConnections(api).current, song.copy(language = "zh"))
+        advanceUntilIdle()
+        assertEquals(3, api.reads.size)
+        assertTrue(api.translations.isEmpty())
+        assertEquals("zh", coordinator.state.value.translationTargetLanguage)
+        coordinator.clear()
+    }
+
+    @Test fun failedExplicitTranslationKeepsOriginalAndReferenceForARealRetry() = runTest {
+        for (error in listOf(ApiFailure(Failure.NETWORK), ApiFailure(Failure.REQUEST, httpStatus = 503))) {
+            val original = listOf(LyricLine("first", timeSeconds = 1.0), LyricLine("second", timeSeconds = 5.0))
+            val api = LyricsFakeApi().apply {
+                read = { _, _ -> lyricDoc(ref = "original-ref", lines = original, supported = true,
+                    translationState = LyricTranslationStatus.IDLE, translationTargetLanguage = "zh") }
+                translate = { throw error }
+            }
+            val coordinator = LyricsCoordinator(this, StandardTestDispatcher(testScheduler))
+            coordinator.activate(LyricsFakeConnections(api).current, song.copy(language = "en"))
+            advanceUntilIdle(); coordinator.updatePosition(6_000)
+            coordinator.requestTranslation(); advanceUntilIdle()
+            val failed = coordinator.state.value
+            assertEquals(LyricStatus.READY, failed.status)
+            assertEquals(original, failed.lines)
+            assertEquals(1, failed.activeLyricIndex)
+            assertEquals(LyricTranslationStatus.FAILED, failed.translationState)
+            assertEquals(if (error.failure == Failure.NETWORK) ClientNotice.NETWORK else ClientNotice.REQUEST_FAILED, failed.notice)
+            assertEquals("zh", failed.translationTargetLanguage)
+            api.translate = { lyricDoc(lines = original.map { it.copy(translation = "translated") }, supported = true,
+                translationState = LyricTranslationStatus.READY, translationLanguage = "zh", translationTargetLanguage = "zh") }
+            coordinator.requestTranslation(); advanceUntilIdle()
+            assertEquals(listOf("original-ref", "original-ref"), api.translations)
+            assertEquals(1, api.reads.size)
+            assertEquals(LyricTranslationStatus.READY, coordinator.state.value.translationState)
+            assertEquals(1, coordinator.state.value.activeLyricIndex)
+            assertNull(coordinator.state.value.notice)
+            coordinator.clear()
+        }
+    }
+
+    @Test fun failedTranslationPollingKeepsTheLatestReferenceAndOriginalLines() = runTest {
+        val original = listOf(LyricLine("original", timeSeconds = 1.0))
+        val api = LyricsFakeApi().apply {
+            read = { _, reference -> if (reference != null) throw ApiFailure(Failure.NETWORK)
+                else lyricDoc(ref = "initial", lines = original, supported = true, translationState = LyricTranslationStatus.IDLE) }
+            translate = { lyricDoc(ref = "pending-ref", lines = original, supported = true, translationState = LyricTranslationStatus.PENDING) }
+        }
+        val coordinator = LyricsCoordinator(this, StandardTestDispatcher(testScheduler), 1_000, 2)
+        coordinator.activate(LyricsFakeConnections(api).current, song)
+        advanceUntilIdle(); coordinator.updatePosition(2_000)
+        coordinator.requestTranslation(); advanceUntilIdle()
+        assertEquals(LyricStatus.READY, coordinator.state.value.status)
+        assertEquals(original, coordinator.state.value.lines)
+        assertEquals(0, coordinator.state.value.activeLyricIndex)
+        assertEquals(LyricTranslationStatus.FAILED, coordinator.state.value.translationState)
+        assertEquals(ClientNotice.NETWORK, coordinator.state.value.notice)
+        assertEquals("pending-ref", api.reads.last().second)
+        api.translate = { lyricDoc(lines = original, supported = true, translationState = LyricTranslationStatus.READY) }
+        coordinator.requestTranslation(); advanceUntilIdle()
+        assertEquals(listOf("initial", "pending-ref"), api.translations)
+        coordinator.clear()
+    }
+
+    @Test fun invalidTranslationReferencesAndRetiredSessionsKeepTheirExistingProtection() = runTest {
+        val api = LyricsFakeApi().apply {
+            read = { _, _ -> lyricDoc(ref = "invalid", supported = true, translationState = LyricTranslationStatus.IDLE) }
+            translate = { throw ApiFailure(Failure.REQUEST, httpStatus = 400, code = "LYRIC_RESULT_INVALID") }
+        }
+        val coordinator = LyricsCoordinator(this, StandardTestDispatcher(testScheduler))
+        coordinator.activate(LyricsFakeConnections(api).current, song); advanceUntilIdle()
+        coordinator.requestTranslation(); advanceUntilIdle()
+        assertEquals(LyricStatus.FAILED, coordinator.state.value.status)
+        coordinator.requestTranslation(); advanceUntilIdle()
+        assertEquals(1, api.translations.size)
+        coordinator.retry(); advanceUntilIdle()
+        assertNull(api.reads.last().second)
+        coordinator.clear()
+
+        for (failure in listOf(Failure.SESSION_EXPIRED, Failure.RETIRED)) {
+            val retiredApi = LyricsFakeApi().apply {
+                read = { _, _ -> lyricDoc(supported = true, translationState = LyricTranslationStatus.IDLE) }
+                translate = { throw ApiFailure(failure) }
+            }
+            val retired = LyricsCoordinator(this, StandardTestDispatcher(testScheduler))
+            retired.activate(LyricsFakeConnections(retiredApi).current, song); advanceUntilIdle()
+            retired.requestTranslation(); advanceUntilIdle()
+            assertEquals(LyricState(), retired.state.value)
+            retired.requestTranslation(); advanceUntilIdle()
+            assertEquals(1, retiredApi.translations.size)
+        }
+    }
+
+    @Test fun notNeededNeverPostsEvenWhenCapabilityIsTrueAndLanguagesDiffer() = runTest {
+        val api = LyricsFakeApi().apply { read = { _, _ -> lyricDoc(supported = true,
+            translationState = LyricTranslationStatus.NOT_NEEDED, translationTargetLanguage = "en") } }
+        val coordinator = LyricsCoordinator(this, StandardTestDispatcher(testScheduler))
+        coordinator.activate(LyricsFakeConnections(api).current, song.copy(language = "zh")); advanceUntilIdle()
+        coordinator.requestTranslation(); advanceUntilIdle()
+        assertTrue(api.translations.isEmpty())
+        assertEquals(LyricStatus.READY, coordinator.state.value.status)
+        coordinator.clear()
+    }
+
     @Test fun aRetiredTranslationReferenceReloadsRatherThanPostingToAnotherSource() = runTest {
         val api = LyricsFakeApi().apply {
             read = { _, _ -> lyricDoc(ref = "original-ref", supported = true, translationState = LyricTranslationStatus.IDLE) }
@@ -409,6 +555,8 @@ private fun lyricDoc(
     supported: Boolean = false,
     syncMode: String = "line",
     lines: List<LyricLine> = listOf(LyricLine(text, timeSeconds = 1.0)),
+    translationLanguage: String? = null,
+    translationTargetLanguage: String? = null,
 ) = LyricDocument(
     lines = lines,
     resultRef = ref,
@@ -416,6 +564,8 @@ private fun lyricDoc(
     translationSupported = supported,
     sourceId = "file",
     syncMode = syncMode,
+    translationLanguage = translationLanguage,
+    translationTargetLanguage = translationTargetLanguage,
 )
 
 private class LyricsFakeApi : AccountApi {
