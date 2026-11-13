@@ -13,6 +13,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -195,7 +196,7 @@ internal fun ListeningInteractionHost(
         }, onDismiss = { if (!state.libraryMutationBusy) formOpen = false },
     )
     orderPlaylist?.let { target ->
-        PlaylistOrderDialog(
+        PlaylistOrderSheet(
             playlist = state.selectedPlaylist?.takeIf { it.id == target.id } ?: target,
             entries = state.selectedPlaylistEntries, busy = state.libraryMutationBusy,
             notice = state.libraryMutationNotice, conflict = state.libraryMutationConflict,
@@ -204,38 +205,45 @@ internal fun ListeningInteractionHost(
         )
     }
     playlistOptions?.let { target ->
-        ModalBottomSheet(onDismissRequest = { playlistOptions = null }) {
-            Text(target.name, Modifier.padding(horizontal = 24.dp, vertical = 12.dp), style = MaterialTheme.typography.titleLarge)
-            ListeningMenuRow(stringResource(R.string.ft_listening_play_playlist), "playlist_menu_play") {
-                actions.playPlaylist(target); playlistOptions = null
-            }
-            ListeningMenuRow(stringResource(R.string.ft_listening_shuffle_playlist), "playlist_menu_shuffle") {
-                actions.playPlaylist(target, true); playlistOptions = null
-            }
-            ListeningMenuRow(stringResource(R.string.ft_listening_add_songs), "playlist_menu_add") {
-                playlistOptions = null; openSongPicker(target)
-            }
-            ListeningMenuRow(stringResource(R.string.ft_listening_edit_order), "playlist_menu_order") {
-                playlistOptions = null
-                if (state.selectedPlaylist?.id == target.id && !state.playlistLoading) orderPlaylist = state.selectedPlaylist
-                else { waitingOrderId = target.id; actions.openPlaylist(target) }
-            }
-            if (target.kind != "favorite") {
-                ListeningMenuRow(stringResource(R.string.ft_listening_edit_playlist), "playlist_menu_edit") {
-                    formPlaylist = target; formOpen = true; playlistOptions = null
+        FlareModalSheet(onDismissRequest = { playlistOptions = null }) {
+            val absorbBottom = rememberAbsorbBottomOverscroll()
+            Column(Modifier.fillMaxWidth().navigationBarsPadding().nestedScroll(absorbBottom).verticalScroll(rememberScrollState())) {
+                FlareSheetHeader(
+                    title = target.name,
+                    subtitle = stringResource(R.string.ft_library_song_count, target.songCount),
+                    onClose = { playlistOptions = null },
+                )
+                ListeningMenuRow(stringResource(R.string.ft_listening_play_playlist), "playlist_menu_play") {
+                    actions.playPlaylist(target); playlistOptions = null
                 }
-                ListeningMenuRow(stringResource(R.string.ft_listening_change_cover), "playlist_menu_cover") {
-                    coverTarget = owner to target; playlistOptions = null
-                    coverPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                ListeningMenuRow(stringResource(R.string.ft_listening_shuffle_playlist), "playlist_menu_shuffle") {
+                    actions.playPlaylist(target, true); playlistOptions = null
                 }
-                if (target.customCoverUrl != null) ListeningMenuRow(stringResource(R.string.ft_listening_reset_cover), "playlist_menu_reset_cover") {
-                    submit { actions.clearPlaylistCover(target) }
+                ListeningMenuRow(stringResource(R.string.ft_listening_add_songs), "playlist_menu_add") {
+                    playlistOptions = null; openSongPicker(target)
                 }
-                ListeningMenuRow(stringResource(R.string.ft_listening_delete_playlist), "playlist_menu_delete") {
-                    confirmingPlaylist = target; playlistOptions = null; confirm = ListeningConfirmation.DELETE_PLAYLIST
+                ListeningMenuRow(stringResource(R.string.ft_listening_edit_order), "playlist_menu_order") {
+                    playlistOptions = null
+                    if (state.selectedPlaylist?.id == target.id && !state.playlistLoading) orderPlaylist = state.selectedPlaylist
+                    else { waitingOrderId = target.id; actions.openPlaylist(target) }
                 }
+                if (target.kind != "favorite") {
+                    ListeningMenuRow(stringResource(R.string.ft_listening_edit_playlist), "playlist_menu_edit") {
+                        formPlaylist = target; formOpen = true; playlistOptions = null
+                    }
+                    ListeningMenuRow(stringResource(R.string.ft_listening_change_cover), "playlist_menu_cover") {
+                        coverTarget = owner to target; playlistOptions = null
+                        coverPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    }
+                    if (target.customCoverUrl != null) ListeningMenuRow(stringResource(R.string.ft_listening_reset_cover), "playlist_menu_reset_cover") {
+                        submit { actions.clearPlaylistCover(target) }
+                    }
+                    ListeningMenuRow(stringResource(R.string.ft_listening_delete_playlist), "playlist_menu_delete") {
+                        confirmingPlaylist = target; playlistOptions = null; confirm = ListeningConfirmation.DELETE_PLAYLIST
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
             }
-            Spacer(Modifier.height(20.dp))
         }
     }
     pickerTarget?.let { target ->
@@ -276,12 +284,18 @@ internal fun ListeningInteractionHost(
             },
         )
     }
-    if (artistNames.isNotEmpty()) AlertDialog(
-        onDismissRequest = { artistNames = emptyList() }, title = { Text(stringResource(R.string.ft_listening_artists)) },
-        text = { Column(Modifier.verticalScroll(rememberScrollState())) { artistNames.forEach { name ->
-            TextButton(onClick = { artistNames = emptyList(); actions.openArtist(Artist(name)) }) { Text(name) }
-        } } }, confirmButton = { TextButton(onClick = { artistNames = emptyList() }) { Text(stringResource(R.string.ft_library_cancel)) } },
-    )
+    if (artistNames.isNotEmpty()) FlareModalSheet(onDismissRequest = { artistNames = emptyList() }) {
+        val absorbBottom = rememberAbsorbBottomOverscroll()
+        Column(Modifier.fillMaxWidth().navigationBarsPadding().nestedScroll(absorbBottom).verticalScroll(rememberScrollState())) {
+            FlareSheetHeader(title = stringResource(R.string.ft_listening_artists), onClose = { artistNames = emptyList() })
+            artistNames.forEach { name ->
+                ListeningMenuRow(name, "artist_chooser_" + name) {
+                    artistNames = emptyList(); actions.openArtist(Artist(name))
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+    }
     if (artistsOpen) ArtistBrowseSheet(state, actions, imageLoader) { artistsOpen = false }
     if (albumsOpen) ListeningAlbumSearchSheet(state, actions, imageLoader) { albumsOpen = false }
     if (statsOpen) ListeningStatsSheet(state, actions, imageLoader) { statsOpen = false }
@@ -295,22 +309,37 @@ internal fun ListeningMenuRow(label: String, tag: String, enabled: Boolean = tru
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PlaylistSongPickerSheet(
     state: ClientUiState, actions: ClientActions, loader: ImageLoader?,
     onSubmit: (List<String>) -> Unit, onDismiss: () -> Unit,
 ) {
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.fillMaxWidth().fillMaxHeight(.90f).padding(horizontal = 16.dp).testTag("playlist_song_picker")) {
-            Text(stringResource(R.string.ft_listening_add_songs), style = MaterialTheme.typography.headlineSmall)
-            OutlinedTextField(value = state.pickerQuery, onValueChange = actions::searchPlaylistSongs, singleLine = true,
-                label = { Text(stringResource(R.string.ft_search_hint)) }, modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp).testTag("playlist_song_picker_query"))
-            state.pickerNotice?.let { Notice(it) }
-            state.libraryMutationNotice?.let { Notice(it) }
-            if (state.pickerLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
-            LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+    FlareModalSheet(onDismissRequest = onDismiss, sheetGesturesEnabled = !state.libraryMutationBusy) {
+        val absorbBottom = rememberAbsorbBottomOverscroll()
+        Column(Modifier.fillMaxWidth().fillMaxHeight(.90f).navigationBarsPadding().nestedScroll(absorbBottom).testTag("playlist_song_picker")) {
+            FlareSheetHeader(
+                title = stringResource(R.string.ft_listening_add_songs),
+                subtitle = if (selected.isNotEmpty()) stringResource(R.string.ft_listening_selected_count, selected.size) else null,
+                onClose = onDismiss,
+                closeEnabled = !state.libraryMutationBusy,
+            )
+            OutlinedTextField(
+                value = state.pickerQuery,
+                onValueChange = actions::searchPlaylistSongs,
+                singleLine = true,
+                label = { Text(stringResource(R.string.ft_search_hint)) },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("playlist_song_picker_query"),
+            )
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                state.pickerNotice?.let { Notice(it) }
+                state.libraryMutationNotice?.let { Notice(it) }
+            }
+            if (state.pickerLoading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 16.dp))
+            LazyColumn(
+                Modifier.weight(1f).fillMaxWidth(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+            ) {
                 if (!state.pickerLoading && state.pickerSongs.isEmpty()) item { Text(stringResource(R.string.ft_empty_search), Modifier.padding(16.dp)) }
                 items(state.pickerSongs, key = { it.id }) { candidate ->
                     val checked = candidate.id in selected
@@ -328,7 +357,7 @@ private fun PlaylistSongPickerSheet(
                     TextButton(onClick = actions::loadMorePlaylistSongs, enabled = !state.pickerLoadingMore, modifier = Modifier.fillMaxWidth().testTag("playlist_picker_more")) { Text(stringResource(R.string.ft_load_more)) }
                 }
             }
-            Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.ft_listening_selected_count, selected.size), Modifier.weight(1f))
                 TextButton(onClick = onDismiss, enabled = !state.libraryMutationBusy) { Text(stringResource(R.string.ft_library_cancel)) }
                 Button(onClick = { onSubmit(selected.toList()) }, enabled = selected.isNotEmpty() && !state.libraryMutationBusy && !state.libraryMutationConflict,

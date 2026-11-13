@@ -82,7 +82,7 @@ class ListeningFeaturesUiTest {
     }
 
     @Test fun currentSongMenuTogglesRealFavoriteActionWithoutReplacingQueue() {
-        render(fixture(MainDestination.SEARCH))
+        render(fixture(MainDestination.SEARCH).copy(query = "first"))
         rule.onNodeWithTag("song_more_first").performClick()
         rule.onNodeWithTag("song_action_favorite").performClick()
         rule.runOnIdle {
@@ -94,7 +94,7 @@ class ListeningFeaturesUiTest {
     }
 
     @Test fun addFromSongMenuSendsTheSelectedPlaylistAndSongIds() {
-        render(fixture(MainDestination.SEARCH))
+        render(fixture(MainDestination.SEARCH).copy(query = "first"))
         rule.onNodeWithTag("song_more_first").performClick()
         rule.onNodeWithTag("song_action_playlist").performClick()
         rule.onNodeWithTag("playlist_target_commute").performClick()
@@ -164,10 +164,20 @@ class ListeningFeaturesUiTest {
         rule.onNodeWithTag("search_field").performTextInput("blue")
         rule.onNodeWithTag("search_submit").performClick()
         rule.runOnIdle { assertEquals("blue", controller.query); assertEquals("blue", controller.artistQuery); assertEquals("blue", controller.albumQuery) }
-        rule.onNodeWithTag("search_type_albums").performClick()
-        rule.onNodeWithTag("browse_album_album-blue").assertExists()
-        rule.onNodeWithTag("search_type_artists").performClick()
-        rule.onNodeWithTag("browse_artist_The Slow Hours").assertExists()
+        rule.onNodeWithTag("browse_artist_The Slow Hours").performScrollTo().assertExists()
+        rule.onNodeWithTag("browse_album_album-blue").performScrollTo().assertExists()
+    }
+
+    @Test fun preSearchShowsSplitRecentTermsAndDirectPicksWithoutQuickAccess() {
+        render(
+            fixture(MainDestination.SEARCH).copy(
+                recentSearchTerms = listOf("Rain"),
+                recentSearches = listOf(com.flaretune.client.data.SearchEntity.fromSong(songs.first())),
+            ),
+        )
+        rule.onNodeWithTag("recent_searches").assertExists()
+        rule.onNodeWithText("Rain").performClick()
+        rule.runOnIdle { assertEquals("Rain", controller.query) }
     }
 
     @Test fun artistCollectionAppendAndAndroidBackKeepExistingPlayer() {
@@ -182,8 +192,11 @@ class ListeningFeaturesUiTest {
     @Test fun historyHasIndependentRemoveAndClearActions() {
         render(fixture(MainDestination.HOME))
         rule.onNodeWithTag("home_history").performClick()
+        rule.onNodeWithTag("history_panel").assertExists()
         rule.onNodeWithTag("history_remove_first").performClick()
         rule.runOnIdle { assertEquals("first", controller.removedHistory); assertEquals(2, controller.state.value.playback.queue.size) }
+        rule.onNodeWithTag("history_back").performClick()
+        rule.onNodeWithTag("history_panel").assertDoesNotExist()
     }
 
     @Test fun metadataOnlyHistoryRemainsClickableForFreshResolution() {
@@ -212,7 +225,7 @@ class ListeningFeaturesUiTest {
 
     @Test @Config(qualifiers = "zh-rCN-w1280dp-h800dp-night-mdpi")
     fun renderWideLibraryAndRealSongActions() {
-        render(fixture(MainDestination.SEARCH))
+        render(fixture(MainDestination.SEARCH).copy(query = "blue"))
         screenshot("listening-search-wide")
         rule.onNodeWithTag("song_more_first").performClick()
         rule.onNodeWithTag("song_action_favorite").assertIsDisplayed()

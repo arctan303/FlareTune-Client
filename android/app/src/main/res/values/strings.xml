@@ -115,4 +115,14 @@
     <string name="ft_translate_lyrics">Toggle lyric translation</string>
     <string name="ft_request_translation">Translate lyrics</string>
     <string name="ft_translating_lyrics">Translating…</string>
+    <string name="ft_play_all">Play all</string>
+    <string name="ft_quick_access">Quick access</string>
+    <string name="ft_explore_library">Explore library</string>
+    <string name="ft_clear_search">Clear search</string>
+    <string name="ft_artist_label">Artist</string>
+    <string name="ft_playlist_label">Playlist</string>
+    <string name="ft_see_all">See all</string>
+    <string name="ft_search_history_terms">Search terms</string>
+    <string name="ft_search_history_direct">Quick jump</string>
+    <string name="ft_album_label">Album</string>
 </resources>

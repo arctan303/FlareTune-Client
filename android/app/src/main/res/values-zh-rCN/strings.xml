@@ -113,4 +113,14 @@
     <string name="ft_translate_lyrics">切换译文显示</string>
     <string name="ft_request_translation">补全译文</string>
     <string name="ft_translating_lyrics">正在翻译…</string>
+    <string name="ft_play_all">播放全部</string>
+    <string name="ft_quick_access">快捷直达</string>
+    <string name="ft_explore_library">探索曲库</string>
+    <string name="ft_clear_search">清空搜索</string>
+    <string name="ft_artist_label">歌手</string>
+    <string name="ft_playlist_label">歌单</string>
+    <string name="ft_see_all">查看全部</string>
+    <string name="ft_search_history_terms">文本记录</string>
+    <string name="ft_search_history_direct">搜索直达</string>
+    <string name="ft_album_label">专辑</string>
 </resources>

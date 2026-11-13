@@ -212,9 +212,40 @@ object ClientIcons {
         moveTo(10f, 10.5f); lineTo(10f, 16.5f)
         moveTo(14f, 10.5f); lineTo(14f, 16.5f)
     }
-    val DragHandle = lines("DragHandle") {
-        moveTo(5f, 9.5f); lineTo(19f, 9.5f)
-        moveTo(5f, 14.5f); lineTo(19f, 14.5f)
+    val DragHandle = ImageVector.Builder("DragHandle", 24.dp, 24.dp, 24f, 24f).apply {
+        path(
+            fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 2.6f,
+            strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
+        ) {
+            moveTo(3.5f, 8.5f); lineTo(20.5f, 8.5f)
+            moveTo(3.5f, 15.5f); lineTo(20.5f, 15.5f)
+        }
+    }.build()
+    val Plus = lines("Plus") {
+        moveTo(12f, 5f); lineTo(12f, 19f)
+        moveTo(5f, 12f); lineTo(19f, 12f)
+    }
+    val Disc = lines("Disc") {
+        moveTo(12f, 3f)
+        curveTo(16.97f, 3f, 21f, 7.03f, 21f, 12f)
+        curveTo(21f, 16.97f, 16.97f, 21f, 12f, 21f)
+        curveTo(7.03f, 21f, 3f, 16.97f, 3f, 12f)
+        curveTo(3f, 7.03f, 7.03f, 3f, 12f, 3f); close()
+        moveTo(12f, 10f)
+        curveTo(13.1f, 10f, 14f, 10.9f, 14f, 12f)
+        curveTo(14f, 13.1f, 13.1f, 14f, 12f, 14f)
+        curveTo(10.9f, 14f, 10f, 13.1f, 10f, 12f)
+        curveTo(10f, 10.9f, 10.9f, 10f, 12f, 10f); close()
+    }
+    val Artist = lines("Artist") {
+        moveTo(12f, 4f)
+        curveTo(14.21f, 4f, 16f, 5.79f, 16f, 8f)
+        curveTo(16f, 10.21f, 14.21f, 12f, 12f, 12f)
+        curveTo(9.79f, 12f, 8f, 10.21f, 8f, 8f)
+        curveTo(8f, 5.79f, 9.79f, 4f, 12f, 4f); close()
+        moveTo(5f, 20f)
+        curveTo(5f, 16.13f, 8.13f, 13f, 12f, 13f)
+        curveTo(15.87f, 13f, 19f, 16.13f, 19f, 20f)
     }
     val More = filled("More") {
         for (x in listOf(5f, 12f, 19f)) {

@@ -24,4 +24,16 @@
 - 宿主42/42针对性Node测试通过；新提交3ed67d45f96a20d2765eddb0b2c13e77eea53b16已备份dev并经既有受控通道部署。source718124dffa54ac7e8973ebad660cf1017896a427f16ddae968accb1b2f652e4a，Worker82cc31bc-8ea9-4d95-8481-3970896f1efc为100%；内容回读匹配source。21项配置/安装记录含revision、5插件包、108首曲库元数据和绑定与部署前一致；独立聚焦审查通过。
 - dev.5/code5 APK：android/build/deliverables/FlareTune-0.1.0-dev.5-20261113-debug.apk，SHA256 FF1F4B4BBA35E8D82E46474733D42DE479251B9E690DF4457041E5DC8976D0BC；签名v1/v2、16KB对齐、badging通过。已执行隔离树deploy脚本，install Success，MainActivity冷启动ok；回读versionCode5/versionName0.1.0-dev.5、base.apk摘要一致，数据保留。安装日志android/build/deploy-dev5-20261113.log。
 
-状态：实现、本机验证、测试站部署及平板覆盖更新完成；独立客户端分支单独远程备份，提交以分支Git记录为准。没有把共享树Gemini新增界面合入本包。尚未做修复后同条件真机帧率A/B或用户实际听感验收；也未取得该中文歌曲修复后带认证HTTP的独立回执，真实资产零副作用重算及部署内容回读与HTTP实测应区分。旧gfx混合会话不用于量化提速。后续将此分支有选择地整合进Gemini最终UI，保留本文服务端权威与交互回归，不再恢复客户端语种判断。
+状态：实现、本机验证、测试站部署及平板覆盖更新完成；独立客户端分支单独远程备份，提交以分支Git记录为准。没有把共享树Gemini新增界面合入本包。尚未做修复后同条件真机帧率A/B或用户实际听感验收；也未取得该中文歌曲修复后带认证HTTP的独立回执，真实资产零副作用重算及部署内容回读与HTTP实测应区分。旧gfx混合会话不用于量化提速。后续整合由下节明确的新指令承接；本文服务端权威与交互回归持续有效，不再恢复客户端语种判断。
+
+## 同一基线整合（用户后续指令）
+
+用户要求“没问题后记得把你的修改和Gemini的并入，这样你们两个同一个基线修改，我来调度”，并通过异步回复明确“已经停写，可以同步共同基线”。这替代本轮只保留隔离候选、不纳入Gemini后续改动的临时限制，未撤销原隔离阶段证据。
+
+以b29eecf歌词修复为底，捕获共享743c213上Gemini真实11文件快照（10已跟踪+新增ListeningComponents），逐文件摘要核对无写入变化，且与歌词修复无实质同文件重叠；协调器/测试共享M标记仅换行归一化差异，不把它们当第二套修复覆盖。集成基础UI、图标、详情/表单、动作面板和资源/测试，未把.gitignored私有材料或其他未提交内容纳入。
+
+合并候选先以原dev.5版本号完成258/258、构建/Lint；随后仅升dev.6/code6，完整assembleDebug/testDebugUnitTest/lintDebug/processReleaseManifest再次通过（2m4s），0失败/错误/跳过，Lint0错误/59警告/1提示。日志android/build/merged-dev6-final.log，固定XML/输入摘要在android/build/merged-dev6-evidence-20261113。播放器及主页真实Compose模拟截图已目视，不等同全设备验收。独立R1集成聚焦检查通过：11文件摘要一致，歌词修复未被覆盖，服务端权威/历史队列区分/完整成员与修订守卫及关键actions接线保留；不冒称全量界面审计或真机听感通过。
+
+合并包android/build/deliverables/FlareTune-0.1.0-dev.6-20261113-debug.apk，SHA256 41A70598797BC8EDC6325E68DF5BB8126C25D7B1256CF6F5C6A1F21E9CF6162C，签名v1/v2、16KB ZIP对齐、badging通过。覆盖安装Success；首次启动处于系统PackageUpdateActivity过渡，随后明确start返回com.flaretune.client/.MainActivity、前台与进程存在；回读version6和base.apk摘要一致。未卸载/清data，安装日志android/build/deploy-dev6-20261113.log。
+
+共同工作区同步状态：待本次提交后执行带HEAD/文件摘要检查的快进同步，保留Gemini原始具名恢复stash，随后回读共享/隔离HEAD及远端提交一致。后续双方从共享FlareTune-Client分支codex/android-client-backup-20261112继续，用户负责调度；隔离树不再独立开展新功能。

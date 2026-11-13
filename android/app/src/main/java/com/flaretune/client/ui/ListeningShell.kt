@@ -1,5 +1,6 @@
 package com.flaretune.client.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -56,6 +57,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -114,6 +116,7 @@ import coil.ImageLoader
 import coil.compose.AsyncImage
 import com.flaretune.client.R
 import com.flaretune.client.model.Album
+import com.flaretune.client.model.Artist
 import com.flaretune.client.model.ClientNotice
 import com.flaretune.client.model.LyricState
 import com.flaretune.client.model.LyricStatus
@@ -158,7 +161,16 @@ internal fun ListeningShell(
         }
         val navigateMain: (MainDestination) -> Unit = { dest ->
             homeSubpage = HomeSubpage.NONE
+            historyOpen = false
             actions.navigate(dest)
+        }
+        BackHandler(
+            enabled = historyOpen &&
+                state.selectedArtist == null &&
+                state.selectedAlbum == null &&
+                state.selectedPlaylist == null,
+        ) {
+            historyOpen = false
         }
 
         // Main content spans full height and scrolls underneath both the status bar and the floating dock.
@@ -167,6 +179,14 @@ internal fun ListeningShell(
                 state.selectedArtist != null -> ListeningArtistPage(state, actions, imageLoader, topInset, contentBottomInset)
                 state.selectedAlbum != null -> AlbumScreen(state, actions, imageLoader, topInset, contentBottomInset)
                 state.selectedPlaylist != null && state.destination != MainDestination.SEARCH -> ListeningPlaylistDetailPage(state, actions, imageLoader, topInset, contentBottomInset)
+                historyOpen -> PlayHistoryPage(
+                    state = state,
+                    actions = actions,
+                    loader = imageLoader,
+                    topInset = topInset,
+                    bottomInset = contentBottomInset,
+                    onBack = { historyOpen = false },
+                )
                 state.destination == MainDestination.SEARCH -> ListeningSearchPage(state, actions, imageLoader, topInset, contentBottomInset)
                 state.destination == MainDestination.LIBRARY && state.tab == LibraryTab.CATALOG -> ListeningLibraryOverview(state, actions, imageLoader, topInset, contentBottomInset)
                 state.destination == MainDestination.HOME -> when (homeSubpage) {
@@ -270,55 +290,19 @@ internal fun ListeningShell(
             }
         }
 
-        if (historyOpen) {
-            val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-            val scope = rememberCoroutineScope()
-            val closeHistory: () -> Unit = {
-                scope.launch { sheetState.hide() }.invokeOnCompletion {
-                    if (!sheetState.isVisible) historyOpen = false
-                }
-            }
-            ModalBottomSheet(
-                onDismissRequest = { historyOpen = false },
-                sheetState = sheetState,
-                containerColor = MaterialTheme.colorScheme.surface,
-            ) {
-                PlayHistorySheet(
-                    state = state,
-                    actions = actions,
-                    loader = imageLoader,
-                    onPlay = { song ->
-                        actions.playHistorySong(song)
-                        closeHistory()
-                    },
-                    onClose = closeHistory,
-                )
-            }
-        }
         if (queueOpen) {
-            val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-            val scope = rememberCoroutineScope()
-            val closeQueue: () -> Unit = {
-                scope.launch { sheetState.hide() }.invokeOnCompletion {
-                    if (!sheetState.isVisible) queueOpen = false
-                }
-            }
-            ModalBottomSheet(
-                onDismissRequest = { queueOpen = false },
-                sheetState = sheetState,
-                containerColor = MaterialTheme.colorScheme.surface,
-            ) {
+            FlareModalSheet(onDismissRequest = { queueOpen = false }) {
                 QueuePanel(
                     state = state.playback,
                     loader = imageLoader,
-                    close = closeQueue,
+                    close = { queueOpen = false },
                     queueNotice = state.queueNotice,
                     onRetryRestore = actions::retryQueueRestore,
                     onRemove = actions::removeQueueItem,
                     onMove = actions::moveQueueItem,
                     select = { index ->
                         actions.selectQueueItem(index)
-                        closeQueue()
+                        queueOpen = false
                     },
                 )
             }
@@ -632,14 +616,28 @@ private fun HomeScreen(
                             retry = null,
                             modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
                         )
-                        else -> SongShelf(state.songs.take(12), loader, cardWidth, "home_song_") { song, _ -> actions.playSong(song) }
+                        else -> SongColumnShelf(
+                            songs = state.songs.take(16),
+                            currentSongId = state.playback.current?.id,
+                            playing = state.playback.playing,
+                            buffering = state.playback.buffering,
+                            loader = loader,
+                            tagPrefix = "home_song_",
+                        ) { song, _ -> actions.playSong(song) }
                     }
                 }
             }
             if (state.playHistory.isNotEmpty()) {
                 item(key = "history-title") { ShelfHeading(stringResource(R.string.ft_continue_listening), openHistory) }
                 item(key = "history-shelf") {
-                    SongShelf(state.playHistory.take(12), loader, cardWidth, "home_history_song_") { song, _ -> actions.playHistorySong(song) }
+                    SongColumnShelf(
+                        songs = state.playHistory.take(16),
+                        currentSongId = state.playback.current?.id,
+                        playing = state.playback.playing,
+                        buffering = state.playback.buffering,
+                        loader = loader,
+                        tagPrefix = "home_history_song_",
+                    ) { song, _ -> actions.playHistorySong(song) }
                 }
             }
             if (state.loading && state.songs.isEmpty() && state.songLanguage == "all") {
@@ -965,31 +963,6 @@ private fun AlbumArtwork(album: Album, loader: ImageLoader?, modifier: Modifier,
 }
 
 @Composable
-private fun SongShelf(songs: List<Song>, loader: ImageLoader?, width: Dp, tagPrefix: String, onSelect: (Song, Int) -> Unit) {
-    LazyRow(
-        Modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(horizontal = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        itemsIndexed(songs, key = { index, song -> index.toString() + ":" + song.id }) { index, song ->
-            Column(Modifier.width(width).clip(RoundedCornerShape(10.dp)).clickable { onSelect(song, index) }.testTag(tagPrefix + song.id)) {
-                Artwork(song, loader, Modifier.fillMaxWidth().aspectRatio(1f), radius = 12.dp, placeholderSize = 40.dp)
-                Spacer(Modifier.height(8.dp))
-                Text(song.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(
-                    song.artist.ifBlank { stringResource(R.string.ft_unknown_artist) },
-                    Modifier.padding(top = 2.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-    }
-}
-
-@Composable
 private fun ShelfLoading(width: Dp) {
     Row(Modifier.fillMaxWidth().padding(16.dp).testTag("home_loading"), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         repeat(2) {
@@ -1016,6 +989,66 @@ private fun CatalogScreen(
     val selectedPlaylist = if (!searchPage) state.selectedPlaylist else null
     val inFavoritesDetail = !searchPage && selectedPlaylist == null && state.tab == LibraryTab.FAVORITES
     val inPlaylistDetail = selectedPlaylist != null
+
+    if (inFavoritesDetail) {
+        val favLeadCover = state.latestFavoriteCoverUrl
+            ?: state.favoriteSongs.firstOrNull { !it.coverUrl.isNullOrBlank() }?.coverUrl
+        val previewCovers = remember(state.favoriteSongs) {
+            state.favoriteSongs.mapNotNull { it.coverUrl?.takeIf(String::isNotBlank) }.distinct().take(4)
+        }
+        CollectionDetailScaffold(
+            kindLabel = stringResource(R.string.ft_playlist_label),
+            title = stringResource(R.string.ft_liked_songs),
+            metaLine = pluralStringResource(R.plurals.ft_track_count, state.favoriteSongs.size, state.favoriteSongs.size),
+            coverUrl = if (previewCovers.size >= 4) null else favLeadCover,
+            previewCovers = previewCovers,
+            isFavorite = true,
+            fallbackIcon = ClientIcons.Heart,
+            loader = loader,
+            topInset = topInset,
+            bottomInset = bottomInset,
+            testTag = "library_page",
+            backTag = "library_tab_catalog",
+            onBack = { actions.selectTab(LibraryTab.CATALOG) },
+            refreshTag = "library_refresh",
+            refreshing = state.favoritesLoading,
+            onRefresh = actions::refreshFavorites,
+            primaryActions = {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Button(
+                        onClick = actions::playFavorites,
+                        enabled = state.favoriteSongs.isNotEmpty() && !state.favoritesLoading,
+                        shape = CircleShape,
+                        contentPadding = PaddingValues(horizontal = 22.dp, vertical = 12.dp),
+                        modifier = Modifier.testTag("favorites_play_all"),
+                    ) {
+                        Icon(ClientIcons.Play, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.ft_play_all))
+                    }
+                }
+            },
+            loading = state.favoritesLoading && state.favoriteSongs.isEmpty(),
+            notice = state.favoritesNotice,
+            noticeTag = "list_retry",
+            onRetry = actions::refreshFavorites,
+            emptyMessage = stringResource(if (state.favoritesNotice != null) R.string.ft_unavailable else R.string.ft_empty_catalog),
+            isEmpty = state.favoriteSongs.isEmpty(),
+            listTestTag = "favorites_song_list",
+        ) {
+            itemsIndexed(state.favoriteSongs, key = { index, song -> "$index:${song.id}" }) { _, song ->
+                SongRow(
+                    song = song,
+                    imageLoader = loader,
+                    current = song.id == state.playback.current?.id,
+                    playing = state.playback.playing,
+                    buffering = state.playback.buffering,
+                    modifier = Modifier.testTag("song_" + song.id),
+                ) { actions.playSong(song) }
+            }
+        }
+        return
+    }
 
     Column(Modifier.fillMaxSize().padding(top = topInset).testTag(if (searchPage) "search_page" else "library_page")) {
         Row(
@@ -1577,183 +1610,60 @@ private fun AlbumGrid(
 @Composable
 private fun AlbumScreen(state: ClientUiState, actions: ClientActions, loader: ImageLoader?, topInset: Dp, bottomInset: Dp) {
     val album = state.selectedAlbum ?: return
-    BoxWithConstraints(Modifier.fillMaxSize().padding(top = topInset).testTag("album_detail")) {
-        val wide = maxWidth >= 700.dp
-        Column(Modifier.fillMaxSize()) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                ActionIcon(
-                    ClientIcons.ChevronLeft,
-                    stringResource(R.string.ft_back),
-                    actions::closeAlbum,
-                    modifier = Modifier.testTag("album_back"),
-                )
-                Text(stringResource(R.string.ft_album), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                ActionIcon(
-                    ClientIcons.Refresh,
-                    stringResource(R.string.ft_refresh),
-                    { actions.openAlbum(album) },
-                    enabled = !state.albumLoading,
-                    modifier = Modifier.testTag("album_refresh"),
-                )
-            }
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = bottomInset)) {
-                item(key = "album-hero") {
-                    if (wide) {
-                        Row(
-                            Modifier.fillMaxWidth().padding(24.dp),
-                            horizontalArrangement = Arrangement.spacedBy(32.dp),
-                            verticalAlignment = Alignment.Bottom,
-                        ) {
-                            AlbumArtwork(album, loader, Modifier.size(240.dp))
-                            AlbumDescription(album, state, actions, Modifier.weight(1f))
-                        }
-                    } else {
-                        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp)) {
-                            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                                AlbumArtwork(album, loader, Modifier.widthIn(max = 260.dp).fillMaxWidth().aspectRatio(1f))
-                            }
-                            Spacer(Modifier.height(24.dp))
-                            AlbumDescription(album, state, actions, Modifier.fillMaxWidth())
-                        }
-                    }
-                }
-                state.albumNotice?.let { notice ->
-                    item(key = "album-error") { InlineNotice(notice, { actions.openAlbum(album) }, "album_retry") }
-                }
-                if (state.albumLoading) {
-                    item(key = "album-loading") {
-                        Row(
-                            Modifier.fillMaxWidth().padding(24.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                            Text(stringResource(R.string.ft_album_loading), style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
-                }
-                items(state.albumSongs, key = { it.id }) { song ->
-                    SongRow(
-                        song, loader, song.id == state.playback.current?.id, state.playback.playing,
-                        state.playback.buffering, Modifier.testTag("song_" + song.id),
-                    ) { actions.playSong(song) }
-                }
-                if (!state.albumLoading && state.albumNotice == null && state.albumSongs.isEmpty()) {
-                    item(key = "album-empty") {
-                        EmptyContent(stringResource(R.string.ft_album_empty), null, Modifier.fillMaxWidth().heightIn(min = 160.dp))
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AlbumDescription(album: Album, state: ClientUiState, actions: ClientActions, modifier: Modifier) {
-    Column(modifier) {
-        Text(album.title, style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
-        Text(
-            album.artist,
-            Modifier.padding(top = 8.dp),
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Row(
-            Modifier.fillMaxWidth().padding(top = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            Text(
-                pluralStringResource(R.plurals.ft_track_count, album.trackCount, album.trackCount),
-                Modifier.weight(1f),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            val playLabel = stringResource(R.string.ft_play_album)
-            FilledIconButton(
-                onClick = { state.albumSongs.firstOrNull()?.let(actions::playSong) },
-                enabled = state.albumSongs.isNotEmpty() && !state.albumLoading,
-                shape = CircleShape,
-                modifier = Modifier.size(56.dp).testTag("album_play").semantics { contentDescription = playLabel },
-            ) { Icon(ClientIcons.Play, null, Modifier.size(26.dp)) }
-        }
-    }
-}
-
-@Composable
-private fun PlayHistorySheet(
-    state: ClientUiState,
-    actions: ClientActions,
-    loader: ImageLoader?,
-    onPlay: (Song) -> Unit,
-    onClose: () -> Unit,
-) {
-    val listeningInteractions = LocalListeningInteractions.current
-    val historyItems = state.playHistory
-    val windowHeight = with(LocalDensity.current) {
-        androidx.compose.ui.platform.LocalWindowInfo.current.containerSize.height.toDp()
-    }
-    val sheetHeight = (windowHeight * 0.72f).coerceAtLeast(300.dp)
-    val absorbBottomOverscroll = remember {
-        object : NestedScrollConnection {
-            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset =
-                if (available.y < 0f) available.copy(x = 0f) else Offset.Zero
-
-            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity =
-                if (available.y < 0f) available.copy(x = 0f) else Velocity.Zero
-        }
-    }
-    Column(
-        Modifier.fillMaxWidth()
-            .then(if (historyItems.isEmpty()) Modifier.heightIn(max = sheetHeight) else Modifier.height(sheetHeight))
-            .navigationBarsPadding()
-            .testTag("history_panel"),
-    ) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(stringResource(R.string.ft_play_history), style = MaterialTheme.typography.titleLarge)
-                Text(
-                    pluralStringResource(R.plurals.ft_track_count, historyItems.size, historyItems.size),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (historyItems.isNotEmpty() && listeningInteractions != null) ActionIcon(ClientIcons.Trash,
-                stringResource(R.string.ft_listening_clear_history), listeningInteractions.clearHistory, modifier = Modifier.testTag("history_clear"))
-            ActionIcon(ClientIcons.Close, stringResource(R.string.ft_close), onClose)
-        }
-        state.historyNotice?.let { notice ->
-            Box(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) { Notice(notice) }
-        }
-        if (historyItems.isEmpty()) {
-            EmptyContent(
-                message = stringResource(R.string.ft_empty_catalog),
-                retry = null,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp),
-            )
+    val playLabel = stringResource(R.string.ft_play_album)
+    CollectionDetailScaffold(
+        kindLabel = stringResource(R.string.ft_album),
+        title = album.title,
+        subtitle = album.artist.ifBlank { stringResource(R.string.ft_unknown_artist) },
+        onSubtitleClick = if (album.artist.isNotBlank()) {
+            { actions.openArtist(Artist(album.artist)) }
         } else {
-            LazyColumn(
-                Modifier.fillMaxWidth().weight(1f).nestedScroll(absorbBottomOverscroll),
-                contentPadding = PaddingValues(bottom = 16.dp),
-            ) {
-                itemsIndexed(historyItems, key = { index, song -> "$index:${song.id}" }) { _, song ->
-                    Column {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                    SongRow(
-                        song = song,
-                        imageLoader = loader,
-                        current = song.id == state.playback.current?.id,
-                        playing = state.playback.playing,
-                        buffering = state.playback.buffering,
-                        modifier = Modifier.weight(1f).testTag("history_song_" + song.id),
-                    ) { onPlay(song) }
-                    ActionIcon(ClientIcons.Trash, stringResource(R.string.ft_listening_remove_history), { actions.removeHistory(song.id) }, modifier = Modifier.testTag("history_remove_" + song.id))
-                    }
-                    val playedAt = listeningTime(state.playHistoryPlayedAt[song.id])
-                    if (playedAt.isNotBlank()) Text(playedAt, Modifier.padding(start = 76.dp, bottom = 8.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+            null
+        },
+        metaLine = pluralStringResource(R.plurals.ft_track_count, album.trackCount, album.trackCount),
+        coverUrl = album.coverUrl ?: state.albumSongs.firstOrNull { !it.coverUrl.isNullOrBlank() }?.coverUrl,
+        fallbackIcon = ClientIcons.Disc,
+        loader = loader,
+        topInset = topInset,
+        bottomInset = bottomInset,
+        testTag = "album_detail",
+        backTag = "album_back",
+        onBack = actions::closeAlbum,
+        refreshTag = "album_refresh",
+        refreshing = state.albumLoading,
+        onRefresh = { actions.openAlbum(album) },
+        primaryActions = {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Button(
+                    onClick = { state.albumSongs.firstOrNull()?.let(actions::playSong) },
+                    enabled = state.albumSongs.isNotEmpty() && !state.albumLoading,
+                    shape = CircleShape,
+                    contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp),
+                    modifier = Modifier.testTag("album_play").semantics { contentDescription = playLabel },
+                ) {
+                    Icon(ClientIcons.Play, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.ft_play_all))
                 }
             }
+        },
+        loading = state.albumLoading,
+        notice = state.albumNotice,
+        noticeTag = "album_retry",
+        onRetry = { actions.openAlbum(album) },
+        emptyMessage = stringResource(R.string.ft_album_empty),
+        isEmpty = !state.albumLoading && state.albumNotice == null && state.albumSongs.isEmpty(),
+        listTestTag = "album_song_list",
+    ) {
+        items(state.albumSongs, key = { it.id }) { song ->
+            SongRow(
+                song = song,
+                imageLoader = loader,
+                current = song.id == state.playback.current?.id,
+                playing = state.playback.playing,
+                buffering = state.playback.buffering,
+                modifier = Modifier.testTag("song_" + song.id),
+            ) { actions.playSong(song) }
         }
     }
 }

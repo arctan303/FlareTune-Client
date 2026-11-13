@@ -4,6 +4,7 @@ import android.app.Application
 import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.*
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -252,6 +253,35 @@ class ClientUiTest {
         rule.onNodeWithTag("open_queue").performScrollTo().performClick()
         rule.onNodeWithTag("queue_item_0").performTouchInput { swipeLeft() }
         rule.runOnIdle { assertEquals(listOf(0), actions.removedQueueIndices) }
+    }
+
+    @Test fun queuePanelPartialSwipeReversesWithoutRemoving() {
+        render(fixture())
+        rule.onNodeWithTag("mini_player").performClick()
+        rule.onNodeWithTag("open_queue").performScrollTo().performClick()
+        rule.onNodeWithTag("queue_item_0").performTouchInput {
+            down(center)
+            moveBy(Offset(-36f, 0f))
+            moveBy(Offset(28f, 0f))
+            up()
+        }
+        rule.runOnIdle { assertTrue(actions.removedQueueIndices.isEmpty()) }
+    }
+
+    @Test fun queuePanelDragHandleReordersQueueItem() {
+        render(fixture())
+        rule.onNodeWithTag("mini_player").performClick()
+        rule.onNodeWithTag("open_queue").performScrollTo().performClick()
+        val firstBounds = rule.onNodeWithTag("queue_item_0").fetchSemanticsNode().boundsInRoot
+        val secondBounds = rule.onNodeWithTag("queue_item_1").fetchSemanticsNode().boundsInRoot
+        val distance = (secondBounds.center.y - firstBounds.center.y) + 40f
+        rule.onNodeWithTag("queue_drag_0", useUnmergedTree = true).performTouchInput {
+            down(center)
+            moveBy(Offset(0f, distance / 2f))
+            moveBy(Offset(0f, distance / 2f))
+            up()
+        }
+        rule.runOnIdle { assertTrue(actions.movedQueuePairs.contains(0 to 1)) }
     }
 
     private fun fixtureLoader(): coil.ImageLoader {
