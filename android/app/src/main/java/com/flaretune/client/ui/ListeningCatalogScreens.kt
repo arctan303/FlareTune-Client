@@ -119,7 +119,7 @@ internal fun ListeningAlbumTile(album: Album, loader: ImageLoader?, onClick: () 
         Column(Modifier.weight(1f)) {
             Text(album.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(album.artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(stringResource(R.string.ft_listening_tracks_count, album.trackCount), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            album.knownTrackCount?.let { Text(stringResource(R.string.ft_listening_tracks_count, it), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         Icon(ClientIcons.ChevronRight, null)
     }
@@ -140,7 +140,7 @@ private fun ListeningAlbumCard(album: Album, loader: ImageLoader?, modifier: Mod
         Spacer(Modifier.height(8.dp))
         Text(album.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Text(
-            album.artist.ifBlank { stringResource(R.string.ft_listening_tracks_count, album.trackCount) },
+            album.artist.ifBlank { album.knownTrackCount?.let { stringResource(R.string.ft_listening_tracks_count, it) }.orEmpty() },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
@@ -165,7 +165,7 @@ private fun ListeningArtistTile(artist: Artist, loader: ImageLoader?, onClick: (
         )
         Column(Modifier.weight(1f)) {
             Text(artist.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(stringResource(R.string.ft_listening_artist_counts, artist.songCount, artist.albumCount), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(knownArtistCounts(artist), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Icon(ClientIcons.ChevronRight, null)
     }
@@ -204,7 +204,7 @@ private fun ListeningArtistCard(artist: Artist, loader: ImageLoader?, modifier: 
             textAlign = TextAlign.Center,
         )
         Text(
-            stringResource(R.string.ft_listening_artist_counts, artist.songCount, artist.albumCount),
+            knownArtistCounts(artist),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
@@ -238,7 +238,7 @@ internal fun ArtistBrowseSheet(state: ClientUiState, actions: ClientActions, loa
             ListeningRetry(state.artistsNotice, { actions.refreshArtists(state.artistQuery) })
             LazyColumn(Modifier.weight(1f)) {
                 if (!state.artistsLoading && state.artists.isEmpty()) item { Text(stringResource(R.string.ft_listening_empty_artists), Modifier.padding(24.dp)) }
-                items(state.artists, key = { it.name }) { artist -> ListeningArtistTile(artist, loader) { actions.openArtist(artist); close() } }
+                items(state.artists, key = { it.id ?: ("local:" + it.name) }) { artist -> ListeningArtistTile(artist, loader) { actions.openArtist(artist); close() } }
                 if (state.artistsHasMore) item { TextButton(onClick = actions::loadMoreArtists, enabled = !state.artistsLoadingMore, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.ft_load_more)) } }
             }
         }
@@ -279,7 +279,7 @@ internal fun ListeningAlbumSearchSheet(state: ClientUiState, actions: ClientActi
 @Composable
 internal fun ListeningArtistPage(state: ClientUiState, actions: ClientActions, loader: ImageLoader?, topInset: Dp, bottomInset: Dp) {
     val artist = state.selectedArtist ?: return
-    var subview by rememberSaveable(artist.name) { mutableStateOf("overview") }
+    var subview by rememberSaveable(artist.name, artist.id) { mutableStateOf("overview") }
     val interaction = LocalListeningInteractions.current
     val listState = rememberLazyListState()
     val scrolledPastHero by remember(subview) {
@@ -296,8 +296,7 @@ internal fun ListeningArtistPage(state: ClientUiState, actions: ClientActions, l
         ?: state.artistSongs.firstOrNull { !it.coverUrl.isNullOrBlank() }?.coverUrl
         ?: state.artistAlbums.firstOrNull { !it.coverUrl.isNullOrBlank() }?.coverUrl
 
-    val totalSongCount = artist.songCount.takeIf { it > 0 } ?: state.artistSongs.size
-    val totalAlbumCount = artist.albumCount.takeIf { it > 0 } ?: state.artistAlbums.size
+    val countSummary = knownArtistCounts(artist)
 
     Box(Modifier.fillMaxSize().background(bgColor).testTag("artist_detail")) {
         Column(Modifier.fillMaxSize()) {
@@ -413,7 +412,7 @@ internal fun ListeningArtistPage(state: ClientUiState, actions: ClientActions, l
                                     )
                                     Spacer(Modifier.height(4.dp))
                                     Text(
-                                        stringResource(R.string.ft_listening_artist_counts, totalSongCount, totalAlbumCount),
+                                        countSummary,
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = Color.White.copy(alpha = 0.78f),
                                     )
@@ -761,12 +760,6 @@ internal fun ListeningSearchPage(state: ClientUiState, actions: ClientActions, l
                                 }
                             }
                             if (state.recentSearchTerms.isNotEmpty()) {
-                                Text(
-                                    stringResource(R.string.ft_search_history_terms),
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                                )
                                 FlowRow(
                                     Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -787,14 +780,8 @@ internal fun ListeningSearchPage(state: ClientUiState, actions: ClientActions, l
                                 Spacer(Modifier.height(22.dp))
                             }
                             if (state.recentSearches.isNotEmpty()) {
-                                Text(
-                                    stringResource(R.string.ft_search_history_direct),
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                                )
                                 LazyRow(
-                                    Modifier.fillMaxWidth().padding(top = 6.dp),
+                                    Modifier.fillMaxWidth().padding(top = 2.dp),
                                     contentPadding = PaddingValues(horizontal = 16.dp),
                                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                                 ) {
@@ -844,7 +831,7 @@ internal fun ListeningSearchPage(state: ClientUiState, actions: ClientActions, l
                             if (!state.artistsLoading && state.artists.isEmpty()) {
                                 item { Text(stringResource(R.string.ft_listening_empty_artists), Modifier.padding(24.dp)) }
                             }
-                            items(state.artists, key = { it.name }) { artist ->
+                            items(state.artists, key = { it.id ?: ("local:" + it.name) }) { artist ->
                                 ListeningArtistTile(artist, loader) { actions.openArtist(artist) }
                             }
                             if (state.artistsHasMore) item {
@@ -943,7 +930,7 @@ internal fun ListeningSearchPage(state: ClientUiState, actions: ClientActions, l
                                     contentPadding = PaddingValues(horizontal = 12.dp),
                                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 ) {
-                                    items(state.artists.take(12), key = { it.name }) { artist ->
+                                    items(state.artists.take(12), key = { it.id ?: ("local:" + it.name) }) { artist ->
                                         ListeningArtistCard(artist, loader, Modifier.width(128.dp)) { actions.openArtist(artist) }
                                     }
                                 }

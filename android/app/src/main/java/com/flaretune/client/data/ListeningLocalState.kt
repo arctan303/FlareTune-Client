@@ -18,7 +18,7 @@ data class SearchEntity(
     fun toSong(): Song = Song(id, name, artist, album, durationSeconds, "", language = language)
     companion object {
         fun fromSong(song: Song) = SearchEntity("song", song.id, song.title, song.artist, song.album, song.durationSeconds, song.language)
-        fun fromArtist(name: String) = SearchEntity("artist", name, name)
+        fun fromArtist(name: String, id: String? = null) = SearchEntity("artist", id ?: name, name)
     }
 }
 data class SearchHistorySnapshot(val terms: List<String> = emptyList(), val entities: List<SearchEntity> = emptyList())
@@ -67,7 +67,8 @@ class SearchHistoryStore(private val storage: HistoryStorage) {
         snapshot
     }
     private fun sameEntity(left: SearchEntity, right: SearchEntity): Boolean = left.type == right.type &&
-        if (left.type == "artist") left.id.trim().lowercase(Locale.ROOT) == right.id.trim().lowercase(Locale.ROOT) else left.id == right.id
+        if (left.type == "artist" && !left.id.startsWith("yt:artist:") && !right.id.startsWith("yt:artist:"))
+            left.id.trim().lowercase(Locale.ROOT) == right.id.trim().lowercase(Locale.ROOT) else left.id == right.id
     private fun searchTerm(value: String): String = value.trim().also { if (it.isEmpty() || it.length > 200 || it.any { c -> c.code < 32 || c.code == 127 }) localStateFailure() }
     private fun validateEntity(entity: SearchEntity): SearchEntity = entity.also {
         if (it.type !in setOf("song", "artist") || it.id.isBlank() || it.id.length > (if (it.type == "artist") 300 else 256) ||

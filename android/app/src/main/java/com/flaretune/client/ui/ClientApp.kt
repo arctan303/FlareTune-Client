@@ -106,6 +106,7 @@ fun ClientApp(
     imageLoader: ImageLoader? = null,
 ) {
     var panel by rememberSaveable { mutableStateOf(PlayerPanel.NONE) }
+    var panelIdentity by rememberSaveable { mutableStateOf<String?>(null) }
     val systemDark = isSystemInDarkTheme()
     val useLightBarIcons = systemDark || (state.screen == ClientScreen.LIBRARY && panel != PlayerPanel.NONE)
     val hostView = LocalView.current
@@ -130,8 +131,15 @@ fun ClientApp(
         }
     }
 
-    LaunchedEffect(state.screen, state.playback.current?.id) {
-        if (state.screen != ClientScreen.LIBRARY || state.playback.current == null) panel = PlayerPanel.NONE
+    LaunchedEffect(state.screen, state.navigationIdentity, state.playback.current?.id, state.playbackReady, state.queueRestoring) {
+        if (state.screen == ClientScreen.RESTORING) return@LaunchedEffect
+        if (state.screen != ClientScreen.LIBRARY) {
+            panel = PlayerPanel.NONE; panelIdentity = null
+        } else {
+            if (panelIdentity != null && panelIdentity != state.navigationIdentity) panel = PlayerPanel.NONE
+            panelIdentity = state.navigationIdentity
+            if (state.playbackReady && !state.queueRestoring && state.playback.current == null) panel = PlayerPanel.NONE
+        }
     }
     ListeningInteractionHost(state, actions, imageLoader) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -145,12 +153,12 @@ fun ClientApp(
                         if (panel != PlayerPanel.NONE) Modifier.clearAndSetSemantics {} else Modifier,
                     ),
                 ) {
-                    ListeningShell(
+                    key(state.navigationIdentity) { ListeningShell(
                         state = state,
                         actions = actions,
                         imageLoader = imageLoader,
                         openPlayer = { panel = PlayerPanel.PLAYER },
-                    )
+                    ) }
                 }
             }
             BackHandler(enabled = state.screen == ClientScreen.LIBRARY && panel == PlayerPanel.NONE && state.selectedArtist == null && state.selectedAlbum == null && state.selectedPlaylist == null && state.destination != MainDestination.HOME) { actions.navigate(MainDestination.HOME) }

@@ -1,5 +1,6 @@
 package com.flaretune.client
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import coil.ImageLoader
@@ -26,7 +27,10 @@ class ClientViewModel(
     private val coverImageProcessor: CoverImageProcessor? = null,
     private val searchHistoryStore: SearchHistoryStore? = null,
     private val discoveryCache: DiscoveryCache? = null,
+    savedStateHandle: SavedStateHandle? = null,
+    private val systemMediaFavorites: SystemMediaFavoriteChanges? = null,
 ) : ViewModel(), ClientActions {
+    private val navigation = ClientNavigationState(savedStateHandle)
     private var preferredVolume = runCatching { translationPreferences?.readVolume() ?: 1f }
         .getOrDefault(1f).takeIf { it.isFinite() && it in 0f..1f } ?: 1f
     private var volumeSaveRevision = 0L
@@ -76,6 +80,10 @@ class ClientViewModel(
     private var playlistJob: Job? = null
     private var favoritesRevision = 0L
     private var favoritesJob: Job? = null
+    // Per-connection monotonic facts: UI list metadata may arrive out of order.
+    private var favoriteOwner: ActiveConnection? = null
+    private var knownFavoriteSummary: PlaylistSummary? = null
+    private var knownFavoriteDetail: PlaylistDetail? = null
     private var playRevision = 0L
     private var playJob: Job? = null
     private var historyJob: Job? = null
@@ -111,6 +119,10 @@ class ClientViewModel(
     }
 
     private fun resetPrivateData(clearHistory: Boolean = true) {
+        navigation.clear()
+        favoriteOwner = null
+        knownFavoriteSummary = null
+        knownFavoriteDetail = null
         cancelRequests()
         lyrics.clear()
         queueRestoreNotice = null
@@ -121,6 +133,14 @@ class ClientViewModel(
     }
 
     init {
+        viewModelScope.launch { state.collect { saveNavigationState() } }
+        systemMediaFavorites?.let { changes -> viewModelScope.launch {
+            changes.updates.collect { update ->
+                if (current() !== update.connection) return@collect
+                if (update.detail.playlist.kind == "favorite")
+                    publishPlaylist(update.detail, notifySystem = false)
+            }
+        } }
         viewModelScope.launch {
             player.state.collect { snapshot ->
                 mutable.value = mutable.value.copy(playback = snapshot)
@@ -156,7 +176,7 @@ class ClientViewModel(
             try {
                 val connection = connections.restore()
                 if (ticket != identity) return@launch
-                if (connection == null) mutable.value = mutable.value.copy(screen = ClientScreen.CONNECT)
+                if (connection == null) { navigation.clear(); mutable.value = mutable.value.copy(screen = ClientScreen.CONNECT) }
                 else enter(connection, ticket)
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
@@ -188,10 +208,16 @@ class ClientViewModel(
     }
 
     private suspend fun enter(connection: ActiveConnection, ticket: Long) {
-        mutable.value = ClientUiState(
+        favoriteOwner = connection
+        knownFavoriteSummary = null
+        knownFavoriteDetail = null
+        val restoredNavigation = if (connection.auth.mustChangePassword) { navigation.clear(); null } else navigation.restore(connection)
+        val baseState = ClientUiState(
             screen = if (connection.auth.mustChangePassword) ClientScreen.CHANGE_PASSWORD else ClientScreen.LIBRARY,
             instanceUrl = connection.network.address.origin, username = connection.auth.account.username,
-            accountName = connection.auth.account.displayName, translationEnabled = translationEnabled)
+            accountName = connection.auth.account.displayName, translationEnabled = translationEnabled,
+            navigationIdentity = ClientNavigationState.identity(connection), playbackReady = false)
+        mutable.value = restoredNavigation?.applyTo(baseState) ?: baseState
         if (connection.auth.mustChangePassword) return
         try { connectPlayer(connection) } catch (error: Exception) {
             if (error is CancellationException) throw error
@@ -211,9 +237,14 @@ class ClientViewModel(
                 observeQueueNotice(repository, connection, ticket)
             }
             restoreSavedQueue()
+            mutable.value = mutable.value.copy(playbackReady = true, playback = player.state.value)
             lyrics.activate(connection, player.state.value.current)
             lyrics.updatePosition(player.state.value.positionMs)
             refresh()
+            if (restoredNavigation?.hasDetail == true) { load(true); loadAlbums(true); refreshPlaylists() }
+            if (restoredNavigation != null && mutable.value.destination == MainDestination.SEARCH) {
+                refreshArtists(mutable.value.query); searchAlbums(mutable.value.query)
+            }
             loadListeningOverview()
         }
     }
@@ -438,10 +469,14 @@ class ClientViewModel(
                     rows to order
                 }
                 if (!valid(ticket, connection) || revision != playlistsRevision) return@launch
+                val retainedItems = retainFavoriteSummary(items)
                 val selected = mutable.value.selectedPlaylist
-                val updated = selected?.let { item -> items.find { it.id == item.id } }
+                val updated = selected?.let { item -> retainedItems.find { it.id == item.id } }?.let { item ->
+                    // A summary never supplies the complete editable membership at its new revision.
+                    if (item.kind == "favorite" && knownFavoriteDetail?.playlist?.revision != item.revision && selected?.kind == "favorite") selected else item
+                }
                 if (selected != null && updated == null) closePlaylist()
-                mutable.value = mutable.value.copy(playlists = items, playlistShelf = shelf ?: mutable.value.playlistShelf,
+                mutable.value = mutable.value.copy(playlists = retainedItems, playlistShelf = shelf ?: mutable.value.playlistShelf,
                     playlistsLoading = false, selectedPlaylist = updated, playlistsNotice = null)
                 refreshFavorites()
             } catch (error: Exception) {
@@ -489,10 +524,76 @@ class ClientViewModel(
     override fun refreshFavorites() { loadFavorites(false) }
     override fun playFavorites() { loadFavorites(true) }
 
-    private fun publishFavorites(detail: PlaylistDetail?) {
+    private fun rememberFavoriteSummary(summary: PlaylistSummary): Boolean {
+        if (current() !== favoriteOwner || favoriteOwner == null || summary.kind != "favorite") return false
+        val known = knownFavoriteSummary
+        if (known != null && (summary.id != known.id || summary.revision < known.revision)) return false
+        knownFavoriteSummary = summary
+        return true
+    }
+
+    private fun currentFavoriteDetail(): PlaylistDetail? = knownFavoriteDetail?.takeIf {
+        it.playlist.id == knownFavoriteSummary?.id && it.playlist.revision >= (knownFavoriteSummary?.revision ?: -1L)
+    }
+
+    private fun retainFavoriteSummary(items: List<PlaylistSummary>): List<PlaylistSummary> {
+        items.firstOrNull { it.kind == "favorite" }?.let(::rememberFavoriteSummary)
+        val known = knownFavoriteSummary ?: return items
+        val result = items.mapNotNull { item -> when {
+            item.id == known.id -> known
+            item.kind == "favorite" -> null
+            else -> item
+        } }.toMutableList()
+        if (result.none { it.id == known.id }) {
+            val previous = mutable.value.playlists.indexOfFirst { it.id == known.id }.coerceAtLeast(0)
+            result.add(previous.coerceAtMost(result.size), known)
+        }
+        return result
+    }
+
+    /** One monotonic publication gate for GETs, writes and system acknowledgements. */
+    private fun publishFavorites(detail: PlaylistDetail?, notifySystem: Boolean = true): PlaylistDetail? {
+        val accepted = detail != null && rememberFavoriteSummary(detail.playlist)
+        if (!accepted && knownFavoriteSummary != null) {
+            val retained = currentFavoriteDetail()
+            val snapshot = mutable.value
+            val selectedFavorite = snapshot.selectedPlaylist?.id == knownFavoriteSummary?.id
+            mutable.value = snapshot.copy(favoritesLoading = false,
+                favoritesNotice = if (retained == null) ClientNotice.REQUEST_FAILED else null,
+                selectedPlaylist = if (selectedFavorite && retained != null) retained.playlist else snapshot.selectedPlaylist,
+                selectedPlaylistEntries = if (selectedFavorite && retained != null) retained.entries else snapshot.selectedPlaylistEntries,
+                playlistSongs = if (selectedFavorite && retained != null) retained.songs else snapshot.playlistSongs,
+                playlistLoading = if (selectedFavorite) false else snapshot.playlistLoading,
+                playlistNotice = if (selectedFavorite) { if (retained == null) ClientNotice.REQUEST_FAILED else null } else snapshot.playlistNotice)
+            return retained
+        }
+        if (detail != null && !accepted) return null
+        if (detail != null) { knownFavoriteDetail = detail; mergePlaylist(detail.playlist) }
         val latest = detail?.entries?.maxWithOrNull(compareBy<PlaylistSong> { it.addedAt }.thenBy { it.sortOrder })
-        mutable.value = mutable.value.copy(favoriteSongs = detail?.songs.orEmpty(), favoriteSongIds = detail?.entries?.map { it.song.id }?.toSet().orEmpty(),
-            latestFavoriteCoverUrl = latest?.song?.coverUrl, favoritesLoading = false, favoritesNotice = null)
+        val snapshot = mutable.value
+        val selectedFavorite = detail != null && snapshot.selectedPlaylist?.id == detail.playlist.id
+        mutable.value = snapshot.copy(favoriteSongs = detail?.songs.orEmpty(),
+            favoriteSongIds = detail?.entries?.map { it.song.id }?.toSet().orEmpty(),
+            latestFavoriteCoverUrl = latest?.song?.coverUrl, favoritesLoading = false, favoritesNotice = null,
+            selectedPlaylist = if (selectedFavorite) detail!!.playlist else snapshot.selectedPlaylist,
+            selectedPlaylistEntries = if (selectedFavorite) detail!!.entries else snapshot.selectedPlaylistEntries,
+            playlistSongs = if (selectedFavorite) detail!!.songs else snapshot.playlistSongs,
+            playlistLoading = if (selectedFavorite) false else snapshot.playlistLoading,
+            playlistNotice = if (selectedFavorite) null else snapshot.playlistNotice)
+        if (notifySystem && detail != null) current()?.let { systemMediaFavorites?.publish(it, detail) }
+        return detail
+    }
+
+    private suspend fun favoriteForPlayback(connection: ActiveConnection, detail: PlaylistDetail?,
+        ticket: Long, revision: Long): PlaylistDetail? {
+        var complete = publishFavorites(detail)
+        if (complete == null && knownFavoriteSummary != null) {
+            val retry = withContext(ioDispatcher) { readFavorites(connection, knownFavoriteSummary) }
+            if (!valid(ticket, connection) || revision != playRevision) return null
+            complete = publishFavorites(retry)
+            if (complete == null) throw ApiFailure(Failure.REQUEST)
+        }
+        return complete
     }
 
     private fun loadFavorites(playAfter: Boolean) {
@@ -507,10 +608,13 @@ class ClientViewModel(
                 try {
                     val detail = withContext(ioDispatcher) { readFavorites(connection, known) }
                     if (!valid(ticket, connection) || revision != playRevision) return@launch
-                    publishFavorites(detail)
-                    if (!detail?.songs.isNullOrEmpty()) {
+                    val complete = favoriteForPlayback(connection, detail, ticket, revision)
+                    if (!complete?.songs.isNullOrEmpty()) {
                         connectPlayer(connection)
-                        if (valid(ticket, connection) && revision == playRevision) player.play(detail!!.songs, 0)
+                        if (valid(ticket, connection) && revision == playRevision) {
+                            val latest = currentFavoriteDetail() ?: throw ApiFailure(Failure.REQUEST)
+                            if (latest.songs.isNotEmpty()) player.play(latest.songs, 0)
+                        }
                     }
                 } catch (error: Exception) {
                     if (error is CancellationException) throw error
@@ -732,7 +836,7 @@ class ClientViewModel(
                 }
             } finally {
                 if (valid(ticket, connection) && revision == queueRestoreRevision)
-                    mutable.value = mutable.value.copy(queueRestoring = false)
+                    mutable.value = mutable.value.copy(queueRestoring = false, playback = player.state.value)
             }
         }
     }
@@ -780,7 +884,7 @@ class ClientViewModel(
     override fun openRecentSearch(entry: SearchEntity) {
         when (entry.type) {
             "song" -> playSongs(listOf(entry.toSong()))
-            "artist" -> openArtist(Artist(entry.name))
+            "artist" -> openArtist(Artist(entry.name, id = entry.id.takeIf { it.matches(Regex("yt:artist:UC[A-Za-z0-9_-]{1,126}")) }))
         }
     }
 
@@ -1019,11 +1123,12 @@ class ClientViewModel(
     }
 
     override fun openArtist(artist: Artist) {
-        rememberSearchEntity(SearchEntity.fromArtist(artist.name))
+        rememberSearchEntity(SearchEntity.fromArtist(artist.name, artist.id))
         if (current() == null || artist.name.isBlank()) return
         closeAlbum(); closePlaylist(); closeArtist()
         mutable.value = mutable.value.copy(selectedArtist = artist)
-        loadArtist(true); loadArtistAlbums(true)
+        loadArtist(true)
+        if (artist.id == null) loadArtistAlbums(true)
     }
     override fun closeArtist() {
         artistRevision++; artistJob?.cancel(); artistOffset = 0
@@ -1045,13 +1150,18 @@ class ClientViewModel(
         mutable.value = mutable.value.copy(artistLoading = reset, artistLoadingMore = !reset, artistNotice = null)
         artistJob = viewModelScope.launch {
             try {
-                val detail = withContext(ioDispatcher) { connection.api.artist(selected.name, nextOffset) }
-                if (!valid(ticket, connection) || revision != artistRevision || mutable.value.selectedArtist?.name != selected.name) return@launch
+                val detail = withContext(ioDispatcher) { connection.api.artist(selected.id ?: selected.name, nextOffset) }
+                if (!valid(ticket, connection) || revision != artistRevision || mutable.value.selectedArtist?.name != selected.name ||
+                    mutable.value.selectedArtist?.id != selected.id) return@launch
                 artistOffset = detail.nextOffset
                 mutable.value = mutable.value.copy(selectedArtist = detail.artist,
                     artistSongs = (if (reset) detail.songs else mutable.value.artistSongs + detail.songs).distinctBy { it.id },
                     artistLoading = false, artistLoadingMore = false, artistHasMore = detail.hasMore,
-                    artistNotice = if (detail.capped) ClientNotice.PAGE_LIMIT else null)
+                    artistNotice = if (detail.capped) ClientNotice.PAGE_LIMIT else null,
+                    artistAlbums = if (selected.id != null) detail.albums else mutable.value.artistAlbums,
+                    artistAlbumsLoading = if (selected.id != null) false else mutable.value.artistAlbumsLoading,
+                    artistAlbumsLoadingMore = if (selected.id != null) false else mutable.value.artistAlbumsLoadingMore,
+                    artistAlbumsHasMore = if (selected.id != null) false else mutable.value.artistAlbumsHasMore)
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 if (valid(ticket, connection) && revision == artistRevision) mutable.value = mutable.value.copy(
@@ -1065,6 +1175,7 @@ class ClientViewModel(
     private fun loadArtistAlbums(reset: Boolean) {
         val connection = current() ?: return
         val selected = mutable.value.selectedArtist ?: return
+        if (selected.id != null) return
         val ticket = identity
         val revision = ++artistAlbumsRevision
         val nextOffset = if (reset) 0 else artistAlbumsOffset
@@ -1166,21 +1277,29 @@ class ClientViewModel(
         }
     }
 
-    private fun mergePlaylist(playlist: PlaylistSummary) {
+    private fun mergePlaylist(playlist: PlaylistSummary): Boolean {
+        if (playlist.kind == "favorite") {
+            if (!rememberFavoriteSummary(playlist)) return false
+        } else if (playlist.id == knownFavoriteSummary?.id) return false
         val snapshot = mutable.value
         val exists = snapshot.playlists.any { it.id == playlist.id }
+        val completeFavorite = playlist.kind != "favorite" || knownFavoriteDetail?.playlist?.revision == playlist.revision
         mutable.value = snapshot.copy(playlists = if (exists)
             snapshot.playlists.map { if (it.id == playlist.id) playlist else it } else snapshot.playlists + playlist,
-            selectedPlaylist = if (snapshot.selectedPlaylist?.id == playlist.id) playlist else snapshot.selectedPlaylist)
+            selectedPlaylist = if (snapshot.selectedPlaylist?.id == playlist.id && completeFavorite) playlist else snapshot.selectedPlaylist)
+        return true
     }
 
-    private fun publishPlaylist(detail: PlaylistDetail) {
-        mergePlaylist(detail.playlist)
+    private fun publishPlaylist(detail: PlaylistDetail, notifySystem: Boolean = true): PlaylistDetail? {
+        if (detail.playlist.kind == "favorite") return publishFavorites(detail, notifySystem)
+        if (!mergePlaylist(detail.playlist)) return null
         if (mutable.value.selectedPlaylist?.id == detail.playlist.id) mutable.value = mutable.value.copy(
             selectedPlaylistEntries = detail.entries, playlistSongs = detail.songs,
             playlistLoading = false, playlistNotice = null)
-        if (detail.playlist.kind == "favorite") publishFavorites(detail)
+        return detail
     }
+
+
 
     private fun PlaylistMutationResult.update() = LibraryUpdate(playlist, detail, shelf,
         complete = outcome == "applied" || outcome == "noop")
@@ -1311,13 +1430,16 @@ class ClientViewModel(
         playJob?.cancel()
         playJob = viewModelScope.launch {
             try {
-                val detail = withContext(ioDispatcher) { connection.api.playlist(playlist.id) }
+                val received = withContext(ioDispatcher) { connection.api.playlist(playlist.id) }
                 if (!valid(ticket, connection) || revision != playRevision) return@launch
-                publishPlaylist(detail)
-                if (detail.songs.isEmpty()) return@launch
+                val detail = if (received.playlist.kind == "favorite")
+                    favoriteForPlayback(connection, received, ticket, revision) else publishPlaylist(received)
+                if (detail == null || detail.songs.isEmpty()) return@launch
                 connectPlayer(connection)
-                if (valid(ticket, connection) && revision == playRevision)
-                    player.play(detail.songs, 0, shuffle)
+                if (valid(ticket, connection) && revision == playRevision) {
+                    val latest = if (received.playlist.kind == "favorite") currentFavoriteDetail() ?: throw ApiFailure(Failure.REQUEST) else detail
+                    if (latest.songs.isNotEmpty()) player.play(latest.songs, 0, shuffle)
+                }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 if (valid(ticket, connection) && revision == playRevision)
@@ -1458,6 +1580,8 @@ class ClientViewModel(
     override fun cycleRepeat() = player.cycleRepeat()
     override fun selectQueueItem(index: Int) { beginPlaybackCommand(); playJob?.cancel(); player.select(index) }
     override fun retryPlayback() = player.retry()
+    fun saveNavigationState() { current()?.let { navigation.save(it, mutable.value) } }
+
     fun setUiVisible(visible: Boolean) {
         player.setUiVisible(visible)
         if (visible && current() != null && discoveryCheckedDate != today()) loadDiscovery(false)

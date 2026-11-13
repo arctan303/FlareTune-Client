@@ -5,6 +5,10 @@
     <string name="ft_library_play_next">Play next</string>
     <string name="ft_library_enqueue">Add to queue</string>
     <string name="ft_library_add_to_playlist">Add to playlist</string>
+    <string name="ft_library_quick_next">Play next</string>
+    <string name="ft_library_quick_playlist">Add to playlist</string>
+    <string name="ft_library_quick_favorite">Favorite</string>
+    <string name="ft_library_quick_favorited">Favorited</string>
     <string name="ft_library_view_artist">View artist</string>
     <string name="ft_library_view_album">View album</string>
     <string name="ft_library_remove_song">Remove from this playlist</string>

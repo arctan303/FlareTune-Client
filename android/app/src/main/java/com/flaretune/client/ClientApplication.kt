@@ -29,6 +29,7 @@ class ClientApplication : Application() {
             scope.launch { manager.invalidations.collect { playbackRuntime.clear() } }
         }
     }
+    val systemMediaFavorites by lazy { com.flaretune.client.data.SystemMediaFavoriteChanges() }
     val coverImageProcessor by lazy { com.flaretune.client.data.AndroidCoverImageProcessor(this) }
     val translationPreferences by lazy { AndroidTranslationPreferences(this) }
     val history by lazy { PlaybackHistoryRepository(AndroidPlaybackHistoryStore(this), scope) }

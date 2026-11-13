@@ -122,7 +122,9 @@
     <string name="ft_artist_label">Artist</string>
     <string name="ft_playlist_label">Playlist</string>
     <string name="ft_see_all">See all</string>
-    <string name="ft_search_history_terms">Search terms</string>
-    <string name="ft_search_history_direct">Quick jump</string>
     <string name="ft_album_label">Album</string>
+    <string name="ft_interlude_progress">Interlude stage %1$d</string>
+    <string name="ft_interlude_dot_stage_1">Jump to interlude stage 1</string>
+    <string name="ft_interlude_dot_stage_2">Jump to interlude stage 2</string>
+    <string name="ft_interlude_dot_stage_3">Jump to final interlude stage</string>
 </resources>

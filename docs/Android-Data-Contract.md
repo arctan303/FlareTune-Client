@@ -172,6 +172,8 @@ setPlaylistCover(playlist,sourceUri)只接系统照片选择器临时content URI
 
 ## 11. 检索、发现、历史与统计
 
+dev.7与Web的catalogRead/musicSource链路对齐：Artist新增默认兼容的id/knownSongCount/knownAlbumCount，Album新增knownTrackCount，ArtistDetail新增albums。外部歌手/专辑ID是宿主返回的完整opaque ID，UI把原Artist/Album交给actions，不能用显示名称重新构造而丢id。最近搜索/页面恢复也保留来源ID，同名本地与外部行有独立key。known*为null就是未知，不把0或已加载首批数量伪装成总量；旧Int字段保留仅供源码兼容，真实展示消费known*。外部歌手详情使用返回的albums，本地歌手继续原本的分页专辑查询。
+
 - 三类检索：歌曲原query/songs；歌手artists/artistQuery/artistsLoading*；专辑searchAlbums/albumSearchQuery/albumSearchLoading*，各自错误/分页互不覆盖。动作refreshArtists/loadMoreArtists、searchAlbums/loadMoreSearchAlbums。本地目录songSort=asc|desc只读切换收录顺序，不永久改曲库。
 - 歌手详情selectedArtist、artistSongs、artistAlbums及各自Loading/More/HasMore/Notice；openArtist/closeArtist、loadMoreArtistSongs/loadMoreArtistAlbums。署名拆分沿Web规则，专辑用真实opaque ID，不自造ID。
 - discoverySongs/spotlightArtist/discoveryLoading/Notice，refreshDiscovery消费已有random/spotlight宿主接口；当日账号+实例metadata缓存先重解析当前媒体，刷新有Web同类冷却。不是新增AI或插件推荐算法。
@@ -185,3 +187,13 @@ setPlaylistCover(playlist,sourceUri)只接系统照片选择器临时content URI
 ## 12. 当前补全验收边界
 
 dev.4/code4补全已通过本机验证并覆盖安装；后续隔离的dev.5/code5修复已通过255项测试、构建与Lint（0错），2026-11-13覆盖安装并回读版本/摘要一致。随后用户要求双方合并并确认Gemini停写，dev.6/code6已整合其11文件前端快照，258项测试、构建及Lint0错误，已覆盖平板并回读版本/摘要一致。后续双方以共享工程同一分支提交为基线，由用户调度，详见[播放器歌词修复](tasks/android-player-lyrics-20261113.md)。挂机期间禁止自动覆盖的限制适用于此前开发阶段；本次安装不等同全部真机功能验收，也不以云端私人数据写入代替本地TLS/状态/播放器/Compose测试。当前实现、失败修复、独立复核、最终APK摘要和备份由[补全任务](tasks/android-listening-capabilities-20261112.md)统一记账；不要把默认空actions或单纯编译通过当成功能力。
+
+## 13. 页面恢复与系统媒体（dev.7）
+
+主入口singleTask配合媒体PendingIntent的CLEAR_TOP/SINGLE_TOP，返回现有任务不创建首页副本。Android SavedStateHandle只存同origin/account身份hash对应的路由、检索/筛选及详情ID，详情重新读取，不存URL/凭据/Song/resultRef；退出/切号/改密清除。ClientUiState.navigationIdentity用于壳层恢复隔离；playbackReady默认true保持fixture兼容，真实VM初始false，连接/恢复发起后true，queueRestoring覆盖异步磁盘恢复。ClientApp在RESTORING或媒体恢复中保留保存的面板，确认恢复结束且为空才关闭，后续新播放不会突然打开旧面板。
+
+系统模式与App语义相同：顺序(false,OFF)→列表(false,ALL)→单曲(false,ONE)→随机(true,OFF)；shuffle优先显示，修改同一Player并沿原服务持久化。标准三键继续发布，两个custom按钮用Media3 preferences，Android/OEM决定最终布局。收藏写入绑定真实UID/当前连接/曲目命令，后台无Activity也可用，失败保留真实状态与重试，只有确认读回后才成功。
+
+Application级SystemMediaFavoriteChanges仅内存传播真实完整detail，VM/UI与Service双向同步。最高favorite摘要与完整成员按当前ActiveConnection隔离、revision单调；旧列表/详情/null/旧事件不能回滚新确认状态，明确playFavorites不被被动刷新取消。缺少达到最新摘要revision的完整成员时有界重读一次，仍不足明确失败，不混用新revision与旧members。
+
+本轮318项、R2聚焦复核、设备安装与实际系统custom动作回读见[任务](tasks/android-lifecycle-media-20261113.md)。不以本机测试冒称所有OEM布局、真实账户写入或所有前后台杀进程策略已验收。

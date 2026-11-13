@@ -1620,7 +1620,7 @@ private fun AlbumScreen(state: ClientUiState, actions: ClientActions, loader: Im
         } else {
             null
         },
-        metaLine = pluralStringResource(R.plurals.ft_track_count, album.trackCount, album.trackCount),
+        metaLine = album.knownTrackCount?.let { pluralStringResource(R.plurals.ft_track_count, it, it) }.orEmpty(),
         coverUrl = album.coverUrl ?: state.albumSongs.firstOrNull { !it.coverUrl.isNullOrBlank() }?.coverUrl,
         fallbackIcon = ClientIcons.Disc,
         loader = loader,

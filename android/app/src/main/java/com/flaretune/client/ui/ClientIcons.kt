@@ -171,6 +171,18 @@ object ClientIcons {
         curveTo(2f, 2f, 9f, 1f, 12f, 6f); curveTo(15f, 1f, 22f, 2f, 22f, 7.5f)
         curveTo(22f, 13f, 15f, 18f, 12f, 21f); close()
     }
+    val HeartOutlined = lines("HeartOutlined") {
+        moveTo(12f, 20.5f); curveTo(9.2f, 17.8f, 2.5f, 13f, 2.5f, 7.8f)
+        curveTo(2.5f, 2.8f, 9f, 1.8f, 12f, 6.4f); curveTo(15f, 1.8f, 21.5f, 2.8f, 21.5f, 7.8f)
+        curveTo(21.5f, 13f, 14.8f, 17.8f, 12f, 20.5f); close()
+    }
+    val PlaylistAdd = lines("PlaylistAdd") {
+        moveTo(3f, 6f); lineTo(16f, 6f)
+        moveTo(3f, 11f); lineTo(16f, 11f)
+        moveTo(3f, 16f); lineTo(11f, 16f)
+        moveTo(17f, 12.5f); lineTo(17f, 19.5f)
+        moveTo(13.5f, 16f); lineTo(20.5f, 16f)
+    }
     val Star = lines("Star") {
         moveTo(12f, 3f); lineTo(14.8f, 8.6f); lineTo(21f, 9.5f)
         lineTo(16.5f, 13.9f); lineTo(17.6f, 20.1f); lineTo(12f, 17.2f)
@@ -248,9 +260,9 @@ object ClientIcons {
         curveTo(15.87f, 13f, 19f, 16.13f, 19f, 20f)
     }
     val More = filled("More") {
-        for (x in listOf(5f, 12f, 19f)) {
-            moveTo(x + 1.5f, 12f); curveTo(x + 1.5f, 14f, x - 1.5f, 14f, x - 1.5f, 12f)
-            curveTo(x - 1.5f, 10f, x + 1.5f, 10f, x + 1.5f, 12f); close()
+        for (y in listOf(5f, 12f, 19f)) {
+            moveTo(13.5f, y); curveTo(13.5f, y + 2f, 10.5f, y + 2f, 10.5f, y)
+            curveTo(10.5f, y - 2f, 13.5f, y - 2f, 13.5f, y); close()
         }
     }
     val VolumeLow = lines("VolumeLow") {

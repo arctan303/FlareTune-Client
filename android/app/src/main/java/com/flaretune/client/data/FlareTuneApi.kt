@@ -378,14 +378,22 @@ class FlareTuneApi(val network: SessionNetwork) : AccountApi {
     override fun artist(name: String, offset: Int): ArtistDetail {
         checkOffset(offset)
         val artistName = catalogName(name) ?: throw ApiFailure(Failure.REQUEST)
+        val external = validYouTubeArtistId(artistName)
+        if (artistName.startsWith("yt:") && !external) throw ApiFailure(Failure.REQUEST)
         val url = address.endpoint("/api/artists").newBuilder().addPathSegment(artistName)
             .addQueryParameter("limit", "50").addQueryParameter("offset", offset.toString()).build()
         val data = catalogData(request(url))
-        if (requiredString(data, "name") != artistName) invalidResponse()
         val artist = parseArtist(data)
+        if (external) {
+            if (artist.id != artistName) invalidResponse()
+        } else if (artist.id != null || artist.name != artistName) invalidResponse()
         val more = data.opt("hasMore") as? Boolean ?: invalidResponse()
+        val albums = if (external && data.has("albums")) {
+            val rows = data.optJSONArray("albums") ?: invalidResponse()
+            (0 until rows.length()).map { parseAlbum(rows.optJSONObject(it) ?: invalidResponse()) }
+        } else emptyList()
         return ArtistDetail(artist, parseSongs(data.optJSONArray("songs") ?: invalidResponse()), offset + 50,
-            more && offset + 50 <= 2000, more && offset + 50 > 2000)
+            more && offset + 50 <= 2000, more && offset + 50 > 2000, albums)
     }
 
     override fun browseAlbums(query: String, offset: Int, language: String, artist: String?): AlbumPage {
@@ -548,8 +556,22 @@ class FlareTuneApi(val network: SessionNetwork) : AccountApi {
             url.username.isNotEmpty() || url.password.isNotEmpty()) invalidResponse()
         return url.toString()
     }
-    private fun parseArtist(data: JSONObject): Artist = Artist(requiredString(data, "name"), requiredInt(data, "songCount"),
-        nonNegativeInt(data, "albumCount", 0), nullableString(data, "photoUrl")?.let(address::media), nullableString(data, "coverUrl")?.let(address::media))
+    private fun validYouTubeArtistId(id: String) = id.matches(Regex("yt:artist:UC[A-Za-z0-9_-]{1,126}"))
+    private fun validYouTubeAlbumId(id: String) = id.matches(Regex("yt:album:MPREb_[A-Za-z0-9_-]{1,122}"))
+    private fun nullableCount(data: JSONObject, field: String): Int? =
+        if (!data.has(field) || data.isNull(field)) null else requiredInt(data, field)
+
+    private fun parseArtist(data: JSONObject): Artist {
+        val id = nullableString(data, "id")
+        val source = nullableString(data, "source")
+        val external = id?.startsWith("yt:") == true || source == "youtube"
+        if (external && (id == null || !validYouTubeArtistId(id) || (source != null && source != "youtube"))) invalidResponse()
+        val songCount = if (external) nullableCount(data, "songCount") else requiredInt(data, "songCount")
+        val albumCount = if (external) nullableCount(data, "albumCount") else nonNegativeInt(data, "albumCount", 0)
+        return Artist(requiredString(data, "name"), songCount ?: 0, albumCount ?: 0,
+            nullableString(data, "photoUrl")?.let(address::media), nullableString(data, "coverUrl")?.let(address::media),
+            id = id.takeIf { external }, knownSongCount = songCount, knownAlbumCount = albumCount)
+    }
     private fun checkOffset(offset: Int) { if (offset !in 0..2000) throw ApiFailure(Failure.REQUEST) }
     private fun catalogName(raw: String): String? = raw.trim().takeIf { it.isNotEmpty() }?.also {
         if (it.length > 300 || it.any { char -> char.code < 32 || char.code == 127 }) throw ApiFailure(Failure.REQUEST)
@@ -659,14 +681,19 @@ class FlareTuneApi(val network: SessionNetwork) : AccountApi {
             nonNegativeLong(json, "createdAt", 0), nonNegativeLong(json, "updatedAt", 0), coverRevision = nonNegativeLong(json, "coverRevision", 0))
     }
 
-    private fun validAlbumId(id: String): Boolean = id.length in 1..3200 && id.matches(Regex("[A-Za-z0-9_-]+"))
+    private fun validAlbumId(id: String): Boolean = validYouTubeAlbumId(id) || (id.length in 1..3200 && id.matches(Regex("[A-Za-z0-9_-]+")))
 
     private fun parseAlbum(json: JSONObject): Album {
         val id = requiredString(json, "id")
         val title = requiredString(json, "title").trim()
-        val artist = requiredString(json, "artist").trim()
-        if (!validAlbumId(id) || title.isBlank() || artist.isBlank()) invalidResponse()
-        return Album(id, title, artist, nullableString(json, "coverUrl")?.let(address::media), nonNegativeInt(json, "trackCount", 0))
+        val source = nullableString(json, "source")
+        val external = id.startsWith("yt:") || source == "youtube"
+        if (external && (!validYouTubeAlbumId(id) || (source != null && source != "youtube"))) invalidResponse()
+        val artist = if (external) nullableString(json, "artist")?.trim().orEmpty() else requiredString(json, "artist").trim()
+        if (!validAlbumId(id) || title.isBlank() || (!external && artist.isBlank())) invalidResponse()
+        val count = if (external) nullableCount(json, "trackCount") ?: nullableCount(json, "songCount")
+            else if (json.has("trackCount")) requiredInt(json, "trackCount") else null
+        return Album(id, title, artist, nullableString(json, "coverUrl")?.let(address::media), count ?: 0, knownTrackCount = count)
     }
 
     private fun parseSongs(array: JSONArray): List<Song> = (0 until array.length()).mapNotNull { index ->

@@ -108,7 +108,10 @@ class AndroidPlaybackGateway(private val context: Context, private val runtime: 
     override fun removeQueueItem(index: Int) { controller?.let { removePlayerQueueItem(it, index) } }
     override fun moveQueueItem(fromIndex: Int, toIndex: Int) { controller?.let { movePlayerQueueItem(it, fromIndex, toIndex) } }
     override fun restoreQueue(songs: List<Song>, currentIndex: Int, positionMs: Long, shuffle: Boolean, repeatMode: Int) {
-        controller?.let { restorePlayerQueue(it, songs.map(Song::item), currentIndex, positionMs, shuffle, repeatMode) }
+        controller?.let {
+            restorePlayerQueue(it, songs.map(Song::item), currentIndex, positionMs, shuffle, repeatMode)
+            update(it)
+        }
     }
     override fun retry() { controller?.run { prepare(); play() } }
     override fun stopAndClear() {

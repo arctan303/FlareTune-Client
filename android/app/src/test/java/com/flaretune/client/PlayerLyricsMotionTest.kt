@@ -84,9 +84,9 @@ class PlayerLyricsMotionTest {
         } }
         settle()
     }
-    private fun settle(ms: Long = 360) {
+    private fun settle(ms: Long = 750) {
         // Manual Compose frames and Android layout/draw are separate under Robolectric.
-        // Drain layout between frames so coroutine scrolls see the latest measured items.
+        // Drain layout between frames so coroutine scrolls and ~600ms springs reach equilibrium.
         repeat(((ms+15)/16).toInt()) { rule.mainClock.advanceTimeByFrame(); rule.waitForIdle() }
     }
     private fun activate(index: Int) { rule.runOnIdle { lyrics = lyrics.copy(activeLyricIndex=index) }; settle() }
@@ -221,6 +221,140 @@ class PlayerLyricsMotionTest {
         rule.onNodeWithTag("player_generate_translation").assertExists()
         rule.onNodeWithText("Translation could not be loaded. The original lyrics are still available.").assertExists()
         rule.onNodeWithText("Secure storage is unavailable. Please try again.").assertDoesNotExist()
+    }
+    @Test fun fullScreenPlayerKeepsScreenAwakeWhileMountedAndRestoresOnDispose() {
+        var visible by mutableStateOf(true)
+        rule.mainClock.autoAdvance = false
+        rule.setContent { FlareTuneTheme {
+            val hostView = LocalView.current
+            SideEffect { contentView = hostView }
+            if (visible) {
+                NowPlayingScreen(
+                    state = PlaybackSnapshot(current, listOf(current), 0, false, positionMs = 0, durationMs = 180000),
+                    lyricState = lyrics, translationEnabled = translated, actions = actions,
+                    imageLoader = null, onClose = {}, onQueue = {},
+                )
+            }
+        } }
+        settle()
+        rule.runOnIdle { assertTrue(contentView.keepScreenOn) }
+        rule.runOnIdle { visible = false }
+        settle()
+        rule.runOnIdle { assertFalse(contentView.keepScreenOn) }
+    }
+    @Test fun longMetadataStaysSingleLineWithoutShiftingControlsOrCollapsingEdges() {
+        render()
+        val shortPlayTop = rule.onNodeWithTag("player_play").fetchSemanticsNode().boundsInRoot.top
+        val shortSeekTop = rule.onNodeWithTag("player_seek").fetchSemanticsNode().boundsInRoot.top
+        val modeBounds = rule.onNodeWithTag("player_mode").fetchSemanticsNode().boundsInRoot
+        val queueBounds = rule.onNodeWithTag("open_queue").fetchSemanticsNode().boundsInRoot
+        val moreBounds = rule.onNodeWithTag("player_more").fetchSemanticsNode().boundsInRoot
+        assertEquals("Right edge icons must align vertically", queueBounds.center.x, moreBounds.center.x, 3f)
+        assertTrue("Edge buttons must preserve >=48px touch target", modeBounds.width >= 48f && queueBounds.width >= 48f)
+
+        rule.runOnIdle {
+            current = song.copy(
+                id = "very-long",
+                title = "An Extraordinarily Long Song Title That Would Have Wrapped Across Multiple Lines And Shifted Everything Before",
+                artist = "An Exceptionally Verbose Artist Ensemble Name",
+                album = "Deluxe Remastered Special Collectors Edition Soundtrack Volume Two",
+            )
+        }
+        settle()
+        val longPlayTop = rule.onNodeWithTag("player_play").fetchSemanticsNode().boundsInRoot.top
+        val longSeekTop = rule.onNodeWithTag("player_seek").fetchSemanticsNode().boundsInRoot.top
+        assertEquals("Single-line marquee must keep play button top fixed", shortPlayTop, longPlayTop, 1f)
+        assertEquals("Single-line marquee must keep seek bar top fixed", shortSeekTop, longSeekTop, 1f)
+    }
+    @Test fun interludeDotsFollowWebTimingContractAndSeekToStageOnTap() {
+        val gapLines = listOf(
+            LyricLine(
+                text = "Opening verse",
+                timeSeconds = 2.0,
+                endTimeSeconds = 5.0,
+                words = listOf(LyricWord("Opening", 2.0, 3.5), LyricWord("verse", 3.6, 5.0)),
+            ),
+            LyricLine(
+                text = "After interlude",
+                timeSeconds = 17.0,
+                endTimeSeconds = 20.0,
+                words = listOf(LyricWord("After", 17.0, 18.4), LyricWord("interlude", 18.5, 20.0)),
+            ),
+        )
+        // Line-only short intro (<12s) stays hidden; exact word interlude [5.0, 15.2] activates and computes dot progress.
+        val shortLineIntro = computeInterludeUiState(
+            currentTimeSeconds = 1.0,
+            lines = listOf(LyricLine("Line intro", timeSeconds = 9.0)),
+            activeIndex = -1,
+            lineIndex = 0,
+            userScrolling = false,
+            syncMode = "line",
+        )
+        assertFalse(shortLineIntro.isInterlude)
+
+        val midBetween = computeInterludeUiState(
+            currentTimeSeconds = 10.1,
+            lines = gapLines,
+            activeIndex = 0,
+            lineIndex = 0,
+            userScrolling = false,
+            syncMode = "word",
+        )
+        assertTrue(midBetween.isInterlude)
+        assertEquals(InterludeDotFillState.COMPLETE, midBetween.dotStates[0])
+        assertEquals(InterludeDotFillState.FILLING, midBetween.dotStates[1])
+        assertEquals(InterludeDotFillState.PENDING, midBetween.dotStates[2])
+
+        lyrics = LyricState(
+            songId = song.id,
+            status = LyricStatus.READY,
+            lines = gapLines,
+            activeLyricIndex = 0,
+            syncMode = "word",
+        )
+        rule.mainClock.autoAdvance = false
+        rule.setContent { FlareTuneTheme {
+            NowPlayingScreen(
+                state = PlaybackSnapshot(current, listOf(current), 0, false, positionMs = 10100L, durationMs = 180000),
+                lyricState = lyrics, translationEnabled = false, actions = actions,
+                imageLoader = null, onClose = {}, onQueue = {},
+            )
+        } }
+        settle()
+        rule.onNodeWithTag("player_interlude_dots").assertExists()
+        rule.onNodeWithTag("interlude_dot_1").performClick()
+        rule.runOnIdle {
+            val expectedMs = (midBetween.dotTimesSeconds!![1] * 1000.0).toLong()
+            assertEquals(expectedMs, lastSeek)
+        }
+    }
+    @Test fun musiverPresentationTiersAndDecayingStaggerFollowMotionContract() {
+        val active = resolveLyricPresentation(index = 4, activeIndex = 4, lineCount = 12, userScrolling = false)
+        assertEquals(1.00f, active.opacity, 1e-4f)
+        assertEquals(1.00f, active.scale, 1e-4f)
+        assertEquals(0f, active.blurRadius.value, 1e-4f)
+        assertEquals(0f, active.verticalOffset.value, 1e-4f)
+
+        val above1 = resolveLyricPresentation(index = 3, activeIndex = 4, lineCount = 12, userScrolling = false)
+        assertEquals(0.78f, above1.opacity, 1e-4f)
+        assertEquals(0.985f, above1.scale, 1e-4f)
+        assertEquals(0.5f, above1.blurRadius.value, 1e-4f)
+        assertEquals(-2f, above1.verticalOffset.value, 1e-4f)
+
+        val below3 = resolveLyricPresentation(index = 8, activeIndex = 4, lineCount = 12, userScrolling = false)
+        assertEquals(0.34f, below3.opacity, 1e-4f)
+        assertEquals(0.935f, below3.scale, 1e-4f)
+        assertEquals(2.2f, below3.blurRadius.value, 1e-4f)
+        assertEquals(16f, below3.verticalOffset.value, 1e-4f)
+
+        val d0 = computeStaggerDelayMs(4, 4)
+        val d1 = computeStaggerDelayMs(5, 4)
+        val d2 = computeStaggerDelayMs(6, 4)
+        val d3 = computeStaggerDelayMs(7, 4)
+        assertEquals(0, d0)
+        assertEquals(50, d1)
+        assertEquals(98, d2)
+        assertTrue("Downstream stagger step must decay gently", (d3 - d2) < (d2 - d1))
     }
     private fun screenshot(name: String) {
         settle(800)

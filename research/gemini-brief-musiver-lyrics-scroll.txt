@@ -1,0 +1,240 @@
+音流 / Musiver 2.0.1-beta.15 · Android 客户端
+全屏播放页 · 歌词滚动 · 实现事实
+
+=====================================================================
+0. 这份材料是什么 / 怎么来的
+=====================================================================
+
+对象：音流（Musiver），包名 cn.musiver.android，版本 2.0.1-beta.15。
+     Kotlin + Jetpack Compose 原生客户端（2.0 是重写版，1.x 是 Flutter）。
+来源：真机 adb pull 的已安装 base.apk，classes.dex / classes2.dex 共 12315 个类。
+
+取证方式：直接读 smali 字节码。R8 混淆了类名与方法名，但
+  字符串常量、Kotlin data class 的 toString 片段、枚举字面量、
+  浮点常量、以及 Compose 库保留的方法名（spring / tween / animateFloatAsState）
+  都完整保留，所以下面的结论都能落到具体指令或具体数值上。
+
+标注约定：[DEX] = 字节码直读；[推断] = 由字节码结构推出、无直接常量佐证。
+最后一节列没能确定的部分，不要把那节当已知。
+
+本文只讲**滚动**（位置怎么算、偏移怎么约束）。
+换行时的弹性动画（spring 参数、逐行错峰、行呈现档位、逐字脉冲）另见
+gemini-brief-musiver-lyrics-line-advance.txt。
+
+本主题涉及的 R8 类名映射：
+  Lw24;  = 歌词滚动状态容器
+  Ls44;  = 歌词面板组合函数集合
+  Lg89;  = 歌词弹簧布局求解器
+  Ls24;  = LyricsSpringLayoutInput
+  Lt24;  = LyricsSpringLayoutItem
+  Lu24;  = LyricsSpringLayoutTarget
+  Ls14;  = LyricsLinePresentation
+  Ln24;  = LyricsScrollOffsetLimits
+
+
+=====================================================================
+1. 先说结论
+=====================================================================
+
+音流的歌词滚动不是 LazyColumn + animateScrollToItem，
+而是一套自己写的"弹簧布局"：
+
+  每一帧，根据当前滚动偏移，把所有行重新解算成一组目标值
+      LyricsSpringLineTarget(index, y, height, scale, delay)
+  求解器是纯函数，输入一个不可变 Input，输出一个不可变 List。
+  滚动偏移本身是**瞬时置位**的，不是 Animatable 平滑过渡。
+  视觉上的顺滑来自每行的 y / scale / blur 各自是独立动画状态，
+  朝新目标收敛（见另一份文档）。
+
+三个关键数字：
+  锚点位置  0.35   （当前行中心落在容器高度的 35% 处，不是居中）
+  死区      0.5    （像素，差不到半像素就不驱动）
+  逐行延迟  0.05s 起，过锚点后步长除以 1.05 递减
+
+
+=====================================================================
+2. 数据结构（字段名从 toString 字面量完整读出）
+=====================================================================
+
+  LyricsSpringLayoutInput(
+      items           : List<LyricsSpringLayoutItem>,
+      containerHeight : Float,
+      alignOffset     : Int,      // 锚点行的 index
+      alignPosition   : Float,    // 锚点行中心落在容器高度的哪个比例
+      scrollOffset    : Float,
+      lineSpacing     : Float,
+      staggerEnabled  : Boolean)
+
+  LyricsSpringLayoutItem(
+      index        : Int,
+      height       : Float,
+      presentation : LyricsLinePresentation)
+
+  LyricsSpringLayoutTarget(
+      index  : Int,
+      y      : Float,     // 这一行的目标纵坐标（绝对坐标，不是相对偏移）
+      height : Float,
+      scale  : Float,
+      delay  : Float)     // 这一行动画的启动延迟，单位秒
+
+  LyricsScrollOffsetLimits(min : Float, max : Float)
+
+  LyricsLinePresentation(opacity, scale, blurRadius, verticalOffset, isHighlighted)
+
+这些全是 Kotlin data class，toString 里的字段名和顺序是原样保留的，
+所以上面的字段名不是猜的。
+
+
+=====================================================================
+3. 求解算法
+=====================================================================
+
+求解函数把一个 Input 解成 List<Target>，逻辑可逐条还原： [DEX]
+
+    n = items.size
+    if (n == 0 || containerHeight <= 0f) return emptyList()
+
+    anchor = alignOffset.coerceIn(0, n - 1)
+
+    // 从锚点往上累加，得到锚点行"上方"的总高度
+    acc = -scrollOffset
+    for (i in 0 until anchor) acc -= items[i].height + lineSpacing
+
+    // 锚点行的中心对齐到 35% 高度处
+    y = containerHeight * alignPosition + acc - items[anchor].height / 2f
+
+    // 往下铺
+    step  = if (staggerEnabled) 0.05f else 0f
+    delay = 0f
+    for (i in 0 until n) {
+        out += Target(index  = items[i].index,
+                      y      = y,
+                      height = items[i].height,
+                      scale  = items[i].presentation.scale,
+                      delay  = delay)
+        y += items[i].height + lineSpacing
+        if (staggerEnabled && y >= 0f) {
+            delay += step                   // 每行 +0.05 秒
+            if (i >= anchor) step /= 1.05f  // 过了锚点，步长逐行衰减
+        }
+    }
+
+  两个容易看漏的细节：
+  · 延迟不是线性累加。过了锚点之后每行增量都除以 1.05，
+    所以远处行的延迟会收敛，不会越拉越开。 [DEX]
+  · 延迟只在 y >= 0（行已经落到容器顶部以下）时才累加。 [DEX]
+
+  延迟最终乘以 1000 转成毫秒、float-to-int 取整、下限钳到 0，
+  再交给每行的动画状态当启动延迟。 [DEX]
+
+  减掉半个锚点行高（height / 2f）是为了让**行中心**落在目标点上，
+  而不是行顶。
+
+
+=====================================================================
+4. 锚点比例是 0.35，不是 0.5
+=====================================================================
+
+构造 alignPosition 的那段指令里，常量是 0.35f（0x3EB33333）： [DEX]
+
+    alignPosition = if (containerHeight <= 0f) 0.35f
+                    else min(0.35f * containerHeight, 某个像素量) / containerHeight
+
+也就是当前行不垂直居中，而是落在容器高度的 35% 处（偏上），
+下面 65% 全是"还没唱到"的预览区。
+
+min() 那一层说明它还允许用像素量覆盖：取"35% 高度"和某个像素值中较小的，
+再除以高度还原成比例。这样在特别矮的容器里锚点不会贴到顶部。 [推断]
+
+
+=====================================================================
+5. 滚动偏移被 clamp 在一个区间里
+=====================================================================
+
+  LyricsScrollOffsetLimits(min, max)
+
+    first        = targets.first()
+    last         = targets.last()
+    anchorTarget = targets[anchor]
+
+    min = min(0f, first.y - anchorTarget.y)
+    max = max(0f, last.y + last.height - lineHeight / 2f)
+
+然后：target = 期望偏移.coerceIn(min, max) [DEX]
+
+含义：
+  · 不允许滚过第一行（min 不会大于 0）
+  · 不允许滚过最后一行，且留半行高度的余量
+  · 两侧都保留一个 0 的边界，保证空列表/单行时区间合法
+
+
+=====================================================================
+6. 死区：0.5 像素
+=====================================================================
+
+驱动函数里有一句提前返回： [DEX]
+
+    if (abs(target - current) < 0.5f) return false
+
+差不到半个像素就不启动动画。这是防止静止时每帧都在微调、
+让文字一直处于亚像素抖动状态。返回 false 同时告诉调用方
+"这一帧不需要重绘"。
+
+
+=====================================================================
+7. 偏移本身是瞬时置位，不是 Animatable
+=====================================================================
+
+滚动偏移存在一个 Parcelable 的 float 快照状态里：
+取值走 f()，赋值走 h(F)，两者都是即时的。 [DEX]
+
+它实现了 getValue / setValue、有 mergeRecords 一类的快照内部方法、
+并且是 Parcelable —— 也就是能被 saved state 恢复的 Compose 状态，
+不是 Animatable<Float>。
+
+所以"滚动"这个动作的真实观感是：
+**偏移瞬间跳到新值 → 每一行的渲染位置各自 spring 过去**。
+不是刚体平移，而是每行带惯性追过去。
+
+这一条是理解整套歌词手感的前提，别按 LazyColumn 的模型去套。
+
+
+=====================================================================
+8. 拖动与自动对齐
+=====================================================================
+
+  · 拖动时如果还没有手动锚点，直接把当前行设为锚点。 [DEX]
+  · 松手后滚动偏移归零，再按锚点重新解算一次。 [DEX]
+  · 用户滚动后有 2 秒防抖：delay(2000) 之后，
+    若"世代号"没被更新的操作替换，才把集合提交进状态。 [DEX]
+    世代号是个 Long，每次新操作都会让旧协程失效。
+  · 遥控器方向键也能滚（电视端）：
+    每步位移 = max(1.8 × 某基准值, 0.12 × 行高)。 [DEX]
+
+
+=====================================================================
+9. 只组合可见的行
+=====================================================================
+
+面板遍历行时，先用 target.y / target.height 与当前偏移、容器高度比较，
+把行分成"视口内 / 视口外"几种情况，只对可见的走完整组合。 [DEX]
+
+这是性能关键：歌词可能有几百行，但每帧只有十几行参与布局。
+配合第 6 节的死区，静止时整页几乎不重组。
+
+
+=====================================================================
+10. 没能确定的部分
+=====================================================================
+
+  · lineSpacing 的具体数值是调用方传进来的，没追到常量。
+  · 第 4 节 min() 那一层的"像素量"到底是什么
+    （顶部内边距？安全区？），只确认它参与取小，没还原出来源。
+  · 2 秒防抖之后提交的那个 Set 是"可见集合"还是"高亮集合"，
+    只确认它写进 Lw24;->c 这个状态里，没确认语义。
+  · 方向键滚动里 "1.8 × 某基准值" 的基准值是什么没追到。
+  · 上述数值都来自 Android 2.0.1-beta.15，iOS / 桌面端是否一致未验证。
+
+想补这些，唯一可靠的办法是真机录屏逐帧量：
+量一次换行前后每行的 y 曲线，能反推求解器的输入；
+量静止时的像素抖动，能验证 0.5 死区是否真的生效。

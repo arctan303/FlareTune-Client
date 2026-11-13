@@ -47,6 +47,19 @@ class LibraryDialogsTest {
         rule.runOnIdle { assertEquals("dismiss", calls.last()) }
     }
 
+    @Test fun songActionsHeaderShowsArtistDurationAndFavoriteSelectionState() {
+        var favorite by mutableStateOf(false)
+        rule.setContent {
+            FlareTuneTheme {
+                SongActionsSheet(track, favorite, false, null,
+                    { favorite = !favorite }, {}, {}, {}, {}, {}, {})
+            }
+        }
+        rule.onNodeWithText("The Slow Hours · 3:00").assertExists()
+        rule.onNodeWithTag("song_action_favorite").assertIsNotSelected().performClick()
+        rule.onNodeWithTag("song_action_favorite").assertIsSelected()
+    }
+
     @Test fun busyAndUnavailableSongActionsDoNotExposeFakePlayback() {
         var busy by mutableStateOf(false)
         var calls = 0

@@ -1,5 +1,6 @@
 package com.flaretune.client
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -7,6 +8,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.createSavedStateHandle
+import androidx.lifecycle.viewmodel.CreationExtras
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.flaretune.client.playback.AndroidPlaybackGateway
 import com.flaretune.client.ui.ClientApp
@@ -19,9 +22,9 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         val app = application as ClientApplication
         val factory = object : ViewModelProvider.Factory {
-            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+            override fun <T : ViewModel> create(modelClass: Class<T>, extras: CreationExtras): T {
                 @Suppress("UNCHECKED_CAST")
-                return ClientViewModel(app.connections, AndroidPlaybackGateway(app, app.playbackRuntime), history = app.history, queueRepository = app.queueRepository, translationPreferences = app.translationPreferences, coverImageProcessor = app.coverImageProcessor, searchHistoryStore = app.searchHistoryStore, discoveryCache = app.discoveryCache) as T
+                return ClientViewModel(app.connections, AndroidPlaybackGateway(app, app.playbackRuntime), history = app.history, queueRepository = app.queueRepository, translationPreferences = app.translationPreferences, coverImageProcessor = app.coverImageProcessor, searchHistoryStore = app.searchHistoryStore, discoveryCache = app.discoveryCache, savedStateHandle = extras.createSavedStateHandle(), systemMediaFavorites = app.systemMediaFavorites) as T
             }
         }
         model = ViewModelProvider(this, factory)[ClientViewModel::class.java]
@@ -29,6 +32,12 @@ class MainActivity : ComponentActivity() {
             val state by model.state.collectAsStateWithLifecycle()
             FlareTuneTheme { ClientApp(state, model, model.imageLoader) }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent) }
+    override fun onSaveInstanceState(outState: Bundle) {
+        model.saveNavigationState()
+        super.onSaveInstanceState(outState)
     }
 
     override fun onStart() { super.onStart(); model.setUiVisible(true) }

@@ -14,7 +14,7 @@ class PlaybackRuntime(
     val queueRepository: PlaybackQueueRepository? = null,
     val playEvents: com.flaretune.client.data.PlayEventRepository? = null,
 ) {
-    var connection: ActiveConnection? = null
+    @Volatile var connection: ActiveConnection? = null
         private set
     var imageLoader: ImageLoader? = null
         private set

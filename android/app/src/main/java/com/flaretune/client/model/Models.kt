@@ -31,6 +31,7 @@ data class Album(
     val artist: String,
     val coverUrl: String? = null,
     val trackCount: Int = 0,
+    val knownTrackCount: Int? = trackCount,
 )
 
 data class AlbumPage(

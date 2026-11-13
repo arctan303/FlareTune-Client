@@ -35,6 +35,8 @@ data class ClientUiState(
     val loadingMore: Boolean = false,
     val hasMore: Boolean = false,
     val destination: MainDestination = MainDestination.HOME,
+    val navigationIdentity: String? = null,
+    val playbackReady: Boolean = true,
     val albums: List<Album> = emptyList(),
     val albumsLoading: Boolean = false,
     val albumsLoadingMore: Boolean = false,

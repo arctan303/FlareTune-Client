@@ -154,7 +154,17 @@ class PlaybackServiceQueueTest {
         }
         val base = OkHttpClient.Builder().addInterceptor { throw AssertionError("No media/network request is allowed in this lifecycle test") }.build()
         val network = SessionNetwork(InstanceAddress.parse("https://music.example"), baseClient = base)
-        runtime.install(ActiveConnection(network, FlareTuneApi(network),
+        runtime.install(ActiveConnection(network, object : com.flaretune.client.data.AccountApi {
+            override fun songs(query: String, offset: Int): com.flaretune.client.model.SongPage = error("Unexpected songs read")
+            override fun favorites(): List<Song> = error("Unexpected legacy favorites read")
+            override fun changePassword(current: String, replacement: String) = error("Unexpected password write")
+            override fun logout() = error("Unexpected logout")
+            override fun playlists() = listOf(com.flaretune.client.model.PlaylistSummary("queue-favorite", "Favorites", "favorite"))
+            override fun playlist(id: String): com.flaretune.client.model.PlaylistDetail {
+                check(id == "queue-favorite")
+                return com.flaretune.client.model.PlaylistDetail(playlists().single(), emptyList())
+            }
+        },
             AuthSession(Account("queue-account", "listener", "Listener"), "fixture-csrf", false)))
         val controller = Robolectric.buildService(PlaybackService::class.java).create()
         val session = PlaybackService::class.java.getDeclaredField("mediaSession").run {

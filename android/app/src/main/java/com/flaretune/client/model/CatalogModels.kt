@@ -34,9 +34,13 @@ data class Artist(
     val albumCount: Int = 0,
     val photoUrl: String? = null,
     val coverUrl: String? = null,
+    val id: String? = null,
+    // Legacy Int fields remain source-compatible; render these nullable facts.
+    val knownSongCount: Int? = songCount,
+    val knownAlbumCount: Int? = albumCount,
 )
 data class ArtistPage(val artists: List<Artist>, val nextOffset: Int, val hasMore: Boolean, val total: Int = 0, val capped: Boolean = false)
-data class ArtistDetail(val artist: Artist, val songs: List<Song>, val nextOffset: Int, val hasMore: Boolean, val capped: Boolean = false)
+data class ArtistDetail(val artist: Artist, val songs: List<Song>, val nextOffset: Int, val hasMore: Boolean, val capped: Boolean = false, val albums: List<Album> = emptyList())
 data class SpotlightArtist(val artist: String, val songCount: Int, val songs: List<Song>, val photoUrl: String? = null, val coverUrl: String? = null)
 data class RankedSong(val song: Song, val playCount: Long, val lastPlayedAt: Long)
 data class PlayStats(

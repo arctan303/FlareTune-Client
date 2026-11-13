@@ -6,12 +6,14 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
@@ -28,7 +30,11 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -58,24 +64,145 @@ fun SongActionsSheet(
     onDismiss: () -> Unit,
     onRemoveFromPlaylist: (() -> Unit)? = null,
 ) {
+    val subtitle = remember(song.artist, song.durationSeconds) {
+        listOfNotNull(
+            song.artist.takeIf { it.isNotBlank() },
+            song.durationSeconds.takeIf { it > 0 }?.let { formatTime((it * 1000).toLong()) },
+        ).joinToString(" · ")
+    }
     LibrarySheet(busy, onDismiss, "song_actions_sheet") {
-        Text(song.title, style = MaterialTheme.typography.titleLarge, maxLines = 3, overflow = TextOverflow.Ellipsis)
-        if (song.artist.isNotBlank()) Text(song.artist, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(
+            Modifier.fillMaxWidth().padding(bottom = FlareTokens.SpaceXs),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(FlareTokens.SpaceSm),
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    song.title,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (subtitle.isNotBlank()) {
+                    Text(
+                        subtitle,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            ActionIcon(
+                icon = ClientIcons.Close,
+                description = stringResource(R.string.ft_close),
+                onClick = onDismiss,
+                enabled = !busy,
+                modifier = Modifier.testTag("song_actions_close"),
+            )
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
         notice?.let { Notice(it) }
-        LibraryActionRow(
-            if (favorite) R.string.ft_library_unfavorite else R.string.ft_library_favorite,
-            ClientIcons.Heart, !busy, "song_action_favorite", onToggleFavorite,
-        )
-        LibraryActionRow(R.string.ft_library_play_next, ClientIcons.Next, !busy && song.canPlay, "song_action_next", onPlayNext)
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = FlareTokens.SpaceXs),
+            horizontalArrangement = Arrangement.spacedBy(FlareTokens.SpaceMd),
+            verticalAlignment = Alignment.Top,
+        ) {
+            SongQuickActionTile(
+                label = stringResource(R.string.ft_library_quick_next),
+                icon = ClientIcons.Next,
+                enabled = !busy && song.canPlay,
+                tag = "song_action_next",
+                onClick = onPlayNext,
+                modifier = Modifier.weight(1f),
+            )
+            SongQuickActionTile(
+                label = stringResource(R.string.ft_library_quick_playlist),
+                icon = ClientIcons.PlaylistAdd,
+                enabled = !busy,
+                tag = "song_action_playlist",
+                onClick = onAddToPlaylist,
+                modifier = Modifier.weight(1f),
+            )
+            SongQuickActionTile(
+                label = stringResource(if (favorite) R.string.ft_library_quick_favorited else R.string.ft_library_quick_favorite),
+                icon = if (favorite) ClientIcons.Heart else ClientIcons.HeartOutlined,
+                enabled = !busy,
+                selected = favorite,
+                stateText = stringResource(if (favorite) R.string.ft_library_unfavorite else R.string.ft_library_favorite),
+                tag = "song_action_favorite",
+                onClick = onToggleFavorite,
+                modifier = Modifier.weight(1f),
+            )
+        }
         LibraryActionRow(R.string.ft_library_enqueue, ClientIcons.Queue, !busy && song.canPlay, "song_action_enqueue", onEnqueue)
-        LibraryActionRow(R.string.ft_library_add_to_playlist, ClientIcons.Library, !busy, "song_action_playlist", onAddToPlaylist)
-        if (song.artist.isNotBlank()) LibraryActionRow(R.string.ft_library_view_artist, ClientIcons.Music, !busy, "song_action_artist", onArtist)
-        if (song.album.isNotBlank()) LibraryActionRow(R.string.ft_library_view_album, ClientIcons.Library, !busy, "song_action_album", onAlbum)
+        if (song.artist.isNotBlank()) LibraryActionRow(R.string.ft_library_view_artist, ClientIcons.Artist, !busy, "song_action_artist", onArtist)
+        if (song.album.isNotBlank()) LibraryActionRow(R.string.ft_library_view_album, ClientIcons.Disc, !busy, "song_action_album", onAlbum)
         onRemoveFromPlaylist?.let {
-            LibraryActionRow(R.string.ft_library_remove_song, ClientIcons.Close, !busy, "song_action_remove", it)
+            LibraryActionRow(R.string.ft_library_remove_song, ClientIcons.Trash, !busy, "song_action_remove", it)
         }
         LibraryBusy(busy)
-        LibraryCloseButton(!busy, "song_actions_close", onDismiss)
+    }
+}
+
+@Composable
+private fun SongQuickActionTile(
+    label: String,
+    icon: ImageVector,
+    enabled: Boolean,
+    tag: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    selected: Boolean = false,
+    stateText: String? = null,
+) {
+    val tileShape = RoundedCornerShape(14.dp)
+    val containerColor = when {
+        !enabled -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val iconTint = when {
+        !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = .38f)
+        selected -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    val labelTint = when {
+        !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = .38f)
+        selected -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    Column(
+        modifier = modifier
+            .heightIn(min = FlareTokens.TouchTargetMin)
+            .clip(tileShape)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .semantics {
+                this.selected = selected
+                if (!stateText.isNullOrBlank()) stateDescription = stateText
+            }
+            .testTag(tag),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Surface(
+            color = containerColor,
+            shape = tileShape,
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(icon, contentDescription = null, modifier = Modifier.size(22.dp), tint = iconTint)
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            color = labelTint,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

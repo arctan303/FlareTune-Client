@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ft_system_order_sequential">Sequential play. Change playback order</string>
+    <string name="ft_system_order_repeat_all">Repeat all. Change playback order</string>
+    <string name="ft_system_order_repeat_one">Repeat one. Change playback order</string>
+    <string name="ft_system_order_shuffle">Shuffle. Change playback order</string>
+    <string name="ft_system_favorite_add">Add to favorites</string>
+    <string name="ft_system_favorite_remove">Remove from favorites</string>
+    <string name="ft_system_favorite_loading">Loading favorite status</string>
+    <string name="ft_system_favorite_saving">Updating favorites</string>
+    <string name="ft_system_favorite_retry_load">Retry loading favorite status</string>
+    <string name="ft_system_favorite_retry">Retry updating favorites</string>
+    <string name="ft_system_favorite_failed">Favorites could not be updated. Try again.</string>
+</resources>

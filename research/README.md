@@ -49,6 +49,8 @@
 | --- | --- |
 | **[SHARE.md](SHARE.md)** | **自包含简报：整份研究浓缩成一页，可直接给外部评审/AI** |
 | **[SHARE-am-player.md](SHARE-am-player.md)** | **自包含简报：Apple Music 播放页专题（背景/动效/歌词），可直接给外部评审/AI** |
+| **[gemini-brief-musiver-lyrics-scroll.txt](gemini-brief-musiver-lyrics-scroll.txt)** | **音流 2.0 歌词滚动：自研弹簧布局 / 0.35 锚点 / 偏移 clamp 与 0.5 死区（纯事实，可直接转交）** |
+| **[gemini-brief-musiver-lyrics-line-advance.txt](gemini-brief-musiver-lyrics-line-advance.txt)** | **音流 2.0 歌词换行「弹」：双 spring 规格 / 逐行错峰 / 四档呈现表 / 逐字脉冲（纯事实，可直接转交）** |
 | **[gemini-brief-musiver.txt](gemini-brief-musiver.txt)** | **音流 2.0 全屏播放页「顶部拖动关闭条」逆向手册：手势链路 / 双条件阈值 / spring 落定（纯事实，可直接转交外部 AI）** |
 | **[gemini-brief.txt](gemini-brief.txt)** | **给外部 AI 的「设计任务书」：喂全套逆向数据 + 要求产出播放页设计规格** |
 | [gemini-prompt.txt](gemini-prompt.txt) | 给外部 AI 的「评审版」提问稿（问该不该跟，非设计任务） |

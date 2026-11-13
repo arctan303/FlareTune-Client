@@ -5,6 +5,10 @@
     <string name="ft_library_play_next">下一首播放</string>
     <string name="ft_library_enqueue">加入播放队列</string>
     <string name="ft_library_add_to_playlist">加入歌单</string>
+    <string name="ft_library_quick_next">下一首</string>
+    <string name="ft_library_quick_playlist">加入播放列表</string>
+    <string name="ft_library_quick_favorite">我喜欢</string>
+    <string name="ft_library_quick_favorited">已喜欢</string>
     <string name="ft_library_view_artist">查看歌手</string>
     <string name="ft_library_view_album">查看专辑</string>
     <string name="ft_library_remove_song">从此歌单移除</string>

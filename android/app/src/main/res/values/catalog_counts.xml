@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources><plurals name="ft_known_album_count"><item quantity="one">%1$d album</item><item quantity="other">%1$d albums</item></plurals></resources>

@@ -30,6 +30,7 @@ class PlaybackService : MediaSessionService() {
     private var network: com.flaretune.client.data.SessionNetwork? = null
     private var playerListener: Player.Listener? = null
     private var qualifiedListening: QualifiedListeningTracker? = null
+    private var systemControls: SystemMediaControls? = null
     private val persistenceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     // A newly created empty Player must not erase the queue being loaded from disk.
     private var seenNonEmptyQueue = false
@@ -37,7 +38,8 @@ class PlaybackService : MediaSessionService() {
     @Suppress("DEPRECATION")
     override fun onCreate() {
         super.onCreate()
-        val runtime = (application as ClientApplication).playbackRuntime
+        val app = application as ClientApplication
+        val runtime = app.playbackRuntime
         val connection = runtime.connection
         if (connection == null || !connection.network.isActive || connection.auth.mustChangePassword) {
             stopSelf()
@@ -53,6 +55,9 @@ class PlaybackService : MediaSessionService() {
                     .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true)
                 setHandleAudioBecomingNoisy(true)
             }
+        systemControls = SystemMediaControls(this, connection, persistenceScope, app.systemMediaFavorites) {
+            runtime.connection?.network === connection.network
+        }
         val historyTracker = PlayedTrackTracker { song ->
             if (runtime.connection?.network === connection.network && connection.network.isActive)
                 runtime.history?.record(song)
@@ -72,15 +77,18 @@ class PlaybackService : MediaSessionService() {
                 historyTracker.observe(player.currentMediaItem?.song(), player.isPlaying)
                 saveQueue(player)
                 observeListening(player)
+                systemControls?.observePlayer(player)
             }
         }.also(player::addListener)
         val activity = PendingIntent.getActivity(this, 0,
-            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val artwork = CacheBitmapLoader(DataSourceBitmapLoader(
             DataSourceBitmapLoader.DEFAULT_EXECUTOR_SERVICE.get(), dataSource, null, 512))
         mediaSession = MediaSession.Builder(this, player).setSessionActivity(activity)
-            .setBitmapLoader(artwork).build()
+            .setBitmapLoader(artwork).setCallback(systemControls!!)
+            .setSessionExtras(systemControls!!.sessionExtras).build()
+        systemControls!!.attach(mediaSession!!)
         persistenceScope.launch {
             var ticks = 0
             while (isActive) {
@@ -125,6 +133,8 @@ class PlaybackService : MediaSessionService() {
 
     override fun onDestroy() {
         mediaSession?.player?.let { observeListening(it); saveQueue(it) }
+        systemControls?.close()
+        systemControls = null
         persistenceScope.cancel()
         mediaSession?.run {
             playerListener?.let(player::removeListener)
