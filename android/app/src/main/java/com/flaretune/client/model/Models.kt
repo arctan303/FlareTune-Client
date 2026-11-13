@@ -9,6 +9,10 @@ data class Song(
     val audioUrl: String,
     val coverUrl: String? = null,
     val language: String? = null,
+    val source: String? = null,
+    val artists: List<SongArtist> = emptyList(),
+    val artistId: String? = null,
+    val albumId: String? = null,
 ) {
     /** Membership metadata can exist after a media source disappears. */
     val canPlay: Boolean get() = audioUrl.isNotBlank()

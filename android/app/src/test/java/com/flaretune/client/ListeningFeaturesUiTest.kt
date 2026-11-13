@@ -4,6 +4,8 @@ import android.app.Application
 import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.*
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -19,6 +21,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
+import kotlin.math.roundToInt
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], qualifiers = "w390dp-h844dp-mdpi", application = Application::class)
@@ -230,6 +233,55 @@ class ListeningFeaturesUiTest {
         rule.onNodeWithTag("song_more_first").performClick()
         rule.onNodeWithTag("song_action_favorite").assertIsDisplayed()
         screenshot("listening-song-actions-wide")
+    }
+
+    @Test @Config(qualifiers = "zh-rCN-w1280dp-h800dp-night-mdpi")
+    fun favoritePlaylistDrawsWhiteBackgroundRedHeartInsteadOfCollage() {
+        val collageFav = favorites.copy(
+            name = "我喜欢",
+            songCount = 4,
+            previewCovers = listOf(
+                "https://fixture.invalid/art/0",
+                "https://fixture.invalid/art/1",
+                "https://fixture.invalid/art/2",
+                "https://fixture.invalid/art/3",
+            ),
+        )
+        render(
+            fixture().copy(
+                playlists = listOf(collageFav, regular),
+                selectedPlaylist = collageFav,
+                selectedPlaylistEntries = songs.map { PlaylistSong(it) },
+                playlistSongs = songs.filter { it.canPlay },
+            ),
+        )
+        val heartBounds = rule.onNodeWithTag("favorite_heart_cover").fetchSemanticsNode().boundsInRoot
+        screenshot("favorite-heart-cover-detail")
+        lateinit var crop: Bitmap
+        rule.runOnIdle {
+            val view = rule.activity.window.decorView
+            val bmp = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+            view.draw(android.graphics.Canvas(bmp))
+            val left = heartBounds.left.roundToInt().coerceIn(0, bmp.width - 1)
+            val top = heartBounds.top.roundToInt().coerceIn(0, bmp.height - 1)
+            crop = Bitmap.createBitmap(
+                bmp,
+                left,
+                top,
+                heartBounds.width.roundToInt().coerceAtLeast(1).coerceAtMost(bmp.width - left),
+                heartBounds.height.roundToInt().coerceAtLeast(1).coerceAtMost(bmp.height - top),
+            )
+        }
+        val pixels = crop.asImageBitmap().toPixelMap()
+        var whitePixels = 0
+        var redPixels = 0
+        for (y in 0 until pixels.height) for (x in 0 until pixels.width) {
+            val px = pixels[x, y]
+            if (px.red > 0.90f && px.green > 0.90f && px.blue > 0.90f) whitePixels++
+            if (px.red > 0.70f && (px.red - px.green) > 0.35f && (px.red - px.blue) > 0.35f) redPixels++
+        }
+        assertTrue("Favorites cover must have clean white background (white=$whitePixels)", whitePixels > 1000)
+        assertTrue("Favorites cover must draw vibrant red heart (red=$redPixels)", redPixels > 400)
     }
 
     @Test @Config(qualifiers = "zh-rCN-w360dp-h740dp-night-mdpi")

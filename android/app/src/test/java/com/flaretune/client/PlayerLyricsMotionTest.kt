@@ -84,17 +84,20 @@ class PlayerLyricsMotionTest {
         } }
         settle()
     }
-    private fun settle(ms: Long = 750) {
+    private fun settle(ms: Long = 1200) {
         // Manual Compose frames and Android layout/draw are separate under Robolectric.
-        // Drain layout between frames so coroutine scrolls and ~600ms springs reach equilibrium.
+        // Drain layout between frames so stagger delays (~50-150ms) + ~600ms springs reach equilibrium.
         repeat(((ms+15)/16).toInt()) { rule.mainClock.advanceTimeByFrame(); rule.waitForIdle() }
     }
     private fun activate(index: Int) { rule.runOnIdle { lyrics = lyrics.copy(activeLyricIndex=index) }; settle() }
     private fun assertFocused(index: Int) {
         val viewport = rule.onNodeWithTag("player_lyrics_list").fetchSemanticsNode().boundsInRoot
         val line = rule.onNodeWithTag("player_lyric_$index").fetchSemanticsNode().boundsInRoot
-        val target = viewport.top + maxOf(viewport.height * .30f,72f)
-        assertTrue("Line $index top ${line.top} must follow focus $target promptly",abs(line.top-target)<3f)
+        val targetCenter = viewport.top + viewport.height * LyricMotionSpecs.ALIGN_POSITION
+        assertTrue(
+            "Line $index center ${line.center.y} must align at 35% focus $targetCenter promptly",
+            abs(line.center.y - targetCenter) < 3f,
+        )
     }
     @Test fun automaticScrollingDoesNotCancelItselfAndContinuesWithinTheOldPauseWindow() {
         render()
@@ -312,21 +315,97 @@ class PlayerLyricsMotionTest {
             activeLyricIndex = 0,
             syncMode = "word",
         )
+        var posMs by mutableStateOf(2500L)
         rule.mainClock.autoAdvance = false
         rule.setContent { FlareTuneTheme {
+            val hostView = LocalView.current
+            SideEffect { contentView = hostView }
             NowPlayingScreen(
-                state = PlaybackSnapshot(current, listOf(current), 0, false, positionMs = 10100L, durationMs = 180000),
+                state = PlaybackSnapshot(current, listOf(current), 0, false, positionMs = posMs, durationMs = 180000),
                 lyricState = lyrics, translationEnabled = false, actions = actions,
                 imageLoader = null, onClose = {}, onQueue = {},
             )
         } }
         settle()
-        rule.onNodeWithTag("player_interlude_dots").assertExists()
+        val line0BoundsBefore = rule.onNodeWithTag("player_lyric_0").fetchSemanticsNode().boundsInRoot
+        val line1TopBefore = rule.onNodeWithTag("player_lyric_1").fetchSemanticsNode().boundsInRoot.top
+
+        // Enter BETWEEN_LINES interlude in-place inside line 0: dots must stay inside line 0 without pushing line 1 down.
+        rule.runOnIdle { posMs = 10100L }
+        settle(1200)
+        val dotsBounds = rule.onNodeWithTag("player_interlude_dots").fetchSemanticsNode().boundsInRoot
+        val line0BoundsInterlude = rule.onNodeWithTag("player_lyric_0").fetchSemanticsNode().boundsInRoot
+        val line1TopInterlude = rule.onNodeWithTag("player_lyric_1").fetchSemanticsNode().boundsInRoot.top
+        assertEquals("Interlude must transform line 0 in-place without shifting line 1", line1TopBefore, line1TopInterlude, 1.5f)
+        assertTrue(
+            "Interlude dots must live inside active line 0 bounds (${dotsBounds} inside $line0BoundsInterlude)",
+            dotsBounds.top >= line0BoundsInterlude.top - 1f && dotsBounds.bottom <= line0BoundsInterlude.bottom + 1f,
+        )
+        assertEquals("Line 0 height stays identical during in-place interlude", line0BoundsBefore.height, line0BoundsInterlude.height, 1.5f)
+
+        // Verify dot 0 (COMPLETE) renders crisp pure-white core pixels instead of gray.
+        val dot0Bounds = rule.onNodeWithTag("interlude_dot_0").fetchSemanticsNode().boundsInRoot
+        screenshot("interlude-dots-in-place")
+        lateinit var dot0Crop: Bitmap
+        rule.runOnIdle {
+            val frame = Bitmap.createBitmap(contentView.width, contentView.height, Bitmap.Config.ARGB_8888)
+            contentView.draw(android.graphics.Canvas(frame))
+            val left = dot0Bounds.left.roundToInt().coerceIn(0, frame.width - 1)
+            val top = dot0Bounds.top.roundToInt().coerceIn(0, frame.height - 1)
+            dot0Crop = Bitmap.createBitmap(
+                frame,
+                left,
+                top,
+                dot0Bounds.width.roundToInt().coerceAtLeast(1).coerceAtMost(frame.width - left),
+                dot0Bounds.height.roundToInt().coerceAtLeast(1).coerceAtMost(frame.height - top),
+            )
+        }
+        val dot0Pixels = dot0Crop.asImageBitmap().toPixelMap()
+        var pureWhiteCount = 0
+        for (y in 0 until dot0Pixels.height) for (x in 0 until dot0Pixels.width) {
+            val px = dot0Pixels[x, y]
+            if (px.red > 0.90f && px.green > 0.90f && px.blue > 0.90f) pureWhiteCount++
+        }
+        assertTrue("Complete interlude dot must render bright pure white center (pixels=$pureWhiteCount)", pureWhiteCount > 25)
+
         rule.onNodeWithTag("interlude_dot_1").performClick()
         rule.runOnIdle {
             val expectedMs = (midBetween.dotTimesSeconds!![1] * 1000.0).toLong()
             assertEquals(expectedMs, lastSeek)
         }
+
+        // Verify INTRO interlude also transforms line 0 in-place when activeLyricIndex = -1.
+        val introGapLines = listOf(
+            LyricLine(
+                text = "Late opening verse",
+                timeSeconds = 12.0,
+                endTimeSeconds = 15.0,
+                words = listOf(LyricWord("Late", 12.0, 13.5), LyricWord("opening", 13.6, 15.0)),
+            ),
+            LyricLine(
+                text = "Second verse",
+                timeSeconds = 16.0,
+                endTimeSeconds = 19.0,
+                words = listOf(LyricWord("Second", 16.0, 17.4), LyricWord("verse", 17.5, 19.0)),
+            ),
+        )
+        rule.runOnIdle {
+            lyrics = LyricState(
+                songId = "intro-song",
+                status = LyricStatus.READY,
+                lines = introGapLines,
+                activeLyricIndex = -1,
+                syncMode = "word",
+            )
+            posMs = 4500L
+        }
+        settle(1200)
+        val introDotsBounds = rule.onNodeWithTag("player_interlude_dots").fetchSemanticsNode().boundsInRoot
+        val introLine0Bounds = rule.onNodeWithTag("player_lyric_0").fetchSemanticsNode().boundsInRoot
+        assertTrue(
+            "Intro interlude dots must transform inside line 0 slot ($introDotsBounds inside $introLine0Bounds)",
+            introDotsBounds.top >= introLine0Bounds.top - 1f && introDotsBounds.bottom <= introLine0Bounds.bottom + 1f,
+        )
     }
     @Test fun musiverPresentationTiersAndDecayingStaggerFollowMotionContract() {
         val active = resolveLyricPresentation(index = 4, activeIndex = 4, lineCount = 12, userScrolling = false)
@@ -336,13 +415,17 @@ class PlayerLyricsMotionTest {
         assertEquals(0f, active.verticalOffset.value, 1e-4f)
 
         val above1 = resolveLyricPresentation(index = 3, activeIndex = 4, lineCount = 12, userScrolling = false)
-        assertEquals(0.78f, above1.opacity, 1e-4f)
+        assertEquals(0.34f, above1.opacity, 1e-4f)
         assertEquals(0.985f, above1.scale, 1e-4f)
         assertEquals(0.5f, above1.blurRadius.value, 1e-4f)
         assertEquals(-2f, above1.verticalOffset.value, 1e-4f)
 
+        val below1 = resolveLyricPresentation(index = 5, activeIndex = 4, lineCount = 12, userScrolling = false)
+        assertEquals(0.44f, below1.opacity, 1e-4f)
+        assertTrue("Active line opacity must strongly exceed adjacent line", active.opacity - below1.opacity >= 0.50f)
+
         val below3 = resolveLyricPresentation(index = 8, activeIndex = 4, lineCount = 12, userScrolling = false)
-        assertEquals(0.34f, below3.opacity, 1e-4f)
+        assertEquals(0.22f, below3.opacity, 1e-4f)
         assertEquals(0.935f, below3.scale, 1e-4f)
         assertEquals(2.2f, below3.blurRadius.value, 1e-4f)
         assertEquals(16f, below3.verticalOffset.value, 1e-4f)
@@ -355,6 +438,81 @@ class PlayerLyricsMotionTest {
         assertEquals(50, d1)
         assertEquals(98, d2)
         assertTrue("Downstream stagger step must decay gently", (d3 - d2) < (d2 - d1))
+
+        val solverItems = (0 until 10).map { i ->
+            LyricsSpringLayoutItem(
+                index = i,
+                height = 60f,
+                presentation = resolveLyricPresentation(i, activeIndex = 3, lineCount = 10, userScrolling = false),
+            )
+        }
+        val solved = solveLyricsSpringLayout(
+            items = solverItems,
+            containerHeight = 600f,
+            alignOffset = 3,
+            scrollOffset = 0f,
+            lineSpacing = 20f,
+            staggerEnabled = true,
+        )
+        assertEquals(600f * 0.35f, solved[3].y + solved[3].height / 2f, 0.01f)
+        assertTrue("Lines with y >= 0 stagger smoothly and decay past anchor", solved[4].delaySeconds > solved[3].delaySeconds)
+        val limits = computeLyricsScrollLimits(solverItems, containerHeight = 600f, alignOffset = 3, lineSpacing = 20f)
+        assertTrue("Can scroll up to first line (min <= 0) and down to last line (max >= 0)", limits.min < 0f && limits.max > 0f)
+    }
+    @Test fun lineAdvanceStaysUncutAndSmoothMidFlightWithoutWindowClipping() {
+        render()
+        // At index 0, line 3 (|d|=3, +16dp verticalOffset, inside unmasked center-bottom area) must render its bottom glyphs unclipped.
+        val restLine3Bounds = rule.onNodeWithTag("player_lyric_3").fetchSemanticsNode().boundsInRoot
+        lateinit var restCrop: Bitmap
+        rule.runOnIdle {
+            val frame = Bitmap.createBitmap(contentView.width, contentView.height, Bitmap.Config.ARGB_8888)
+            contentView.draw(android.graphics.Canvas(frame))
+            val top = (restLine3Bounds.bottom - 18f).roundToInt().coerceIn(0, frame.height - 1)
+            val bottom = (restLine3Bounds.bottom - 5f).roundToInt().coerceIn(top + 1, frame.height)
+            val left = restLine3Bounds.left.roundToInt().coerceIn(0, frame.width - 1)
+            restCrop = Bitmap.createBitmap(
+                frame,
+                left,
+                top,
+                restLine3Bounds.width.roundToInt().coerceAtLeast(1).coerceAtMost(frame.width - left),
+                bottom - top,
+            )
+        }
+        val restPixels = restCrop.asImageBitmap().toPixelMap()
+        var litPixelsAtBottom = 0
+        for (y in 0 until restPixels.height) for (x in 0 until restPixels.width) {
+            if (restPixels[x, y].red > 0.18f) litPixelsAtBottom++
+        }
+        assertTrue("Line 3 with +16dp offset must not clip bottom text glyphs (lit=$litPixelsAtBottom)", litPixelsAtBottom > 12)
+
+        // Advance 0 -> 1 and verify mid-flight smoothness + visible unclipped rendering + settled focus.
+        val beforeTop = rule.onNodeWithTag("player_lyric_1").fetchSemanticsNode().boundsInRoot.top
+        rule.runOnIdle { lyrics = lyrics.copy(activeLyricIndex = 1) }
+        settle(180)
+        val midBounds = rule.onNodeWithTag("player_lyric_1").fetchSemanticsNode().boundsInRoot
+        assertTrue("Line 1 must move upward smoothly mid-flight ($beforeTop -> ${midBounds.top})", midBounds.top < beforeTop)
+        lateinit var midCrop: Bitmap
+        rule.runOnIdle {
+            val frame = Bitmap.createBitmap(contentView.width, contentView.height, Bitmap.Config.ARGB_8888)
+            contentView.draw(android.graphics.Canvas(frame))
+            val left = midBounds.left.roundToInt().coerceIn(0, frame.width - 1)
+            val top = midBounds.top.roundToInt().coerceIn(0, frame.height - 1)
+            midCrop = Bitmap.createBitmap(
+                frame,
+                left,
+                top,
+                midBounds.width.roundToInt().coerceAtLeast(1).coerceAtMost(frame.width - left),
+                midBounds.height.roundToInt().coerceAtLeast(1).coerceAtMost(frame.height - top),
+            )
+        }
+        val midPixels = midCrop.asImageBitmap().toPixelMap()
+        var midLit = 0
+        for (y in 0 until midPixels.height) for (x in 0 until midPixels.width) {
+            if (midPixels[x, y].red > 0.45f) midLit++
+        }
+        assertTrue("Active advancing line must remain visibly drawn mid-flight without clip vanishing (lit=$midLit)", midLit > 50)
+        settle(1200)
+        assertFocused(1)
     }
     private fun screenshot(name: String) {
         settle(800)

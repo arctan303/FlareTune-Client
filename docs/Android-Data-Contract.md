@@ -197,3 +197,7 @@ dev.4/code4补全已通过本机验证并覆盖安装；后续隔离的dev.5/cod
 Application级SystemMediaFavoriteChanges仅内存传播真实完整detail，VM/UI与Service双向同步。最高favorite摘要与完整成员按当前ActiveConnection隔离、revision单调；旧列表/详情/null/旧事件不能回滚新确认状态，明确playFavorites不被被动刷新取消。缺少达到最新摘要revision的完整成员时有界重读一次，仍不足明确失败，不混用新revision与旧members。
 
 本轮318项、R2聚焦复核、设备安装与实际系统custom动作回读见[任务](tasks/android-lifecycle-media-20261113.md)。不以本机测试冒称所有OEM布局、真实账户写入或所有前后台杀进程策略已验收。
+
+## 歌曲来源关联与具体专辑版本（2026-11-13）
+
+Song 新增默认兼容的 source、artists:List<SongArtist>、artistId、albumId。UI 使用 relatedArtists()/relatedAlbum() 的真实来源引用，不能把 YT 名称重建为本地 Artist，已知专辑使用 openAlbum 直达。关联经 MediaItem 和安全元数据快照传递，恢复媒体仍在当前身份下重新解析。全屏菜单发出导航意图时收起面板，不依赖目标 ID 必须变化。专辑详情播放标记核对 song.id 与明确的 albumId；同视频可在不同专辑出现，不用封面、时长或标题推断实体相等。详情见[修复任务](tasks/android-song-relations-20261113.md)。

@@ -141,7 +141,7 @@ fun ClientApp(
             if (state.playbackReady && !state.queueRestoring && state.playback.current == null) panel = PlayerPanel.NONE
         }
     }
-    ListeningInteractionHost(state, actions, imageLoader) {
+    ListeningInteractionHost(state, actions, imageLoader, onNavigateToContent = { panel = PlayerPanel.NONE }) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(Modifier.fillMaxSize()) {
             when (state.screen) {

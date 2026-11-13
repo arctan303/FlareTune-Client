@@ -194,8 +194,75 @@ internal fun AnimatedTrashIcon(
 }
 
 /**
- * Playlist / favorite artwork renderer: supports custom cover, 2x2 multi-cover collage, single cover,
- * and thematic gradient placeholder.
+ * Programmatically drawn red heart on a crisp white canvas for the special "Favorites / 我喜欢" playlist.
+ */
+@Composable
+internal fun FavoriteHeartCover(
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val minDim = minOf(w, h)
+        drawRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(Color(0xFFFFFFFF), Color(0xFFFFF5F7)),
+            ),
+        )
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(Color(0x1CF43F5E), Color.Transparent),
+                center = Offset(w * 0.5f, h * 0.52f),
+                radius = minDim * 0.44f,
+            ),
+            radius = minDim * 0.44f,
+            center = Offset(w * 0.5f, h * 0.52f),
+        )
+        val heartW = minDim * 0.52f
+        val heartH = minDim * 0.46f
+        val left = (w - heartW) * 0.5f
+        val top = (h - heartH) * 0.5f + minDim * 0.015f
+        val cx = left + heartW * 0.5f
+        val dipY = top + heartH * 0.28f
+        val bottomY = top + heartH
+        val path = Path().apply {
+            moveTo(cx, bottomY)
+            cubicTo(
+                left + heartW * 0.14f, top + heartH * 0.72f,
+                left, top + heartH * 0.46f,
+                left, top + heartH * 0.28f,
+            )
+            cubicTo(
+                left, top,
+                left + heartW * 0.40f, top,
+                cx, dipY,
+            )
+            cubicTo(
+                left + heartW * 0.60f, top,
+                left + heartW, top,
+                left + heartW, top + heartH * 0.28f,
+            )
+            cubicTo(
+                left + heartW, top + heartH * 0.46f,
+                left + heartW * 0.86f, top + heartH * 0.72f,
+                cx, bottomY,
+            )
+            close()
+        }
+        drawPath(
+            path = path,
+            brush = Brush.verticalGradient(
+                colors = listOf(Color(0xFFFF4766), Color(0xFFE11D48)),
+                startY = top,
+                endY = bottomY,
+            ),
+        )
+    }
+}
+
+/**
+ * Playlist / favorite artwork renderer: supports special drawn heart cover for favorites,
+ * custom cover, 2x2 multi-cover collage, single cover, and thematic gradient placeholder.
  */
 @Composable
 internal fun PlaylistCoverArt(
@@ -210,29 +277,32 @@ internal fun PlaylistCoverArt(
 ) {
     val validPreviews = remember(previewCovers) { previewCovers.filter { it.isNotBlank() }.distinct() }
     val shape = RoundedCornerShape(radius)
-    val bgBrush = if (isFavorite) {
-        Brush.linearGradient(
-            listOf(
-                MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
-                MaterialTheme.colorScheme.surfaceContainerHighest,
-            ),
-        )
-    } else {
-        Brush.linearGradient(
-            listOf(
-                MaterialTheme.colorScheme.surfaceContainerHigh,
-                MaterialTheme.colorScheme.surfaceVariant,
-            ),
-        )
-    }
+    val bgBrush = Brush.linearGradient(
+        listOf(
+            MaterialTheme.colorScheme.surfaceContainerHigh,
+            MaterialTheme.colorScheme.surfaceVariant,
+        ),
+    )
     Box(
         modifier
             .clip(shape)
             .background(bgBrush)
-            .border(0.7.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), shape),
+            .border(
+                0.7.dp,
+                if (isFavorite) Color(0x14000000) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                shape,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         when {
+            isFavorite -> {
+                FavoriteHeartCover(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("favorite_heart_cover")
+                        .semantics { contentDescription = name },
+                )
+            }
             loader != null && !customCoverUrl.isNullOrBlank() -> {
                 AsyncImage(
                     model = customCoverUrl,

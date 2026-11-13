@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.SharedPreferences
 import com.flaretune.client.model.ClientNotice
 import com.flaretune.client.model.Song
+import com.flaretune.client.model.SongRelations
+import com.flaretune.client.model.relations
 import com.flaretune.client.ui.PlaybackSnapshot
 import java.security.MessageDigest
 import kotlinx.coroutines.CancellationException
@@ -29,10 +31,12 @@ data class QueueEntry(
     val album: String = "",
     val durationSeconds: Double = 0.0,
     val language: String? = null,
+    val relations: SongRelations = SongRelations(),
 ) {
     fun toSong(): Song = Song(
         id = id, title = title, artist = artist, album = album,
         durationSeconds = durationSeconds, language = language, audioUrl = "",
+        source = relations.source, artists = relations.artists, artistId = relations.artistId, albumId = relations.albumId,
     )
 }
 
@@ -64,7 +68,7 @@ class JsonPlaybackQueueStore(private val storage: HistoryStorage) : PlaybackQueu
         if (rows.length() > MAX_PERSISTED_QUEUE_ENTRIES) queueStorageFailure()
         val entries = (0 until rows.length()).map { index ->
             val row = rows.opt(index) as? JSONObject ?: queueStorageFailure()
-            val allowed = setOf("id", "title", "artist", "album", "durationSeconds", "language")
+            val allowed = setOf("id", "title", "artist", "album", "durationSeconds", "language") + SONG_RELATION_KEYS
             if (row.keys().asSequence().any { it !in allowed }) queueStorageFailure()
             val language = when (val value = row.opt("language")) {
                 null, JSONObject.NULL -> null
@@ -77,7 +81,7 @@ class JsonPlaybackQueueStore(private val storage: HistoryStorage) : PlaybackQueu
                 artist = row.opt("artist") as? String ?: queueStorageFailure(),
                 album = row.opt("album") as? String ?: queueStorageFailure(),
                 durationSeconds = (row.opt("durationSeconds") as? Number)?.toDouble() ?: queueStorageFailure(),
-                language = language,
+                language = language, relations = row.readSongRelations(row.opt("id") as? String ?: queueStorageFailure()),
             )
         }
         val currentIndex = document.queueLong("currentIndex")
@@ -102,7 +106,7 @@ class JsonPlaybackQueueStore(private val storage: HistoryStorage) : PlaybackQueu
                 rows.put(JSONObject().put("id", entry.id).put("title", entry.title)
                     .put("artist", entry.artist).put("album", entry.album)
                     .put("durationSeconds", entry.durationSeconds)
-                    .put("language", entry.language ?: JSONObject.NULL))
+                    .put("language", entry.language ?: JSONObject.NULL).putSongRelations(entry.id, entry.relations))
             }
             val encoded = JSONObject().put("version", 1).put("entries", rows)
                 .put("currentIndex", safe.currentIndex).put("positionMs", safe.positionMs)
@@ -218,7 +222,7 @@ class PlaybackQueueRepository(
             val queue = snapshot.queue.takeIf { it.isNotEmpty() }?.let { songs ->
                 SavedPlaybackQueue(
                     entries = songs.map { song ->
-                        QueueEntry(song.id, song.title, song.artist, song.album, song.durationSeconds, song.language)
+                        QueueEntry(song.id, song.title, song.artist, song.album, song.durationSeconds, song.language, song.relations)
                     },
                     currentIndex = snapshot.currentIndex, positionMs = snapshot.positionMs,
                     shuffle = snapshot.shuffle, repeatMode = snapshot.repeatMode,
@@ -351,7 +355,7 @@ private fun validateQueue(queue: SavedPlaybackQueue): SavedPlaybackQueue {
         if (entry.id.isBlank() || entry.id.length > 2048 || entry.title.length > 4096 ||
             entry.artist.length > 4096 || entry.album.length > 4096 ||
             (entry.language != null && entry.language.length > 128) ||
-            !entry.durationSeconds.isFinite() || entry.durationSeconds < 0) queueStorageFailure()
+            !entry.durationSeconds.isFinite() || entry.durationSeconds < 0 || !validSongRelations(entry.id, entry.relations)) queueStorageFailure()
     }
     return queue.copy(entries = queue.entries.toList())
 }

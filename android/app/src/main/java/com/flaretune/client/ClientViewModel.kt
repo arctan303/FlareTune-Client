@@ -384,8 +384,9 @@ class ClientViewModel(
 
     override fun openAlbum(album: Album) {
         val connection = current() ?: return
+        if (!validYouTubeAlbumReference(album.id) && !validLocalAlbumReference(album.id)) return
         val canonical = (mutable.value.albums + mutable.value.searchAlbums + mutable.value.artistAlbums).find { it.id == album.id }
-            ?: mutable.value.selectedAlbum?.takeIf { it.id == album.id } ?: return
+            ?: mutable.value.selectedAlbum?.takeIf { it.id == album.id } ?: album
         closePlaylist()
         closeArtist()
         val ticket = identity
@@ -396,6 +397,7 @@ class ClientViewModel(
             try {
                 val detail = withContext(ioDispatcher) { connection.api.album(canonical.id) }
                 if (!valid(ticket, connection) || revision != detailRevision) return@launch
+                if (detail.album.id != canonical.id) throw ApiFailure(Failure.INVALID_RESPONSE)
                 mutable.value = mutable.value.copy(selectedAlbum = detail.album, albumSongs = detail.songs, albumLoading = false)
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
@@ -655,7 +657,8 @@ class ClientViewModel(
         val live = (snapshot.playback.queue + snapshot.songs + snapshot.favoriteSongs +
             snapshot.albumSongs + snapshot.playlistSongs).associateBy { it.id }
         mutable.value = snapshot.copy(playHistoryPlayedAt = historyEntries.associate { it.id to it.playedAt }, playHistory = historyEntries.map { entry ->
-            live[entry.id] ?: historySongs[entry.id] ?: entry.toSong()
+            val stored = entry.toSong()
+            (historySongs[entry.id] ?: live[entry.id])?.let { songContext(it, stored, preserveCover = false) } ?: stored
         })
     }
 
@@ -668,7 +671,8 @@ class ClientViewModel(
         // Reads are bounded to the store's 200 entries and reuse one resolve request.
         viewModelScope.launch {
             try {
-                val songs = resolveStoredSongs(connection, ids)
+                val contexts = historyEntries.map { it.toSong() }.associateBy { it.id }
+                val songs = resolveStoredSongs(connection, ids, contexts)
                 if (!valid(ticket, connection)) return@launch
                 songs.forEach { historySongs[it.id] = it }
                 renderHistory()
@@ -683,51 +687,38 @@ class ClientViewModel(
     }
 
     override fun playSong(song: Song) {
-        val connection = current() ?: return
+        if (current() == null) return
         val snapshot = mutable.value
-        val songs = when {
-            snapshot.selectedPlaylist != null -> snapshot.playlistSongs
-            snapshot.selectedAlbum != null -> snapshot.albumSongs
-            snapshot.selectedArtist != null -> snapshot.artistSongs
-            snapshot.discoverySongs.any { it.id == song.id } -> snapshot.discoverySongs
-            snapshot.spotlightArtist?.songs?.any { it.id == song.id } == true -> snapshot.spotlightArtist.songs
-            snapshot.playStats?.songs?.any { it.song.id == song.id } == true -> snapshot.playStats.songs.map { it.song }
-            snapshot.songs.any { it.id == song.id } -> snapshot.songs
-            snapshot.favoriteSongs.any { it.id == song.id } -> snapshot.favoriteSongs
-            else -> emptyList()
-        }
-        val index = songs.indexOfFirst { it.id == song.id }
-        if (index < 0) {
+        val groups = listOf(snapshot.playlistSongs, snapshot.albumSongs, snapshot.artistSongs,
+            snapshot.discoverySongs, snapshot.spotlightArtist?.songs.orEmpty(),
+            snapshot.playStats?.songs.orEmpty().map { it.song }, snapshot.songs, snapshot.favoriteSongs)
+        // A row's current-session list and album edition are stronger evidence than a same-ID cache.
+        val songs = groups.firstOrNull { group -> group.any { it === song } }
+            ?: groups.firstOrNull { group -> group.any { sameSongContext(it, song) } }
+            ?: groups.firstOrNull { group -> group.any { it.id == song.id } }
+        if (songs == null) {
             if (snapshot.playHistory.any { it.id == song.id }) playHistorySong(song)
             return
         }
-        rememberSearchEntity(SearchEntity.fromSong(songs[index]))
-        val ticket = identity
-        val revision = beginPlaybackCommand()
-        playJob?.cancel()
-        playJob = viewModelScope.launch {
-            try {
-                connectPlayer(connection)
-                if (valid(ticket, connection) && revision == playRevision) player.play(songs, index)
-            } catch (error: Exception) {
-                if (error is CancellationException) throw error
-                if (valid(ticket, connection) && revision == playRevision)
-                    mutable.value = mutable.value.copy(notice = ClientNotice.PLAYBACK_FAILED)
-            }
-        }
+        val index = songs.indexOfFirst { it === song }.takeIf { it >= 0 }
+            ?: songs.indexOfFirst { sameSongContext(it, song) }.takeIf { it >= 0 }
+            ?: songs.indexOfFirst { it.id == song.id }
+        if (index >= 0) playSongs(songs, index)
     }
 
     override fun playHistorySong(song: Song) {
         val connection = current() ?: return
-        if (historyEntries.none { it.id == song.id }) return
+        val stored = historyEntries.find { it.id == song.id }?.toSong() ?: return
         val ticket = identity
         val revision = beginPlaybackCommand()
         playJob?.cancel()
         playJob = viewModelScope.launch {
             try {
                 // Stored history never supplies an authenticated or temporary playback URL.
-                val fresh = withContext(ioDispatcher) { connection.api.song(song.id) }
+                val received = withContext(ioDispatcher) { connection.api.song(stored.id) }
                 if (!valid(ticket, connection) || revision != playRevision) return@launch
+                if (received.id != stored.id) throw ApiFailure(Failure.INVALID_RESPONSE)
+                val fresh = songContext(received, stored, preserveCover = false)
                 connectPlayer(connection)
                 if (!valid(ticket, connection) || revision != playRevision) return@launch
                 historySongs[fresh.id] = fresh
@@ -741,14 +732,15 @@ class ClientViewModel(
         }
     }
 
-    private suspend fun resolveStoredSongs(connection: ActiveConnection, ids: List<String>): List<Song> =
+    private suspend fun resolveStoredSongs(connection: ActiveConnection, ids: List<String>,
+        contexts: Map<String, Song> = emptyMap()): List<Song> =
         withContext(ioDispatcher) {
             val eligible = ids.distinct().filter { id ->
                 id.isNotBlank() && id.length <= 256 && id == id.trim() && id !in setOf(".", "..") &&
                     id.none { it.code < 32 || it.code == 127 }
             }
             val shortIds = eligible.filter { it.length <= 80 }
-            val resolved = if (shortIds.isEmpty()) emptyList() else connection.api.resolveSongs(shortIds)
+            val resolved = shortIds.chunked(500).flatMap { connection.api.resolveSongs(it) }
             val semaphore = Semaphore(4)
             val longer = coroutineScope {
                 eligible.filter { it.length > 80 }.map { id ->
@@ -762,7 +754,9 @@ class ClientViewModel(
                 }.awaitAll().filterNotNull()
             }
             val byId = (resolved + longer).associateBy { it.id }
-            eligible.mapNotNull(byId::get)
+            eligible.mapNotNull { id -> byId[id]?.takeIf { it.canPlay }?.let { fresh ->
+                contexts[id]?.let { songContext(fresh, it, preserveCover = false) } ?: fresh
+            } }
         }
 
     private fun updateQueueNotice(repository: PlaybackQueueRepository) {
@@ -810,7 +804,9 @@ class ClientViewModel(
                 val songs = resolveStoredSongs(connection, saved.entries.map { it.id }).associateBy { it.id }
                 if (!valid(ticket, connection) || revision != queueRestoreRevision ||
                     playTicket != playRevision || player.state.value.queue.isNotEmpty()) return@launch
-                val indexed = saved.entries.mapIndexedNotNull { index, entry -> songs[entry.id]?.let { index to it } }
+                val indexed = saved.entries.mapIndexedNotNull { index, entry -> songs[entry.id]?.let {
+                    index to songContext(it, entry.toSong(), preserveCover = false)
+                } }
                 if (indexed.isEmpty()) {
                     queueRestoreNotice = ClientNotice.REQUEST_FAILED
                     updateQueueNotice(repository)
@@ -928,10 +924,13 @@ class ClientViewModel(
                         val ids = cached.songs.map { it.id } + cached.spotlight?.songs.orEmpty().map { it.id }
                         val resolved = resolveStoredSongs(connection, ids).associateBy { it.id }
                         if (!valid(ticket, connection) || revision != discoveryRevision) return@launch
-                        val songs = cached.songs.mapNotNull { resolved[it.id] }
+                        val songs = cached.songs.mapNotNull { entry -> resolved[entry.id]?.let {
+                            songContext(it, entry.toSong(), preserveCover = false)
+                        } }
                         val spotlight = cached.spotlight?.let { item ->
-                            SpotlightArtist(item.artist, item.songCount, item.songs.mapNotNull { resolved[it.id] },
-                                coverUrl = item.songs.firstNotNullOfOrNull { resolved[it.id]?.coverUrl })
+                            SpotlightArtist(item.artist, item.songCount, item.songs.mapNotNull { entry -> resolved[entry.id]?.let {
+                                songContext(it, entry.toSong(), preserveCover = false)
+                            } }, coverUrl = item.songs.firstNotNullOfOrNull { resolved[it.id]?.coverUrl })
                         }
                         mutable.value = mutable.value.copy(discoverySongs = songs, spotlightArtist = spotlight)
                         spotlight?.artist?.let { seenSpotlightArtists.add(0, it) }
@@ -1386,17 +1385,45 @@ class ClientViewModel(
 
 
 
+    private fun sameSongContext(left: Song, right: Song): Boolean = left.id == right.id &&
+        left.isYouTube == right.isYouTube && left.albumId == right.albumId && left.title == right.title &&
+        left.artist == right.artist && left.album == right.album && left.coverUrl == right.coverUrl
+
+    private fun songContext(fresh: Song, selected: Song, preserveCover: Boolean): Song {
+        if (fresh.id != selected.id || fresh.isYouTube != selected.isYouTube) return fresh
+        return mergeSongRelations(fresh, selected, preferPrevious = true).copy(
+            title = selected.title.ifBlank { fresh.title }, artist = selected.artist.ifBlank { fresh.artist },
+            album = selected.album.ifBlank { fresh.album },
+            coverUrl = if (preserveCover) selected.coverUrl ?: fresh.coverUrl else fresh.coverUrl)
+    }
+
     private suspend fun preparePlaybackSongs(connection: ActiveConnection, requested: List<Song>): List<Pair<Int, Song>> {
         val snapshot = mutable.value
-        // Caller metadata may outlive a previous account's composed UI. Only this session's
-        // owned state supplies live URLs; every other ID is resolved by its active API.
-        val known = (snapshot.songs + snapshot.albumSongs + snapshot.favoriteSongs + snapshot.playlistSongs +
-            snapshot.artistSongs + snapshot.discoverySongs + snapshot.spotlightArtist?.songs.orEmpty() +
-            snapshot.playback.queue + snapshot.playStats?.songs.orEmpty().map { it.song }).filter { it.canPlay }.associateBy { it.id }
-        val missing = requested.map { it.id }.filterNot { it in known }
+        // Only account-owned current state may supply the selected context. Caller URLs are never used.
+        val owned = snapshot.albumSongs + snapshot.playlistSongs + snapshot.artistSongs + snapshot.songs +
+            snapshot.favoriteSongs + snapshot.discoverySongs + snapshot.spotlightArtist?.songs.orEmpty() +
+            snapshot.playback.queue + snapshot.playStats?.songs.orEmpty().map { it.song } + snapshot.playHistory
+        val stored = snapshot.recentSearches.filter { it.type == "song" }.map { it.toSong() } +
+            historyEntries.map { it.toSong() }
+        val contexts = requested.map { requestedSong ->
+            val matches = owned.filter { it.id == requestedSong.id }
+            val live = matches.firstOrNull { it === requestedSong }
+                ?: matches.firstOrNull { sameSongContext(it, requestedSong) }
+                ?: matches.firstOrNull { requestedSong.albumId != null && it.albumId == requestedSong.albumId }
+                ?: matches.firstOrNull()
+            live?.let { it to true } ?: stored.firstOrNull { sameSongContext(it, requestedSong) }?.let { it to false }
+        }
+        // Current-session media is trusted; restored or unknown entries must resolve in this connection.
+        val missing = requested.mapIndexedNotNull { index, song ->
+            song.id.takeUnless { contexts[index]?.let { it.second && it.first.canPlay } == true }
+        }
         val fresh = if (missing.isEmpty()) emptyMap() else resolveStoredSongs(connection, missing).associateBy { it.id }
         return requested.mapIndexedNotNull { index, song ->
-            (known[song.id] ?: fresh[song.id])?.takeIf { it.canPlay }?.let { index to it }
+            val context = contexts[index]
+            if (context != null && context.second && context.first.canPlay) index to context.first
+            else fresh[song.id]?.let { received ->
+                index to if (context == null) received else songContext(received, context.first, context.second)
+            }
         }
     }
 

@@ -52,6 +52,7 @@ internal fun ListeningInteractionHost(
     state: ClientUiState,
     actions: ClientActions,
     imageLoader: ImageLoader?,
+    onNavigateToContent: () -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     var song by remember { mutableStateOf<Song?>(null) }
@@ -67,7 +68,7 @@ internal fun ListeningInteractionHost(
     var confirm by remember { mutableStateOf<ListeningConfirmation?>(null) }
     var confirmingPlaylist by remember { mutableStateOf<PlaylistSummary?>(null) }
     var confirmingSong by remember { mutableStateOf<Song?>(null) }
-    var artistNames by remember { mutableStateOf<List<String>>(emptyList()) }
+    var artistChoices by remember { mutableStateOf<List<Artist>>(emptyList()) }
     var artistsOpen by remember { mutableStateOf(false) }
     var albumsOpen by remember { mutableStateOf(false) }
     var statsOpen by remember { mutableStateOf(false) }
@@ -110,7 +111,7 @@ internal fun ListeningInteractionHost(
         }
     }
     LaunchedEffect(state.screen, owner) {
-        closeEditors(); coverTarget = null; artistNames = emptyList()
+        closeEditors(); coverTarget = null; artistChoices = emptyList()
         artistsOpen = false; albumsOpen = false; statsOpen = false
     }
     LaunchedEffect(state.libraryMutationVersion) {
@@ -148,6 +149,12 @@ internal fun ListeningInteractionHost(
     if (state.screen != ClientScreen.LIBRARY) return
 
     song?.let { selected ->
+        val relatedArtists = selected.relatedArtists()
+        val relatedAlbum = selected.relatedAlbum() ?: if (!selected.isYouTube) {
+            // Legacy local rows may omit the reference; use only an already loaded local entity.
+            (listOfNotNull(state.selectedAlbum) + state.albums + state.searchAlbums + state.artistAlbums)
+                .firstOrNull { !it.id.startsWith("yt:") && it.title == selected.album && it.artist == selected.artist }
+        } else null
         val canRemove = state.selectedPlaylist?.kind != "favorite"
             && state.selectedPlaylistEntries.any { it.song.id == selected.id }
         SongActionsSheet(
@@ -159,17 +166,20 @@ internal fun ListeningInteractionHost(
             onAddToPlaylist = { song = null; targetSongs = listOf(selected); beginIntent() },
             onArtist = {
                 song = null
-                val names = listeningArtistNames(selected.artist)
-                if (names.size == 1) actions.openArtist(Artist(names.first()))
-                else if (names.isNotEmpty()) artistNames = names
-                else { artistsOpen = true; actions.refreshArtists() }
+                if (relatedArtists.size == 1) {
+                    onNavigateToContent()
+                    actions.openArtist(relatedArtists.single())
+                } else if (relatedArtists.isNotEmpty()) artistChoices = relatedArtists
             },
             onAlbum = {
                 song = null
-                val album = state.albums.firstOrNull { it.title == selected.album && it.artist == selected.artist }
-                if (album != null) actions.openAlbum(album)
-                else { albumsOpen = true; actions.searchAlbums(selected.album) }
+                relatedAlbum?.let {
+                    onNavigateToContent()
+                    actions.openAlbum(it)
+                }
             },
+            artistAvailable = relatedArtists.isNotEmpty(),
+            albumAvailable = relatedAlbum != null,
             onDismiss = { if (!state.libraryMutationBusy) song = null },
             onRemoveFromPlaylist = if (canRemove) {{ confirmingSong = selected; song = null; confirm = ListeningConfirmation.REMOVE_SONG }} else null,
         )
@@ -284,13 +294,15 @@ internal fun ListeningInteractionHost(
             },
         )
     }
-    if (artistNames.isNotEmpty()) FlareModalSheet(onDismissRequest = { artistNames = emptyList() }) {
+    if (artistChoices.isNotEmpty()) FlareModalSheet(onDismissRequest = { artistChoices = emptyList() }) {
         val absorbBottom = rememberAbsorbBottomOverscroll()
         Column(Modifier.fillMaxWidth().navigationBarsPadding().nestedScroll(absorbBottom).verticalScroll(rememberScrollState())) {
-            FlareSheetHeader(title = stringResource(R.string.ft_listening_artists), onClose = { artistNames = emptyList() })
-            artistNames.forEach { name ->
-                ListeningMenuRow(name, "artist_chooser_" + name) {
-                    artistNames = emptyList(); actions.openArtist(Artist(name))
+            FlareSheetHeader(title = stringResource(R.string.ft_listening_artists), onClose = { artistChoices = emptyList() })
+            artistChoices.forEach { artist ->
+                ListeningMenuRow(artist.name, "artist_chooser_" + (artist.id ?: artist.name)) {
+                    artistChoices = emptyList()
+                    onNavigateToContent()
+                    actions.openArtist(artist)
                 }
             }
             Spacer(Modifier.height(16.dp))

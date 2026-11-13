@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.SharedPreferences
 import com.flaretune.client.model.ClientNotice
 import com.flaretune.client.model.Song
+import com.flaretune.client.model.SongRelations
+import com.flaretune.client.model.relations
 import java.security.MessageDigest
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
@@ -39,11 +41,13 @@ data class HistoryEntry(
     val durationSeconds: Double,
     val language: String? = null,
     val playedAt: Long,
+    val relations: SongRelations = SongRelations(),
 ) {
     /** The caller must resolve current media through the active account before playing. */
     fun toSong(): Song = Song(
         id = id, title = title, artist = artist, album = album,
         durationSeconds = durationSeconds, language = language, audioUrl = "",
+        source = relations.source, artists = relations.artists, artistId = relations.artistId, albumId = relations.albumId,
     )
 }
 
@@ -72,7 +76,7 @@ class JsonPlaybackHistoryStore(private val storage: HistoryStorage) : PlaybackHi
         if (rows.length() > MAX_HISTORY_ENTRIES) failStorage()
         canonicalHistory((0 until rows.length()).map { index ->
             val row = rows.opt(index) as? JSONObject ?: failStorage()
-            val allowed = setOf("id", "title", "artist", "album", "durationSeconds", "language", "playedAt")
+            val allowed = setOf("id", "title", "artist", "album", "durationSeconds", "language", "playedAt") + SONG_RELATION_KEYS
             if (row.keys().asSequence().any { it !in allowed }) failStorage()
             val language = when (val value = row.opt("language")) {
                 null, JSONObject.NULL -> null
@@ -91,6 +95,7 @@ class JsonPlaybackHistoryStore(private val storage: HistoryStorage) : PlaybackHi
                 artist = row.opt("artist") as? String ?: failStorage(),
                 album = row.opt("album") as? String ?: failStorage(),
                 durationSeconds = duration, language = language, playedAt = playedAt,
+                relations = row.readSongRelations(row.opt("id") as? String ?: failStorage()),
             )
         })
     }
@@ -103,7 +108,7 @@ class JsonPlaybackHistoryStore(private val storage: HistoryStorage) : PlaybackHi
                 .put("artist", entry.artist).put("album", entry.album)
                 .put("durationSeconds", entry.durationSeconds)
                 .put("language", entry.language ?: JSONObject.NULL)
-                .put("playedAt", entry.playedAt))
+                .put("playedAt", entry.playedAt).putSongRelations(entry.id, entry.relations))
         }
         val encoded = JSONObject().put("version", 1).put("entries", rows).toString()
         if (encoded.toByteArray(Charsets.UTF_8).size > MAX_HISTORY_BYTES) failStorage()
@@ -219,7 +224,7 @@ class PlaybackHistoryRepository(
             val current = identity ?: return
             enqueue(Command.Record(generation, current, HistoryEntry(
                 id = song.id, title = song.title, artist = song.artist, album = song.album,
-                durationSeconds = song.durationSeconds, language = song.language, playedAt = playedAt,
+                durationSeconds = song.durationSeconds, language = song.language, playedAt = playedAt, relations = song.relations,
             )))
         }
     }
@@ -363,7 +368,7 @@ private fun canonicalHistory(entries: List<HistoryEntry>): List<HistoryEntry> {
         if (entry.id.isBlank() || entry.id.length > 2048 || entry.title.length > 4096 ||
             entry.artist.length > 4096 || entry.album.length > 4096 ||
             (entry.language != null && entry.language.length > 128) ||
-            !entry.durationSeconds.isFinite() || entry.durationSeconds < 0 || entry.playedAt < 0) failStorage()
+            !entry.durationSeconds.isFinite() || entry.durationSeconds < 0 || entry.playedAt < 0 || !validSongRelations(entry.id, entry.relations)) failStorage()
     }
     return entries.sortedByDescending { it.playedAt }.distinctBy { it.id }.take(MAX_HISTORY_ENTRIES).toList()
 }

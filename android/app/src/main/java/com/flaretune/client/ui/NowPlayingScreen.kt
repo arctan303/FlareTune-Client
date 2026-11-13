@@ -11,6 +11,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -20,6 +21,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -33,11 +35,15 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.ScrollableDefaults
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
-import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.rememberScrollableState
+import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.interaction.DragInteraction
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -57,9 +63,6 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -75,6 +78,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -83,10 +87,10 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.BlurredEdgeTreatment
@@ -116,6 +120,8 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.Placeable
+import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
@@ -137,6 +143,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
@@ -740,36 +747,67 @@ private fun ClassicLyricsViewport(
     onTranslate: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val listState = key(lyricState.songId) { rememberLazyListState() }
-    val waveController = remember(lyricState.songId) { LyricsWaveSpringController() }
+    val controller = remember(lyricState.songId) { LyricsSpringLayoutController() }
     val context = LocalContext.current
     val animatorsEnabled = remember(context) { systemAnimatorsEnabled(context) }
     val density = LocalDensity.current
-    var viewportHeightPx by remember { mutableIntStateOf(0) }
     var userScrolling by remember(lyricState.songId) { mutableStateOf(false) }
+    val interactionSource = remember(lyricState.songId) { MutableInteractionSource() }
+    var scrollGeneration by remember(lyricState.songId) { mutableIntStateOf(0) }
+    val livePositionMsState = rememberUpdatedState(playbackPositionMs)
 
-    var lastScrollSongId by remember { mutableStateOf<String?>(null) }
-    var lastScrollActiveIdx by remember(lyricState.songId) { mutableIntStateOf(-1) }
-    var lastScrollTranslation by remember(lyricState.songId) { mutableStateOf(translationEnabled) }
-    var lastScrollViewportHeight by remember(lyricState.songId) { mutableIntStateOf(0) }
-    var lastUserScrolling by remember(lyricState.songId) { mutableStateOf(false) }
+    class AnchorSnapshot(var key: Any? = null, var baselineY: Float? = null, var slotIdx: Int = 0)
+    class SceneTracker(
+        var activeIdx: Int = Int.MIN_VALUE,
+        var hadIntro: Boolean = false,
+        var translation: Boolean = false,
+        var widthPx: Int = 0,
+        var heightPx: Int = 0,
+        var userScrolling: Boolean = false,
+        var dragAnchorIdx: Int = -1,
+    )
 
-    // Programmatic scrolls must never start the user's browsing pause or cancel themselves.
-    LaunchedEffect(listState) {
+    val anchorSnapshot = remember(lyricState.songId) { AnchorSnapshot() }
+    val sceneTracker = remember(lyricState.songId) {
+        SceneTracker(translation = translationEnabled)
+    }
+
+    LaunchedEffect(controller) {
+        controller.runAnimationLoop()
+    }
+
+    val scrollableState = rememberScrollableState { delta ->
+        controller.applyScrollDelta(delta)
+    }
+
+    // Programmatic layout solves must never start the user's browsing pause or cancel themselves.
+    LaunchedEffect(interactionSource, scrollableState) {
         var resume: Job? = null
-        listState.interactionSource.interactions.collect { interaction ->
+        interactionSource.interactions.collect { interaction ->
             when (interaction) {
                 is DragInteraction.Start -> {
                     resume?.cancel()
-                    waveController.clear()
-                    userScrolling = true
+                    scrollGeneration++
+                    if (!userScrolling) {
+                        sceneTracker.dragAnchorIdx = anchorSnapshot.slotIdx
+                        controller.snapScrollToCurrentAnchor(
+                            anchorKey = anchorSnapshot.key,
+                            baselineAnchorY = anchorSnapshot.baselineY,
+                        )
+                        userScrolling = true
+                    }
                 }
                 is DragInteraction.Stop, is DragInteraction.Cancel -> {
+                    val gen = ++scrollGeneration
                     resume?.cancel()
                     resume = launch {
-                        snapshotFlow { listState.isScrollInProgress }.first { !it }
+                        snapshotFlow { scrollableState.isScrollInProgress }.first { !it }
                         delay(LyricMotionSpecs.USER_SCROLL_DEBOUNCE_MS)
-                        userScrolling = false
+                        if (scrollGeneration == gen) {
+                            sceneTracker.dragAnchorIdx = -1
+                            controller.resetScrollOffset()
+                            userScrolling = false
+                        }
                     }
                 }
             }
@@ -777,107 +815,35 @@ private fun ClassicLyricsViewport(
     }
 
     val activeIdx = lyricState.activeLyricIndex
-    val introInterludeState = remember(
-        playbackPositionMs,
+    val hasIntroInterlude by remember(
+        lyricState.status,
         lyricState.lines,
         activeIdx,
         userScrolling,
         lyricState.syncMode,
     ) {
-        if (lyricState.status == LyricStatus.READY && lyricState.lines.isNotEmpty()) {
-            computeInterludeUiState(
-                currentTimeSeconds = playbackPositionMs / 1000.0,
-                lines = lyricState.lines,
-                activeIndex = activeIdx,
-                lineIndex = 0,
-                userScrolling = userScrolling,
-                syncMode = lyricState.syncMode,
-            ).takeIf { it.isInterlude && it.window.kind == InterludeKind.INTRO }
-        } else null
-    }
-    val introSlotOffset = if (introInterludeState != null) 1 else 0
-
-    LaunchedEffect(
-        lyricState.activeLyricIndex,
-        lyricState.songId,
-        lyricState.status,
-        lyricState.lines,
-        translationEnabled,
-        userScrolling,
-        viewportHeightPx,
-        introSlotOffset,
-    ) {
-        if (userScrolling) {
-            waveController.clear()
-            lastUserScrolling = true
-            return@LaunchedEffect
-        }
-        if (lyricState.status != LyricStatus.READY || lyricState.activeLyricIndex < 0 || lyricState.lines.isEmpty()) {
-            waveController.clear()
-            lastScrollSongId = lyricState.songId
-            lastScrollActiveIdx = -1
-            lastScrollTranslation = translationEnabled
-            lastScrollViewportHeight = viewportHeightPx
-            lastUserScrolling = false
-            return@LaunchedEffect
-        }
-
-        val target = lyricState.activeLyricIndex.coerceIn(0, lyricState.lines.lastIndex)
-        val listTarget = target + introSlotOffset
-        // Let translated rows finish measuring before calculating their actual distance.
-        withFrameNanos { }
-
-        val visible = listState.layoutInfo.visibleItemsInfo
-        val item = visible.firstOrNull { it.index == listTarget }
-        val isResizeOrResume = lastScrollTranslation != translationEnabled ||
-            lastScrollViewportHeight != viewportHeightPx ||
-            (lastUserScrolling && !userScrolling)
-        val isSmallLineAdvance = !isResizeOrResume &&
-            lastScrollSongId == lyricState.songId &&
-            lastScrollActiveIdx >= 0 &&
-            kotlin.math.abs(target - lastScrollActiveIdx) in 1..3 &&
-            item != null
-
-        lastScrollSongId = lyricState.songId
-        lastScrollActiveIdx = target
-        lastScrollTranslation = translationEnabled
-        lastScrollViewportHeight = viewportHeightPx
-        lastUserScrolling = false
-
-        if (item == null) {
-            waveController.clear()
-            listState.scrollToItem(listTarget, 0)
-        } else if (kotlin.math.abs(item.offset.toFloat()) >= LyricMotionSpecs.SCROLL_DEADZONE_PX) {
-            val deltaPx = item.offset.toFloat()
-            when {
-                isResizeOrResume && animatorsEnabled -> {
-                    waveController.clear()
-                    listState.animateScrollBy(deltaPx, LyricMotionSpecs.ResizeTween)
-                }
-                isSmallLineAdvance && animatorsEnabled -> {
-                    val minIdx = ((visible.firstOrNull()?.index ?: listTarget) - 2).coerceAtLeast(0)
-                    val maxIdx = (visible.lastOrNull()?.index ?: listTarget) + 4
-                    listState.scrollToItem(listTarget, 0)
-                    waveController.animateLineAdvance(
-                        deltaPx = deltaPx,
-                        anchorListIndex = listTarget,
-                        visibleIndices = minIdx..maxIdx,
-                    )
-                }
-                else -> {
-                    waveController.clear()
-                    listState.scrollToItem(listTarget, 0)
-                }
+        derivedStateOf {
+            if (lyricState.status == LyricStatus.READY && lyricState.lines.isNotEmpty() && activeIdx <= 0) {
+                computeInterludeUiState(
+                    currentTimeSeconds = livePositionMsState.value / 1000.0,
+                    lines = lyricState.lines,
+                    activeIndex = activeIdx,
+                    lineIndex = 0,
+                    userScrolling = userScrolling,
+                    syncMode = lyricState.syncMode,
+                ).let { it.isInterlude && it.window.kind == InterludeKind.INTRO }
+            } else {
+                false
             }
         }
     }
 
-    val topFocusPad = with(density) { (viewportHeightPx * 0.30f).toDp() }.coerceAtLeast(if (twoColumns) 72.dp else 44.dp)
-    val bottomFocusPad = with(density) { (viewportHeightPx * 0.70f).toDp() }.coerceAtLeast(if (twoColumns) 128.dp else 88.dp)
     val primarySize = if (twoColumns) 30.sp else 26.sp
     val primaryLineHeight = if (twoColumns) 39.sp else 34.sp
     val secondarySize = if (twoColumns) 18.sp else 16.sp
     val secondaryLineHeight = if (twoColumns) 26.sp else 23.sp
+    val lineSpacingPx = with(density) { (if (twoColumns) 26.dp else 22.dp).toPx() }
+    val fallbackHeightPx = with(density) { (if (twoColumns) 54.dp else 46.dp).toPx() }
 
     val hasInlineTranslation = remember(lyricState.lines) {
         lyricState.lines.any { !it.translation.isNullOrBlank() }
@@ -892,7 +858,7 @@ private fun ClassicLyricsViewport(
             LyricTranslationStatus.FAILED,
         )
 
-    // Direct floating lyrics viewport (borderless & cardless, modeled after Web LyricsScroller).
+    // Direct floating lyrics viewport (borderless & cardless, solved via Musiver spring layout).
     Column(modifier = modifier) {
         Box(
             Modifier.weight(1f).fillMaxWidth(),
@@ -949,13 +915,50 @@ private fun ClassicLyricsViewport(
                                 Velocity(0f, available.y)
                         }
                     }
-                    LazyColumn(
-                        state = listState,
+                    val lines = lyricState.lines
+                    val totalSlots = lines.size
+                    val slotKeys = remember(lyricState.songId, lines) {
+                        ArrayList<Any>(totalSlots).apply {
+                            lines.forEachIndexed { index, line ->
+                                add("line:$index:${line.timeSeconds}:${line.text}")
+                            }
+                        }
+                    }
+                    val presentations = remember(activeIdx, lines.size, userScrolling, hasIntroInterlude) {
+                        ArrayList<LyricLinePresentation>(totalSlots).apply {
+                            val effectiveActiveIndex = if (activeIdx < 0 && hasIntroInterlude) 0 else activeIdx
+                            for (index in lines.indices) {
+                                add(
+                                    resolveLyricPresentation(
+                                        index = index,
+                                        activeIndex = effectiveActiveIndex,
+                                        lineCount = lines.size,
+                                        userScrolling = userScrolling,
+                                    ),
+                                )
+                            }
+                        }
+                    }
+                    val pushYPxList = remember(presentations, density) {
+                        presentations.map { with(density) { it.verticalOffset.toPx() } }
+                    }
+                    val blurPxList = remember(presentations, density) {
+                        presentations.map { with(density) { it.blurRadius.toPx() } }
+                    }
+
+                    SubcomposeLayout(
                         modifier = Modifier
                             .fillMaxSize()
                             .testTag("player_lyrics_list")
+                            .clipToBounds()
                             .nestedScroll(absorbLyricsOverscroll)
-                            .onSizeChanged { viewportHeightPx = it.height }
+                            .scrollable(
+                                state = scrollableState,
+                                orientation = Orientation.Vertical,
+                                reverseDirection = false,
+                                flingBehavior = ScrollableDefaults.flingBehavior(),
+                                interactionSource = interactionSource,
+                            )
                             .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
                             .drawWithContent {
                                 drawContent()
@@ -968,144 +971,355 @@ private fun ClassicLyricsViewport(
                                 )
                                 drawRect(brush = edgeMask, blendMode = BlendMode.DstIn)
                             },
-                        contentPadding = PaddingValues(top = topFocusPad, bottom = bottomFocusPad, start = 4.dp, end = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(if (twoColumns) 26.dp else 22.dp),
-                    ) {
-                        if (introInterludeState != null) {
-                            item(key = "lyric-intro-dots") {
-                                InterludeDotsRow(
-                                    interludeState = introInterludeState,
-                                    playbackPositionMs = playbackPositionMs,
-                                    active = playing && !buffering,
-                                    twoColumns = twoColumns,
-                                    onSeekTo = onSeekTo,
-                                )
-                            }
+                    ) { constraints ->
+                        // Subscribe to manual drag/fling offset changes inside layout phase.
+                        controller.readScrollInvalidation()
+
+                        val viewportWidth = constraints.maxWidth
+                        val viewportHeight = constraints.maxHeight
+                        val containerHeight = viewportHeight.toFloat()
+
+                        if (
+                            sceneTracker.widthPx != 0 &&
+                            (sceneTracker.widthPx != viewportWidth || sceneTracker.translation != translationEnabled)
+                        ) {
+                            controller.invalidateHeights()
                         }
-                        itemsIndexed(lyricState.lines, key = { index, line -> "$index:${line.timeSeconds}:${line.text}" }) { index, line ->
-                            val listIndex = index + introSlotOffset
-                            val isActive = index == activeIdx
-                            val presentation = resolveLyricPresentation(
-                                index = index,
-                                activeIndex = activeIdx,
-                                lineCount = lyricState.lines.size,
-                                userScrolling = userScrolling,
-                            )
-                            val lineAlpha by animateFloatAsState(
-                                presentation.opacity,
-                                tween(280, easing = FastOutSlowInEasing),
-                                label = "lyric_alpha_$index",
-                            )
-                            val lineScale by animateFloatAsState(
-                                presentation.scale,
-                                LyricMotionSpecs.ScaleSpring,
-                                label = "lyric_scale_$index",
-                            )
-                            val lineBlur by animateDpAsState(
-                                presentation.blurRadius,
-                                tween(300, easing = FastOutSlowInEasing),
-                                label = "lyric_blur_$index",
-                            )
-                            val linePushY by animateDpAsState(
-                                presentation.verticalOffset,
-                                LyricMotionSpecs.PushSpring,
-                                label = "lyric_push_$index",
-                            )
-                            val clickableModifier = line.timeSeconds?.let { sec ->
-                                Modifier.clickable {
-                                    userScrolling = false
-                                    onSeekTo((sec * 1000.0).toLong().coerceAtLeast(0L))
+
+                        val playbackAnchorIdx = if (activeIdx >= 0) {
+                            activeIdx.coerceIn(0, totalSlots - 1)
+                        } else {
+                            0
+                        }
+                        val anchorIdx = if (userScrolling && sceneTracker.dragAnchorIdx in 0 until totalSlots) {
+                            sceneTracker.dragAnchorIdx
+                        } else {
+                            playbackAnchorIdx
+                        }
+                        val itemConstraints = Constraints(
+                            minWidth = viewportWidth,
+                            maxWidth = viewportWidth,
+                            minHeight = 0,
+                            maxHeight = Constraints.Infinity,
+                        )
+                        val overscanPx = max(320f, containerHeight * 0.6f)
+                        val measuredPlaceables = HashMap<Int, Placeable>()
+
+                        fun buildItems(): List<LyricsSpringLayoutItem> =
+                            ArrayList<LyricsSpringLayoutItem>(totalSlots).apply {
+                                for (i in 0 until totalSlots) {
+                                    add(
+                                        LyricsSpringLayoutItem(
+                                            index = i,
+                                            height = controller.measuredHeightFor(slotKeys[i]) ?: fallbackHeightPx,
+                                            presentation = presentations[i],
+                                        ),
+                                    )
                                 }
-                            } ?: Modifier
+                            }
 
-                            val betweenInterludeState = if (isActive && index < lyricState.lines.lastIndex) {
-                                computeInterludeUiState(
-                                    currentTimeSeconds = playbackPositionMs / 1000.0,
-                                    lines = lyricState.lines,
-                                    activeIndex = activeIdx,
-                                    lineIndex = index,
-                                    userScrolling = userScrolling,
-                                    syncMode = lyricState.syncMode,
-                                ).takeIf { it.isInterlude && it.window.kind == InterludeKind.BETWEEN_LINES }
-                            } else null
-
-                            Column(Modifier.fillMaxWidth()) {
-                                Column(
-                                    Modifier.fillMaxWidth()
-                                        .testTag("player_lyric_$index")
-                                        .semantics { selected = isActive }
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .then(clickableModifier)
-                                        .graphicsLayer {
-                                            alpha = lineAlpha
-                                            scaleX = lineScale
-                                            scaleY = lineScale
-                                            translationY = waveController.offsetFor(listIndex) + linePushY.toPx()
-                                            transformOrigin = TransformOrigin(0f, 0.5f)
-                                        }
-                                        .then(
-                                            if (Build.VERSION.SDK_INT >= 31 && lineBlur > 0.2.dp) {
-                                                Modifier.blur(lineBlur, BlurredEdgeTreatment.Unbounded)
-                                            } else Modifier,
-                                        )
-                                        .padding(vertical = 4.dp),
-                                ) {
-                                    val wordSynced = isActive && lyricState.syncMode == "word" && line.words.isNotEmpty()
-                                    val primaryColor = if (isActive) FlareTokens.ClassicVibrantPrimary else Color.White
-                                    val primaryShadow: Shadow? = null
-
-                                    if (wordSynced) {
-                                        KaraokeLyricText(
-                                            line = line,
-                                            basePositionMs = playbackPositionMs,
-                                            playing = playing && !buffering,
-                                            fontSize = primarySize,
-                                            lineHeight = primaryLineHeight,
-                                            shadow = primaryShadow,
-                                        )
+                        fun measureSlot(slotIndex: Int) {
+                            if (slotIndex in measuredPlaceables) return
+                            val key = slotKeys[slotIndex]
+                            val hadCachedHeight = controller.measuredHeightFor(key) != null
+                            val measurables = subcompose(key) {
+                                val lineIndex = slotIndex
+                                val line = lines[lineIndex]
+                                val isActive = lineIndex == activeIdx
+                                val isInterludeCandidate = isActive || (lineIndex == 0 && activeIdx <= 0)
+                                val interludeState = if (isInterludeCandidate) {
+                                    computeInterludeUiState(
+                                        currentTimeSeconds = livePositionMsState.value / 1000.0,
+                                        lines = lines,
+                                        activeIndex = activeIdx,
+                                        lineIndex = lineIndex,
+                                        userScrolling = userScrolling,
+                                        syncMode = lyricState.syncMode,
+                                    )
+                                } else {
+                                    null
+                                }
+                                val isInterlude = interludeState?.isInterlude == true
+                                val interludeProgress by animateFloatAsState(
+                                    targetValue = if (isInterlude) 1f else 0f,
+                                    animationSpec = if (!animatorsEnabled) {
+                                        snap()
                                     } else {
-                                        Text(
-                                            text = line.text.ifBlank { "…" },
-                                            style = MaterialTheme.typography.headlineSmall.copy(
+                                        tween(
+                                            durationMillis = if (isInterlude) 500 else 1000,
+                                            easing = InterludeHostEasing,
+                                        )
+                                    },
+                                    label = "interlude_host_progress",
+                                )
+                                var retainedInterlude by remember(key) { mutableStateOf<InterludeUiState?>(null) }
+                                if (isInterlude) {
+                                    retainedInterlude = interludeState
+                                } else if (interludeProgress <= 0.01f) {
+                                    retainedInterlude = null
+                                }
+
+                                val clickableModifier = if (!isInterlude) {
+                                    line.timeSeconds?.let { sec ->
+                                        Modifier.clickable {
+                                            scrollGeneration++
+                                            sceneTracker.dragAnchorIdx = -1
+                                            controller.resetScrollOffset()
+                                            userScrolling = false
+                                            onSeekTo((sec * 1000.0).toLong().coerceAtLeast(0L))
+                                        }
+                                    } ?: Modifier
+                                } else {
+                                    Modifier
+                                }
+
+                                val rowBlurPx = controller.visualStateFor(key)?.displayBlurPx ?: blurPxList[slotIndex]
+                                val rowBlurDp = with(density) { rowBlurPx.toDp() }
+                                val textSwapBlurDp = (6f * interludeProgress).dp
+                                val combinedTextBlurDp = if (textSwapBlurDp > rowBlurDp) textSwapBlurDp else rowBlurDp
+                                val dotsSwapBlurDp = (6f * (1f - interludeProgress)).dp
+
+                                Box(
+                                    Modifier.fillMaxWidth()
+                                        .padding(start = 4.dp, end = 8.dp)
+                                        .testTag("player_lyric_$lineIndex")
+                                        .semantics { selected = isActive || (lineIndex == 0 && activeIdx < 0 && isInterlude) }
+                                        .then(clickableModifier),
+                                ) {
+                                    Column(
+                                        Modifier.fillMaxWidth()
+                                            .graphicsLayer {
+                                                alpha = (1f - interludeProgress).coerceIn(0f, 1f)
+                                                val scale = 1f - 0.03f * interludeProgress
+                                                scaleX = scale
+                                                scaleY = scale
+                                                transformOrigin = TransformOrigin(0f, 0.5f)
+                                            }
+                                            .then(
+                                                if (Build.VERSION.SDK_INT >= 31 && combinedTextBlurDp > 0.2.dp) {
+                                                    Modifier.blur(combinedTextBlurDp, BlurredEdgeTreatment.Unbounded)
+                                                } else {
+                                                    Modifier
+                                                },
+                                            )
+                                            .padding(vertical = 4.dp),
+                                    ) {
+                                        val wordSynced = isActive && lyricState.syncMode == "word" && line.words.isNotEmpty()
+                                        val primaryColor = if (isActive) FlareTokens.ClassicVibrantPrimary else Color.White
+                                        val primaryShadow: Shadow? = if (isActive) {
+                                            Shadow(color = Color(0x66000000), offset = Offset(0f, 2f), blurRadius = 10f)
+                                        } else {
+                                            null
+                                        }
+
+                                        if (wordSynced) {
+                                            KaraokeLyricText(
+                                                line = line,
+                                                basePositionMs = livePositionMsState.value,
+                                                playing = playing && !buffering,
                                                 fontSize = primarySize,
                                                 lineHeight = primaryLineHeight,
-                                                fontWeight = FontWeight.Bold,
                                                 shadow = primaryShadow,
-                                            ),
-                                            color = primaryColor,
-                                        )
-                                    }
-
-                                    val translation = if (translationEnabled) line.translation?.trim().orEmpty() else ""
-                                    if (translation.isNotBlank()) {
-                                        Text(
-                                            text = translation,
-                                            style = MaterialTheme.typography.titleMedium.copy(
-                                                fontSize = secondarySize,
-                                                lineHeight = secondaryLineHeight,
-                                                fontWeight = FontWeight.Normal,
-                                            ),
-                                            color = if (isActive) Color(0xCCFFFFFF) else Color(0xA6FFFFFF),
-                                            modifier = Modifier.padding(top = 5.dp),
-                                        )
-                                    }
-                                }
-                                AnimatedVisibility(
-                                    visible = betweenInterludeState != null,
-                                    enter = fadeIn(tween(240)) + expandVertically(tween(240)),
-                                    exit = fadeOut(tween(180)) + shrinkVertically(tween(180)),
-                                ) {
-                                    betweenInterludeState?.let { interlude ->
-                                        Column {
-                                            Spacer(Modifier.height(10.dp))
-                                            InterludeDotsRow(
-                                                interludeState = interlude,
-                                                playbackPositionMs = playbackPositionMs,
-                                                active = playing && !buffering,
-                                                twoColumns = twoColumns,
-                                                onSeekTo = onSeekTo,
+                                            )
+                                        } else {
+                                            Text(
+                                                text = line.text.ifBlank { "…" },
+                                                style = MaterialTheme.typography.headlineSmall.copy(
+                                                    fontSize = primarySize,
+                                                    lineHeight = primaryLineHeight,
+                                                    fontWeight = FontWeight.Bold,
+                                                    shadow = primaryShadow,
+                                                ),
+                                                color = primaryColor,
                                             )
                                         }
+
+                                        val translation = if (translationEnabled) line.translation?.trim().orEmpty() else ""
+                                        if (translation.isNotBlank()) {
+                                            Text(
+                                                text = translation,
+                                                style = MaterialTheme.typography.titleMedium.copy(
+                                                    fontSize = secondarySize,
+                                                    lineHeight = secondaryLineHeight,
+                                                    fontWeight = FontWeight.Normal,
+                                                    shadow = primaryShadow,
+                                                ),
+                                                color = if (isActive) Color(0xCCFFFFFF) else Color(0x8CFFFFFF),
+                                                modifier = Modifier.padding(top = 5.dp),
+                                            )
+                                        }
+                                    }
+
+                                    retainedInterlude?.let { activeInterlude ->
+                                        if (isInterlude || interludeProgress > 0.01f) {
+                                            Box(
+                                                Modifier.matchParentSize()
+                                                    .graphicsLayer {
+                                                        alpha = interludeProgress.coerceIn(0f, 1f)
+                                                        val scale = 0.97f + 0.03f * interludeProgress
+                                                        scaleX = scale
+                                                        scaleY = scale
+                                                        transformOrigin = TransformOrigin(0f, 0.5f)
+                                                    }
+                                                    .then(
+                                                        if (Build.VERSION.SDK_INT >= 31 && dotsSwapBlurDp > 0.2.dp) {
+                                                            Modifier.blur(dotsSwapBlurDp, BlurredEdgeTreatment.Unbounded)
+                                                        } else {
+                                                            Modifier
+                                                        },
+                                                    ),
+                                                contentAlignment = Alignment.CenterStart,
+                                            ) {
+                                                InterludeDotsRow(
+                                                    interludeState = activeInterlude,
+                                                    playbackPositionMs = livePositionMsState.value,
+                                                    active = playing && !buffering,
+                                                    twoColumns = twoColumns,
+                                                    interactive = isInterlude,
+                                                    onSeekTo = onSeekTo,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            val placeable = measurables.first().measure(itemConstraints)
+                            measuredPlaceables[slotIndex] = placeable
+                            val measuredH = placeable.height.toFloat()
+                            val prevRecorded = controller.recordMeasuredHeight(key, measuredH)
+                            if (userScrolling && !hadCachedHeight && prevRecorded == null && slotIndex < anchorIdx) {
+                                controller.compensateOffscreenHeightDelta(measuredH - fallbackHeightPx)
+                            }
+                        }
+
+                        // Pass 1: estimate visible range and measure those rows + anchor.
+                        if (containerHeight > 0f) {
+                            val roughItems = buildItems()
+                            val roughTargets = solveLyricsSpringLayout(
+                                items = roughItems,
+                                containerHeight = containerHeight,
+                                alignOffset = anchorIdx,
+                                scrollOffset = controller.currentScrollOffset(),
+                                lineSpacing = lineSpacingPx,
+                                staggerEnabled = false,
+                            )
+                            measureSlot(anchorIdx)
+                            for (i in 0 until totalSlots) {
+                                val t = roughTargets[i]
+                                val bounds = controller.estimateRenderBoundsY(slotKeys[i], t.y, t.height)
+                                if (bounds.endInclusive >= -overscanPx && bounds.start <= containerHeight + overscanPx) {
+                                    measureSlot(i)
+                                }
+                            }
+
+                            // Pass 2: if measured heights revealed additional rows inside overscan, measure them too.
+                            val refinedItems = buildItems()
+                            val refinedTargets = solveLyricsSpringLayout(
+                                items = refinedItems,
+                                containerHeight = containerHeight,
+                                alignOffset = anchorIdx,
+                                scrollOffset = controller.currentScrollOffset(),
+                                lineSpacing = lineSpacingPx,
+                                staggerEnabled = false,
+                            )
+                            var measuredExtra = false
+                            for (i in 0 until totalSlots) {
+                                if (i in measuredPlaceables) continue
+                                val t = refinedTargets[i]
+                                val bounds = controller.estimateRenderBoundsY(slotKeys[i], t.y, t.height)
+                                if (bounds.endInclusive >= -overscanPx && bounds.start <= containerHeight + overscanPx) {
+                                    measureSlot(i)
+                                    measuredExtra = true
+                                }
+                            }
+
+                            val finalItems = if (measuredExtra) buildItems() else refinedItems
+                            val limits = computeLyricsScrollLimits(
+                                items = finalItems,
+                                containerHeight = containerHeight,
+                                alignOffset = anchorIdx,
+                                lineSpacing = lineSpacingPx,
+                            )
+                            controller.updateScrollLimits(limits)
+
+                            val scene = when {
+                                userScrolling -> LyricsMotionScene.INSTANT
+                                sceneTracker.widthPx != 0 && (
+                                    sceneTracker.widthPx != viewportWidth ||
+                                        sceneTracker.heightPx != viewportHeight ||
+                                        sceneTracker.translation != translationEnabled
+                                    ) -> LyricsMotionScene.CONTAINER_RESIZE
+                                sceneTracker.userScrolling && !userScrolling -> LyricsMotionScene.CONTAINER_RESIZE
+                                sceneTracker.activeIdx == Int.MIN_VALUE -> LyricsMotionScene.INSTANT
+                                sceneTracker.activeIdx != activeIdx -> {
+                                    val jump = if (
+                                        sceneTracker.activeIdx < 0 &&
+                                        activeIdx in 0..2 &&
+                                        (sceneTracker.hadIntro || activeIdx <= 1)
+                                    ) {
+                                        activeIdx - sceneTracker.activeIdx
+                                    } else if (sceneTracker.activeIdx < 0 || activeIdx < 0) {
+                                        Int.MAX_VALUE
+                                    } else {
+                                        kotlin.math.abs(activeIdx - sceneTracker.activeIdx)
+                                    }
+                                    if (jump in 1..4) LyricsMotionScene.LINE_ADVANCE else LyricsMotionScene.INSTANT
+                                }
+                                else -> LyricsMotionScene.SPRING
+                            }
+
+                            val staggerEnabled = scene == LyricsMotionScene.LINE_ADVANCE && animatorsEnabled
+                            val finalTargets = solveLyricsSpringLayout(
+                                items = finalItems,
+                                containerHeight = containerHeight,
+                                alignOffset = anchorIdx,
+                                scrollOffset = controller.currentScrollOffset(),
+                                lineSpacing = lineSpacingPx,
+                                staggerEnabled = staggerEnabled,
+                            )
+
+                            anchorSnapshot.key = slotKeys[anchorIdx]
+                            anchorSnapshot.baselineY =
+                                containerHeight * LyricMotionSpecs.ALIGN_POSITION - finalItems[anchorIdx].height / 2f
+                            anchorSnapshot.slotIdx = anchorIdx
+
+                            sceneTracker.activeIdx = activeIdx
+                            sceneTracker.hadIntro = hasIntroInterlude
+                            sceneTracker.translation = translationEnabled
+                            sceneTracker.widthPx = viewportWidth
+                            sceneTracker.heightPx = viewportHeight
+                            sceneTracker.userScrolling = userScrolling
+
+                            controller.commitTargets(
+                                keys = slotKeys,
+                                targets = finalTargets,
+                                presentations = presentations,
+                                pushYPxList = pushYPxList,
+                                blurPxList = blurPxList,
+                                scene = scene,
+                                animatorsEnabled = animatorsEnabled,
+                                visibleIndices = measuredPlaceables.keys,
+                            )
+                        }
+
+                        layout(viewportWidth, viewportHeight) {
+                            measuredPlaceables.forEach { (slotIndex, placeable) ->
+                                val key = slotKeys[slotIndex]
+                                val rowState = controller.visualStateFor(key)
+                                val targetY = (rowState?.displayY ?: 0f) + (rowState?.displayPushYPx ?: 0f)
+                                val yInt = targetY.roundToInt()
+                                val subPixelY = targetY - yInt
+                                placeable.placeRelativeWithLayer(0, yInt) {
+                                    val liveState = controller.visualStateFor(key)
+                                    if (liveState != null) {
+                                        val liveY = liveState.displayY + liveState.displayPushYPx
+                                        translationY = liveY - yInt
+                                        scaleX = liveState.displayScale
+                                        scaleY = liveState.displayScale
+                                        alpha = liveState.displayOpacity
+                                        transformOrigin = TransformOrigin(0f, 0.5f)
+                                    } else {
+                                        translationY = subPixelY
                                     }
                                 }
                             }
@@ -1187,15 +1401,16 @@ private fun KaraokeLyricText(
     }
 
     val currentSec = displayPosMs / 1000.0
+    val unsungActiveColor = Color(0x99FFFFFF)
     val annotated: AnnotatedString = buildAnnotatedString {
         line.words.forEach { word ->
             val wordColor = when {
                 currentSec >= word.endTimeSeconds -> FlareTokens.ClassicVibrantPrimary
-                currentSec <= word.startTimeSeconds -> Color(0x6BFFFFFF)
+                currentSec <= word.startTimeSeconds -> unsungActiveColor
                 else -> {
                     val span = (word.endTimeSeconds - word.startTimeSeconds).coerceAtLeast(0.05)
                     val fraction = ((currentSec - word.startTimeSeconds) / span).toFloat().coerceIn(0f, 1f)
-                    lerp(Color(0x6BFFFFFF), FlareTokens.ClassicVibrantPrimary, fraction)
+                    lerp(unsungActiveColor, FlareTokens.ClassicVibrantPrimary, fraction)
                 }
             }
             withStyle(
@@ -1225,12 +1440,15 @@ private fun systemAnimatorsEnabled(context: Context): Boolean =
         Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0f
     }
 
+private val InterludeHostEasing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
+
 @Composable
 private fun InterludeDotsRow(
     interludeState: InterludeUiState,
     playbackPositionMs: Long,
     active: Boolean,
     twoColumns: Boolean,
+    interactive: Boolean = true,
     onSeekTo: (Long) -> Unit,
 ) {
     val context = LocalContext.current
@@ -1279,8 +1497,8 @@ private fun InterludeDotsRow(
 
     Row(
         Modifier.padding(vertical = 6.dp)
-            .testTag("player_interlude_dots")
-            .semantics { contentDescription = containerLabel },
+            .then(if (interactive) Modifier.testTag("player_interlude_dots") else Modifier)
+            .semantics { if (interactive) contentDescription = containerLabel },
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1289,21 +1507,21 @@ private fun InterludeDotsRow(
             val dotFill = liveState.dotFills.getOrElse(index) { 0f }.coerceIn(0f, 1f)
             val targetSec = liveState.dotTimesSeconds?.getOrNull(index)
 
-            // Full fixed circles that brighten & whiten smoothly with progress while preserving web breathing glow.
+            // Keep previous full-circle progressive fill look while eliminating muddy gray blending on low-fill states.
             val fillAlpha = when (dotState) {
-                InterludeDotFillState.PENDING -> 0.14f
-                InterludeDotFillState.FILLING -> 0.24f + 0.72f * dotFill
+                InterludeDotFillState.PENDING -> 0.06f
+                InterludeDotFillState.FILLING -> 0.38f + 0.62f * dotFill
                 InterludeDotFillState.COMPLETE -> 1.0f
             }
             val borderAlpha = when (dotState) {
-                InterludeDotFillState.PENDING -> 0.22f
-                InterludeDotFillState.FILLING -> (0.45f + 0.40f * breathePhase).coerceAtLeast(0.45f + 0.45f * dotFill)
+                InterludeDotFillState.PENDING -> 0.32f
+                InterludeDotFillState.FILLING -> (0.55f + 0.35f * breathePhase).coerceAtLeast(0.55f + 0.40f * dotFill)
                 InterludeDotFillState.COMPLETE -> 0.96f
             }
             val glowAlpha = when (dotState) {
                 InterludeDotFillState.PENDING -> 0f
-                InterludeDotFillState.FILLING -> (0.14f + 0.34f * breathePhase) * (0.45f + 0.55f * dotFill)
-                InterludeDotFillState.COMPLETE -> 0.28f
+                InterludeDotFillState.FILLING -> (0.20f + 0.30f * breathePhase) * (0.45f + 0.55f * dotFill)
+                InterludeDotFillState.COMPLETE -> 0.34f
             }
 
             Box(
@@ -1312,45 +1530,49 @@ private fun InterludeDotsRow(
             ) {
                 Box(
                     Modifier.requiredSize(38.dp)
-                        .testTag("interlude_dot_$index")
+                        .then(if (interactive) Modifier.testTag("interlude_dot_$index") else Modifier)
+                        .drawBehind {
+                            if (glowAlpha > 0.01f) {
+                                val dotRadiusPx = dotSize.toPx() * 0.5f
+                                val haloRadius = dotRadiusPx * if (dotState == InterludeDotFillState.FILLING) {
+                                    1.40f + 0.42f * breathePhase
+                                } else {
+                                    1.60f
+                                }
+                                drawCircle(
+                                    brush = Brush.radialGradient(
+                                        colors = listOf(
+                                            Color.White.copy(alpha = glowAlpha),
+                                            Color.White.copy(alpha = glowAlpha * 0.35f),
+                                            Color.White.copy(alpha = 0f),
+                                        ),
+                                        radius = haloRadius,
+                                    ),
+                                    radius = haloRadius,
+                                )
+                            }
+                        }
                         .clip(CircleShape)
                         .clickable(
-                            enabled = targetSec != null,
+                            enabled = interactive && targetSec != null,
                             role = Role.Button,
                             onClickLabel = dotLabels[index],
                         ) {
                             targetSec?.let { onSeekTo((it * 1000.0).toLong().coerceAtLeast(0L)) }
                         }
                         .semantics {
-                            contentDescription = dotLabels[index]
-                            selected = dotState == InterludeDotFillState.COMPLETE
+                            if (interactive) {
+                                contentDescription = dotLabels[index]
+                                selected = dotState == InterludeDotFillState.COMPLETE
+                            }
                         },
                     contentAlignment = Alignment.Center,
                 ) {
                     Box(
                         Modifier.size(dotSize)
-                            .drawBehind {
-                                if (glowAlpha > 0.01f) {
-                                    val haloRadius = size.minDimension * if (dotState == InterludeDotFillState.FILLING) {
-                                        0.72f + 0.26f * breathePhase
-                                    } else {
-                                        0.78f
-                                    }
-                                    drawCircle(
-                                        brush = Brush.radialGradient(
-                                            colors = listOf(
-                                                Color.White.copy(alpha = glowAlpha),
-                                                Color.White.copy(alpha = 0f),
-                                            ),
-                                            radius = haloRadius,
-                                        ),
-                                        radius = haloRadius,
-                                    )
-                                }
-                            }
                             .clip(CircleShape)
                             .background(Color.White.copy(alpha = fillAlpha))
-                            .border(1.5.dp, Color.White.copy(alpha = borderAlpha), CircleShape),
+                            .border(1.25.dp, Color.White.copy(alpha = borderAlpha), CircleShape),
                     )
                 }
             }

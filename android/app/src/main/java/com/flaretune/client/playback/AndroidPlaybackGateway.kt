@@ -14,6 +14,11 @@ import androidx.media3.session.SessionToken
 import coil.ImageLoader
 import com.flaretune.client.data.ActiveConnection
 import com.flaretune.client.model.Song
+import com.flaretune.client.model.SongRelations
+import com.flaretune.client.model.relations
+import com.flaretune.client.data.readSongRelations
+import com.flaretune.client.data.putSongRelations
+import org.json.JSONObject
 import com.flaretune.client.ui.PlaybackSnapshot
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.CoroutineScope
@@ -133,10 +138,20 @@ class AndroidPlaybackGateway(private val context: Context, private val runtime: 
 internal fun Song.item(): MediaItem = MediaItem.Builder().setMediaId(id).setUri(audioUrl)
     .setMediaMetadata(MediaMetadata.Builder().setTitle(title).setArtist(artist).setAlbumTitle(album)
         .setArtworkUri(coverUrl?.let(Uri::parse))
-        .setExtras(Bundle().apply { putString("audio_url", audioUrl); putDouble("duration_seconds", durationSeconds); putString("language", language) })
+        .setExtras(Bundle().apply {
+            putString("audio_url", audioUrl); putDouble("duration_seconds", durationSeconds); putString("language", language)
+            putString("song_relations_v1", JSONObject().putSongRelations(id, relations).toString())
+        })
         .build()).build()
 
-internal fun MediaItem.song(): Song = Song(mediaId, mediaMetadata.title?.toString() ?: mediaId,
-    mediaMetadata.artist?.toString() ?: "", mediaMetadata.albumTitle?.toString() ?: "",
-    mediaMetadata.extras?.getDouble("duration_seconds") ?: 0.0,
-    mediaMetadata.extras?.getString("audio_url") ?: "", mediaMetadata.artworkUri?.toString(), mediaMetadata.extras?.getString("language"))
+internal fun MediaItem.song(): Song {
+    val links = try {
+        mediaMetadata.extras?.getString("song_relations_v1")?.takeIf { it.length <= 64 * 1024 }
+            ?.let { JSONObject(it).readSongRelations(mediaId) } ?: SongRelations()
+    } catch (_: Exception) { SongRelations() }
+    return Song(mediaId, mediaMetadata.title?.toString() ?: mediaId,
+        mediaMetadata.artist?.toString() ?: "", mediaMetadata.albumTitle?.toString() ?: "",
+        mediaMetadata.extras?.getDouble("duration_seconds") ?: 0.0,
+        mediaMetadata.extras?.getString("audio_url") ?: "", mediaMetadata.artworkUri?.toString(),
+        mediaMetadata.extras?.getString("language"), links.source, links.artists, links.artistId, links.albumId)
+}

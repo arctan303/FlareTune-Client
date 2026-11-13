@@ -63,6 +63,8 @@ fun SongActionsSheet(
     onAlbum: () -> Unit,
     onDismiss: () -> Unit,
     onRemoveFromPlaylist: (() -> Unit)? = null,
+    artistAvailable: Boolean = song.artist.isNotBlank(),
+    albumAvailable: Boolean = song.album.isNotBlank(),
 ) {
     val subtitle = remember(song.artist, song.durationSeconds) {
         listOfNotNull(
@@ -137,8 +139,8 @@ fun SongActionsSheet(
             )
         }
         LibraryActionRow(R.string.ft_library_enqueue, ClientIcons.Queue, !busy && song.canPlay, "song_action_enqueue", onEnqueue)
-        if (song.artist.isNotBlank()) LibraryActionRow(R.string.ft_library_view_artist, ClientIcons.Artist, !busy, "song_action_artist", onArtist)
-        if (song.album.isNotBlank()) LibraryActionRow(R.string.ft_library_view_album, ClientIcons.Disc, !busy, "song_action_album", onAlbum)
+        if (artistAvailable) LibraryActionRow(R.string.ft_library_view_artist, ClientIcons.Artist, !busy, "song_action_artist", onArtist)
+        if (albumAvailable) LibraryActionRow(R.string.ft_library_view_album, ClientIcons.Disc, !busy, "song_action_album", onAlbum)
         onRemoveFromPlaylist?.let {
             LibraryActionRow(R.string.ft_library_remove_song, ClientIcons.Trash, !busy, "song_action_remove", it)
         }

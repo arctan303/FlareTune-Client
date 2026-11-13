@@ -122,6 +122,7 @@ import com.flaretune.client.model.LyricState
 import com.flaretune.client.model.LyricStatus
 import com.flaretune.client.model.PlaylistSummary
 import com.flaretune.client.model.Song
+import com.flaretune.client.model.isCurrentAlbumTrack
 import com.flaretune.client.ui.theme.FlareTokens
 import com.flaretune.client.ui.theme.floatingDockSurface
 import kotlinx.coroutines.launch
@@ -498,10 +499,6 @@ private fun HomeScreen(
                 }
             }
             item(key = "featured-cards") {
-                val favoriteCoverUrl = state.latestFavoriteCoverUrl
-                    ?: state.favoriteSongs.firstOrNull()?.coverUrl
-                    ?: favoritePlaylist?.previewCovers?.firstOrNull()
-                    ?: favoritePlaylist?.customCoverUrl
                 val favoriteCount = state.favoriteSongs.size.takeIf { it > 0 } ?: favoritePlaylist?.songCount ?: 0
                 val favoriteSubtitle = if (favoriteCount > 0) {
                     pluralStringResource(R.plurals.ft_track_count, favoriteCount, favoriteCount)
@@ -520,11 +517,12 @@ private fun HomeScreen(
                             title = favoritePlaylist?.name ?: stringResource(R.string.ft_liked_songs),
                             subtitle = favoriteSubtitle,
                             icon = ClientIcons.Heart,
-                            accentTint = MaterialTheme.colorScheme.primary,
-                            coverUrl = favoriteCoverUrl,
+                            accentTint = Color(0xFFE11D48),
+                            coverUrl = null,
                             loader = loader,
                             modifier = Modifier.testTag("home_favorites"),
                             onClick = toFavorites,
+                            thumbnail = { FavoriteHeartCover(Modifier.fillMaxSize()) },
                             quickActionIcon = ClientIcons.Play,
                             quickActionDescription = stringResource(R.string.ft_play_favorites),
                             quickActionTag = "home_favorites_play",
@@ -794,6 +792,7 @@ private fun FeaturedHeroCard(
     loader: ImageLoader?,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
+    thumbnail: (@Composable () -> Unit)? = null,
     quickActionIcon: ImageVector? = null,
     quickActionDescription: String? = null,
     quickActionTag: String? = null,
@@ -848,7 +847,15 @@ private fun FeaturedHeroCard(
             ) {
                 Icon(icon, null, Modifier.size(18.dp), tint = Color.White)
             }
-            if (loader != null && !coverUrl.isNullOrBlank()) {
+            if (thumbnail != null) {
+                Box(
+                    Modifier.size(56.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .border(0.8.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(10.dp)),
+                ) {
+                    thumbnail()
+                }
+            } else if (loader != null && !coverUrl.isNullOrBlank()) {
                 Box(
                     Modifier.size(56.dp)
                         .clip(RoundedCornerShape(10.dp))
@@ -1204,10 +1211,6 @@ private fun CatalogScreen(
             // 资料库: personal account playlists page (Favorites first, then user-created playlists).
             val favoritePlaylist = state.playlists.firstOrNull { it.kind == "favorite" }
             val customPlaylists = state.playlists.filter { it.kind != "favorite" }
-            val favoriteCoverUrl = state.latestFavoriteCoverUrl
-                ?: state.favoriteSongs.firstOrNull()?.coverUrl
-                ?: favoritePlaylist?.previewCovers?.firstOrNull()
-                ?: favoritePlaylist?.customCoverUrl
             val favoriteCount = favoritePlaylist?.songCount?.takeIf { it > 0 } ?: state.favoriteSongs.size
             val favoriteSubtitle = if (favoriteCount > 0) {
                 pluralStringResource(R.plurals.ft_track_count, favoriteCount, favoriteCount)
@@ -1247,27 +1250,10 @@ private fun CatalogScreen(
                             Box(
                                 Modifier.size(64.dp)
                                     .clip(RoundedCornerShape(10.dp))
-                                    .background(
-                                        Brush.linearGradient(
-                                            listOf(
-                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
-                                                MaterialTheme.colorScheme.surfaceContainer,
-                                            ),
-                                        ),
-                                    ),
+                                    .border(0.7.dp, Color(0x14000000), RoundedCornerShape(10.dp)),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                if (loader != null && !favoriteCoverUrl.isNullOrBlank()) {
-                                    AsyncImage(
-                                        model = favoriteCoverUrl,
-                                        imageLoader = loader,
-                                        contentDescription = null,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize(),
-                                    )
-                                } else {
-                                    Icon(ClientIcons.Heart, null, Modifier.size(28.dp), tint = MaterialTheme.colorScheme.onSurface)
-                                }
+                                FavoriteHeartCover(Modifier.fillMaxSize())
                             }
                             Column(Modifier.weight(1f)) {
                                 Text(
@@ -1444,7 +1430,9 @@ private fun PlaylistDetailHeader(
                 .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center,
         ) {
-            if (loader != null && !coverUrl.isNullOrBlank()) {
+            if (playlist.kind == "favorite") {
+                FavoriteHeartCover(Modifier.fillMaxSize())
+            } else if (loader != null && !coverUrl.isNullOrBlank()) {
                 AsyncImage(
                     model = coverUrl,
                     imageLoader = loader,
@@ -1454,7 +1442,7 @@ private fun PlaylistDetailHeader(
                 )
             } else {
                 Icon(
-                    if (playlist.kind == "favorite") ClientIcons.Heart else ClientIcons.Music,
+                    ClientIcons.Music,
                     null,
                     Modifier.size(28.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1659,7 +1647,7 @@ private fun AlbumScreen(state: ClientUiState, actions: ClientActions, loader: Im
             SongRow(
                 song = song,
                 imageLoader = loader,
-                current = song.id == state.playback.current?.id,
+                current = song.isCurrentAlbumTrack(state.playback.current, album.id),
                 playing = state.playback.playing,
                 buffering = state.playback.buffering,
                 modifier = Modifier.testTag("song_" + song.id),

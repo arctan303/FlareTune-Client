@@ -164,7 +164,7 @@ class FlareTuneApi(val network: SessionNetwork) : AccountApi {
         val album = parseAlbum(data)
         if (album.id != id) invalidResponse()
         val songs = parseSongs(data.optJSONArray("songs") ?: invalidResponse())
-            .map { if (it.coverUrl == null) it.copy(coverUrl = album.coverUrl) else it }
+            .map { it.copy(albumId = album.id, album = it.album.ifBlank { album.title }, coverUrl = it.coverUrl ?: album.coverUrl) }
         return AlbumDetail(album, songs)
     }
 
@@ -331,13 +331,19 @@ class FlareTuneApi(val network: SessionNetwork) : AccountApi {
         if (entries.map { it.song.id }.distinct().size != entries.size) invalidResponse()
         return PlaylistDetail(summary, entries.sortedBy { it.sortOrder })
     }
-    private fun parseSongMetadata(row: JSONObject): Song = Song(
-        requiredString(row, "id"), (row.opt("title") as? String).orEmpty().ifBlank { requiredString(row, "id") },
-        (row.opt("artist") as? String).orEmpty(), (row.opt("album") as? String).orEmpty(),
-        row.optDouble("duration", 0.0).takeIf { it.isFinite() && it > 0 } ?: 0.0,
-        nullableString(row, "audio_url")?.let(address::media).orEmpty(),
-        nullableString(row, "cover_url")?.let(address::media), nullableString(row, "language"),
-    )
+    private fun parseSongMetadata(row: JSONObject): Song {
+        val id = requiredString(row, "id")
+        val links = songRelations(row, id)
+        return Song(id, (row.opt("title") as? String).orEmpty().ifBlank { id },
+            (row.opt("artist") as? String).orEmpty(), (row.opt("album") as? String).orEmpty(),
+            row.optDouble("duration", 0.0).takeIf { it.isFinite() && it > 0 } ?: 0.0,
+            nullableString(row, "audio_url")?.let(address::media).orEmpty(),
+            nullableString(row, "cover_url")?.let(address::media), nullableString(row, "language"),
+            links.source, links.artists, links.artistId, links.albumId)
+    }
+    private fun songRelations(row: JSONObject, id: String): SongRelations = try {
+        row.readSongRelations(id)
+    } catch (_: IllegalArgumentException) { invalidResponse() }
     private fun parseShelf(data: JSONObject): PlaylistShelf {
         val rows = data.optJSONArray("items") ?: invalidResponse()
         if (rows.length() > 51) invalidResponse()
@@ -704,9 +710,11 @@ class FlareTuneApi(val network: SessionNetwork) : AccountApi {
         val id = row.opt("id") as? String ?: return null
         val audio = nullableString(row, "audio_url")?.let(address::media) ?: return null
         if (id.isBlank()) return null
+        val links = songRelations(row, id)
         return Song(id, (row.opt("title") as? String).orEmpty().ifBlank { id }, (row.opt("artist") as? String).orEmpty(),
             (row.opt("album") as? String).orEmpty(), row.optDouble("duration", 0.0).takeIf { it.isFinite() && it > 0 } ?: 0.0,
-            audio, nullableString(row, "cover_url")?.let(address::media), nullableString(row, "language"))
+            audio, nullableString(row, "cover_url")?.let(address::media), nullableString(row, "language"),
+            links.source, links.artists, links.artistId, links.albumId)
     }
 
     private fun parseLyrics(data: JSONObject): LyricDocument {

@@ -2,6 +2,8 @@ package com.flaretune.client.data
 
 import android.content.Context
 import com.flaretune.client.model.Song
+import com.flaretune.client.model.SongRelations
+import com.flaretune.client.model.relations
 import com.flaretune.client.model.SpotlightArtist
 import java.io.IOException
 import java.security.MessageDigest
@@ -13,11 +15,13 @@ import org.json.JSONObject
 data class SearchEntity(
     val type: String, val id: String, val name: String, val artist: String = "", val album: String = "",
     val durationSeconds: Double = 0.0, val language: String? = null,
+    val relations: SongRelations = SongRelations(),
 ) {
     val title: String get() = name
-    fun toSong(): Song = Song(id, name, artist, album, durationSeconds, "", language = language)
+    fun toSong(): Song = Song(id, name, artist, album, durationSeconds, "", language = language,
+        source = relations.source, artists = relations.artists, artistId = relations.artistId, albumId = relations.albumId)
     companion object {
-        fun fromSong(song: Song) = SearchEntity("song", song.id, song.title, song.artist, song.album, song.durationSeconds, song.language)
+        fun fromSong(song: Song) = SearchEntity("song", song.id, song.title, song.artist, song.album, song.durationSeconds, song.language, song.relations)
         fun fromArtist(name: String, id: String? = null) = SearchEntity("artist", id ?: name, name)
     }
 }
@@ -35,9 +39,10 @@ class SearchHistoryStore(private val storage: HistoryStorage) {
         SearchHistorySnapshot((0 until terms.length()).map { searchTerm(terms.opt(it) as? String ?: localStateFailure()) },
             (0 until entities.length()).map { index ->
                 val row = entities.optJSONObject(index) ?: localStateFailure()
-                exactKeys(row, setOf("type", "id", "name", "artist", "album", "durationSeconds", "language"))
+                relationKeys(row, setOf("type", "id", "name", "artist", "album", "durationSeconds", "language"))
                 validateEntity(SearchEntity(localString(row, "type"), localString(row, "id"), localString(row, "name"),
-                    localString(row, "artist"), localString(row, "album"), localDuration(row), localLanguage(row)))
+                    localString(row, "artist"), localString(row, "album"), localDuration(row), localLanguage(row),
+                    row.readSongRelations(localString(row, "id"))))
             })
     }
     @Synchronized fun addTerm(identity: HistoryIdentity, term: String): SearchHistorySnapshot {
@@ -61,7 +66,7 @@ class SearchHistoryStore(private val storage: HistoryStorage) {
     private fun save(identity: HistoryIdentity, snapshot: SearchHistorySnapshot): SearchHistorySnapshot = localStateOperation {
         val data = JSONObject().put("version", 1).put("terms", JSONArray(snapshot.terms)).put("entities", JSONArray(snapshot.entities.map {
             JSONObject().put("type", it.type).put("id", it.id).put("name", it.name).put("artist", it.artist).put("album", it.album)
-                .put("durationSeconds", it.durationSeconds).put("language", it.language ?: JSONObject.NULL)
+                .put("durationSeconds", it.durationSeconds).put("language", it.language ?: JSONObject.NULL).putSongRelations(it.id, it.relations)
         }))
         writeLocalJson(storage, listeningStorageKey("search_v1", identity), data)
         snapshot
@@ -73,7 +78,7 @@ class SearchHistoryStore(private val storage: HistoryStorage) {
     private fun validateEntity(entity: SearchEntity): SearchEntity = entity.also {
         if (it.type !in setOf("song", "artist") || it.id.isBlank() || it.id.length > (if (it.type == "artist") 300 else 256) ||
             listOf(it.id, it.name, it.artist, it.album).any { field -> field.length > 2000 || field.any { c -> c.code < 32 || c.code == 127 } } ||
-            it.name.isBlank() || !it.durationSeconds.isFinite() || it.durationSeconds < 0) localStateFailure()
+            it.name.isBlank() || !it.durationSeconds.isFinite() || it.durationSeconds < 0 || !validSongRelations(it.id, it.relations)) localStateFailure()
     }
 }
 
@@ -134,15 +139,18 @@ class DiscoveryCache(private val storage: HistoryStorage) {
     }
     private fun encodeEntries(entries: List<QueueEntry>) = JSONArray(entries.map { entry ->
         JSONObject().put("id", entry.id).put("title", entry.title).put("artist", entry.artist).put("album", entry.album)
-            .put("durationSeconds", entry.durationSeconds).put("language", entry.language ?: JSONObject.NULL)
+            .put("durationSeconds", entry.durationSeconds).put("language", entry.language ?: JSONObject.NULL).putSongRelations(entry.id, entry.relations)
     })
     private fun entries(rows: JSONArray): List<QueueEntry> {
         if (rows.length() > 500) localStateFailure()
         return (0 until rows.length()).map { index ->
             val row = rows.optJSONObject(index) ?: localStateFailure()
-            exactKeys(row, setOf("id", "title", "artist", "album", "durationSeconds", "language"))
-            metadataEntry(Song(localString(row, "id"), localString(row, "title"), localString(row, "artist"), localString(row, "album"),
-                localDuration(row), "", language = localLanguage(row)))
+            relationKeys(row, setOf("id", "title", "artist", "album", "durationSeconds", "language"))
+            val id = localString(row, "id")
+            val links = row.readSongRelations(id)
+            metadataEntry(Song(id, localString(row, "title"), localString(row, "artist"), localString(row, "album"),
+                localDuration(row), "", language = localLanguage(row), source = links.source, artists = links.artists,
+                artistId = links.artistId, albumId = links.albumId))
         }
     }
 }
@@ -160,12 +168,16 @@ internal fun listeningStorageKey(prefix: String, identity: HistoryIdentity): Str
 }
 internal fun metadataEntry(song: Song): QueueEntry {
     if (song.id.isBlank() || song.id.length > 256 || listOf(song.id, song.title, song.artist, song.album).any { it.length > 2000 || it.any { c -> c.code < 32 || c.code == 127 } } ||
-        !song.durationSeconds.isFinite() || song.durationSeconds < 0) localStateFailure()
-    return QueueEntry(song.id, song.title, song.artist, song.album, song.durationSeconds, song.language)
+        !song.durationSeconds.isFinite() || song.durationSeconds < 0 || !validSongRelations(song.id, song.relations)) localStateFailure()
+    return QueueEntry(song.id, song.title, song.artist, song.album, song.durationSeconds, song.language, song.relations)
 }
 internal fun boundedLocalJson(raw: String): JSONObject {
     if (raw.toByteArray(Charsets.UTF_8).size > 512 * 1024) localStateFailure()
     return JSONObject(raw)
+}
+internal fun relationKeys(data: JSONObject, required: Set<String>) {
+    val actual = data.keys().asSequence().toSet()
+    if (!actual.containsAll(required) || actual.any { it !in required && it !in SONG_RELATION_KEYS }) localStateFailure()
 }
 internal fun exactKeys(data: JSONObject, keys: Set<String>) { if (data.keys().asSequence().toSet() != keys) localStateFailure() }
 internal fun localString(data: JSONObject, field: String): String = data.opt(field) as? String ?: localStateFailure()
