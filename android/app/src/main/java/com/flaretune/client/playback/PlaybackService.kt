@@ -47,7 +47,7 @@ class PlaybackService : MediaSessionService() {
         }
         network = connection.network
         val dataSource = OkHttpDataSource.Factory(connection.network.mediaClient)
-        val player = ExoPlayer.Builder(this)
+        val engine = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(this).setDataSourceFactory(dataSource))
             .setWakeMode(C.WAKE_MODE_LOCAL)
             .build().apply {
@@ -55,6 +55,7 @@ class PlaybackService : MediaSessionService() {
                     .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true)
                 setHandleAudioBecomingNoisy(true)
             }
+        val player = PersistentTransportPlayer(engine)
         systemControls = SystemMediaControls(this, connection, persistenceScope, app.systemMediaFavorites) {
             runtime.connection?.network === connection.network
         }

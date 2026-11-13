@@ -174,3 +174,7 @@ adb shell am instrument -w -r -e class com.flaretune.client.DevicePlaybackTest c
 - [AGP 8.13 兼容性及 Kotlin 2.3 支持](https://developer.android.com/build/releases/agp-8-13-0-release-notes)
 - [Kotlin 2.x 的 Compose Compiler 配置](https://developer.android.com/jetpack/androidx/releases/compose-kotlin)
 - [Media3 稳定版与接入说明](https://developer.android.com/jetpack/androidx/releases/media3)
+
+## USB投屏反馈（2026-11-13）
+
+本机已安装官方scrcpy5.0.1。平板通过USB连接且已允许调试后，可运行 `./scripts/mirror-android.ps1`，窗口名为“FlareTune 平板投屏”；重复调用不重复开窗。默认最大边1920/60fps，鼠标键盘控制由scrcpy提供，音频留在平板，不录屏、不自动同步剪贴板；关闭窗口即可结束。开发反馈可直接说明当前页面/现象，按需通过ADB读取当前画面，无需每次手动发送截图。这不等同持续自动截图或录制。

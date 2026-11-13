@@ -1,0 +1,91 @@
+{
+  "status": "draft-unselected",
+  "date": "2026-11-13",
+  "deployment": false,
+  "concepts": [
+    {
+      "id": "A",
+      "slug": "flare",
+      "name": "焰音",
+      "en": "FLARE",
+      "description": "暖色火焰，负形藏入播放符号",
+      "bg": [
+        "#F36A48",
+        "#BC392C"
+      ],
+      "color": "#FFF4DB",
+      "app": "A-flare/app.svg",
+      "notification": "A-flare/notification.svg"
+    },
+    {
+      "id": "B",
+      "slug": "record",
+      "name": "留声",
+      "en": "RECORD",
+      "description": "唱片留白，偏复古的安静质感",
+      "bg": [
+        "#E5DCC7",
+        "#D8C8A9"
+      ],
+      "color": "#214D46",
+      "app": "B-record/app.svg",
+      "notification": "B-record/notification.svg"
+    },
+    {
+      "id": "C",
+      "slug": "flow",
+      "name": "声流",
+      "en": "FLOW",
+      "description": "一笔流动声波，轻盈而有节奏",
+      "bg": [
+        "#163044",
+        "#0B192B"
+      ],
+      "color": "#8BE5DB",
+      "app": "C-flow/app.svg",
+      "notification": "C-flow/notification.svg"
+    },
+    {
+      "id": "D",
+      "slug": "monogram",
+      "name": "字构",
+      "en": "FT MONOGRAM",
+      "description": "FT 几何字标，干净、克制、耐看",
+      "bg": [
+        "#F3F0E8",
+        "#E8E4D9"
+      ],
+      "color": "#24272D",
+      "app": "D-monogram/app.svg",
+      "notification": "D-monogram/notification.svg"
+    },
+    {
+      "id": "E",
+      "slug": "ribbon",
+      "name": "折光",
+      "en": "RIBBON",
+      "description": "折叠带状符号，偏利落的科技感",
+      "bg": [
+        "#7660F1",
+        "#4033AB"
+      ],
+      "color": "#FFFFFF",
+      "app": "E-ribbon/app.svg",
+      "notification": "E-ribbon/notification.svg"
+    },
+    {
+      "id": "F",
+      "slug": "spark",
+      "name": "微芒",
+      "en": "SPARK",
+      "description": "柔和星芒，强调 Flare 的光感",
+      "bg": [
+        "#EBE8FA",
+        "#CEDDF5"
+      ],
+      "color": "#4B3DA5",
+      "app": "F-spark/app.svg",
+      "notification": "F-spark/notification.svg"
+    }
+  ]
+}

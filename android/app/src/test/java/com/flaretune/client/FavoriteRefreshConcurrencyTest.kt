@@ -60,7 +60,7 @@ class FavoriteRefreshConcurrencyTest {
             f.acknowledge(detail(4, "new-one"))
             request.release(); f.request("playlistsJob").join(); f.request("favoritesJob").join()
             assertLatest(f, 4, "new-one")
-            assertTrue(f.broadcasts.all { it >= 4 })
+            assertTrue("Observed publication revisions: " + f.broadcasts, f.broadcasts.all { it >= 4 })
         } finally { f.close() }
     }
 
@@ -202,7 +202,11 @@ class FavoriteRefreshConcurrencyTest {
         val changes = SystemMediaFavoriteChanges()
         val model = ClientViewModel(connections, player, Dispatchers.IO, queueRepository = repository, systemMediaFavorites = changes)
         val f = Fixture(model, api, connection, connections, changes, player)
-        f.observer = backgroundScope.launch { changes.updates.collect { f.broadcasts += it.detail.playlist.revision } }
+        // Record at publication time: a queued setup event must not arrive after ready() clears
+        // the recorder and be mistaken for a stale publication from the operation under test.
+        f.observer = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            changes.updates.collect { f.broadcasts += it.detail.playlist.revision }
+        }
         return f
     }
 

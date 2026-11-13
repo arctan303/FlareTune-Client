@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+<title id="title">FlareTune D · 字构 · 应用图标候选</title>
+<defs><linearGradient id="bg" x2="0.8" y2="1"><stop stop-color="#F3F0E8"/><stop offset="1" stop-color="#E8E4D9"/></linearGradient></defs>
+<rect width="128" height="128" rx="29" fill="url(#bg)"/>
+<g transform="translate(20 20) scale(1.375)"><path fill="#24272D" d="M11 11H54V21H22V29H36V39H22V54H11ZM44 21H54V54H44Z"/></g>
+</svg>

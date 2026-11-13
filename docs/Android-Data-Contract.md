@@ -201,3 +201,7 @@ Application级SystemMediaFavoriteChanges仅内存传播真实完整detail，VM/U
 ## 歌曲来源关联与具体专辑版本（2026-11-13）
 
 Song 新增默认兼容的 source、artists:List<SongArtist>、artistId、albumId。UI 使用 relatedArtists()/relatedAlbum() 的真实来源引用，不能把 YT 名称重建为本地 Artist，已知专辑使用 openAlbum 直达。关联经 MediaItem 和安全元数据快照传递，恢复媒体仍在当前身份下重新解析。全屏菜单发出导航意图时收起面板，不依赖目标 ID 必须变化。专辑详情播放标记核对 song.id 与明确的 albumId；同视频可在不同专辑出现，不用封面、时长或标题推断实体相等。详情见[修复任务](tasks/android-song-relations-20261113.md)。
+
+## 系统媒体切歌边界（2026-11-13）
+
+用户明确非空队列的上一首/下一首不能因首尾边界消失。系统会话使用与底层Player保持事件一致的转发适配，持续公布可处理的标准切歌命令；手动上一曲沿用previousTrack，下一曲按原Timeline/随机/循环处理，无下一项时不擅自绕回。空队列撤回命令，直播不伪造seek。软件图标尚未选定；本轮仅提供成对SVG候选，品牌资源不随按钮修复部署。详细实现、验证和开发包边界见[本轮任务](tasks/android-system-transport-20261113.md)。

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+<title id="title">FlareTune A · 焰音 · 应用图标候选</title>
+<defs><linearGradient id="bg" x2="0.8" y2="1"><stop stop-color="#F36A48"/><stop offset="1" stop-color="#BC392C"/></linearGradient></defs>
+<rect width="128" height="128" rx="29" fill="url(#bg)"/>
+<g transform="translate(20 20) scale(1.375)"><path fill="#FFF4DB" fill-rule="evenodd" d="M35 5C39 20 53 24 53 39C53 52 44 60 31 60C18 60 10 51 10 40C10 30 17 23 22 15C20 27 23 32 27 35C35 27 37 17 35 5ZM28 38V52L40 45Z"/></g>
+</svg>
