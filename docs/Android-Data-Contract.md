@@ -1,6 +1,6 @@
 # Android 数据与 UI 接线合同
 
-本文件给 Gemini 与后续 UI 协作者使用，以当前 Kotlin 类型和真实动作实现为准。用户后续明确授权本协作补齐Web普通听歌能力并实现基础UI，Gemini后续迭代视觉；这在本轮范围替代此前UI仅由Gemini修改的限制。用户挂机后不能反馈，后续只做本机验证，不操作/覆盖挂机平板或向真实云端写入验收。视觉规则仍归 [Design-Brief](Design-Brief.md)。
+本文件给 Gemini 与后续 UI 协作者使用，以当前 Kotlin 类型和真实动作实现为准。用户后续明确授权本协作补齐Web普通听歌能力并实现基础UI，Gemini后续迭代视觉；这在本轮范围替代此前UI仅由Gemini修改的限制。用户挂机期间只做本机验证；2026-11-13用户返回后明确授权覆盖更新平板，dev.4已安装启动，不扩大为真实云端写入验收。视觉规则仍归 [Design-Brief](Design-Brief.md)。
 
 历史已验证且已安装的基线：`0.1.0-dev.3` / versionCode 3，固定最新UI输入143/143 JVM/Compose/Robolectric 单测、assembleDebug、Lint通过（0错误/42警告）。143项包含本轮fresh R2两项修复，原审查者已聚焦确认关闭；旧43/85/131/139项是各自输入的历史证据，不证明全设备真实功能。设备与服务端歌词问题另见 [任务](tasks/android-data-20261112.md)。
 
@@ -181,4 +181,4 @@ setPlaylistCover(playlist,sourceUri)只接系统照片选择器临时content URI
 
 ## 12. 当前补全验收边界
 
-本轮候选dev.4/code4仅在本机验证；旧dev.3已安装并正常播放。禁止将当前构建产物自动覆盖挂机平板，也不以云端私人数据写入代替本地TLS/状态/播放器/Compose测试。当前实现、失败修复、独立复核、最终APK摘要和备份由[补全任务](tasks/android-listening-capabilities-20261112.md)统一记账；不要把默认空actions或单纯编译通过当成功能力。
+dev.4/code4已通过本机验证，并在2026-11-13用户返回明确授权后覆盖安装到平板、启动MainActivity及回读APK摘要一致。挂机期间禁止自动覆盖的限制适用于此前开发阶段；本次安装不等同全部真机功能验收，也不以云端私人数据写入代替本地TLS/状态/播放器/Compose测试。当前实现、失败修复、独立复核、最终APK摘要和备份由[补全任务](tasks/android-listening-capabilities-20261112.md)统一记账；不要把默认空actions或单纯编译通过当成功能力。

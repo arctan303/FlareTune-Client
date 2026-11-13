@@ -19,7 +19,7 @@ FlareTune 官方音乐客户端，专注于音乐播放体验。
 
 本机 **233/233自动测试、assembleDebug、Lint通过（0错误 / 52警告 / 1提示）**。覆盖本地TLS接口合同、身份/迟到响应、修订冲突与幂等、完整不可播放成员、播放/持久化和Compose操作；渲染含窄屏、宽屏、200%字号。修复和独立复核、负对照与限制见[听歌能力补全任务](docs/tasks/android-listening-capabilities-20261112.md)，UI/数据接线见[Android数据合同](docs/Android-Data-Contract.md)。
 
-本地APK：`android/build/deliverables/FlareTune-0.1.0-dev.4-20261113-debug.apk`；SHA-256 `945F9F8ECD973AA12910A0D16D9A793FD28BBE0F752BF48915038693ABDB52CF`。这是debug开发测试包，未正式发布。**平板仍为先前已安装的dev.3/code3；本轮没有操作设备、覆盖安装或向真实站点写测试数据。** 用户此前已确认歌词恢复；新能力的真实听感、锁屏/蓝牙、后台耗电与厂商兼容性仍需设备验证。
+本地APK：`android/build/deliverables/FlareTune-0.1.0-dev.4-20261113-debug.apk`；SHA-256 `945F9F8ECD973AA12910A0D16D9A793FD28BBE0F752BF48915038693ABDB52CF`。这是debug开发测试包，未正式发布。**2026-11-13 用户返回后明确授权更新，dev.4/code4已覆盖安装到平板并启动MainActivity，已安装APK摘要与本候选一致；未卸载或清data。** 开发挂机阶段只做本机测试，未向真实站点写入测试数据。 用户此前已确认歌词恢复；新能力的真实听感、锁屏/蓝牙、后台耗电与厂商兼容性仍需设备验证。
 
 代码沿用已授权的远程备份分支 `codex/android-client-backup-20261112`；备份不等同正式发布，提交可从本轮任务与分支Git记录回溯。持续预览可手动运行 `./scripts/watch-android.ps1 -Preview`，真实客户端覆盖更新使用 `./scripts/deploy-android.ps1`；当前没有常驻watcher，本轮未执行这两项设备脚本。它们属于增量构建后覆盖更新，不是Android Studio Live Edit。
 

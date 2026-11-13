@@ -2,7 +2,7 @@
 
 目标：补齐Web普通账号听歌能力，在Android可完成发现/选歌、收藏、个人歌单全流程和播放组织。用户明确举例创建、加歌、收藏及顺序，并授权基础UI由本协作完成供Gemini后续迭代。尽量使用Web相同宿主接口与业务逻辑，排除插件私有业务和管理员能力。
 
-适用性：已完成（本机交付）。产品补全，单一集成交付；不按界面当前缺口裁切数据合同。用户挂机无法反馈，按现有Web可观察行为自主实现，必要工程取舍记录为实现选择，不伪装用户决定。后续仅本机测试，不再操作/覆盖安装平板、不改云数据验收；Git代码备份沿用单独授权，不等同正式发布。
+适用性：已完成（本机交付及后续授权设备更新）。产品补全，单一集成交付；不按界面当前缺口裁切数据合同。用户挂机无法反馈，按现有Web可观察行为自主实现，必要工程取舍记录为实现选择，不伪装用户决定。挂机期间仅本机测试，不操作平板或改云数据验收；2026-11-13用户返回后明确授权覆盖更新平板，替代该次设备操作限制，不扩大为云写入验收或正式发布；Git代码备份沿用单独授权，不等同正式发布。
 
 基线：Android已推WIP 26d8522，随后Gemini两UI及5份回执文档未提交变化原样保留；当前dev.3/code3已覆盖平板，最终APK SHA604BBF5444EDA5CC4B8108BE43D2D44E2D28B77BD2F97860F97A0CA63EA05BB0、143/143、Lint0错42警告。用户已确认歌词没有问题。实际本轮开工文件摘要/备份在android/build/listening-capabilities-baseline-20261112，不触碰研究原件或私有AI记忆。
 
@@ -20,7 +20,7 @@
 
 分工：album_api独占HTTP/API与其新测试；native_ui独占Models/Contracts/VM/data/playback及状态测试；主协作负责基础UI/资源/需求文档与集成，集中运行Gradle；host_api_review先只读Web盘点，后独占LibraryDialogs及其资源/交互测试；共享文件先约定方法，不并发写同一文件。R2审查由未参与实现的listening_review完成，主协作集成与实际执行验证。
 
-状态：实施、本机验证与fresh R2独立复核完成；交付仅本地debug APK。代码备份沿用codex/android-client-backup-20261112，提交由本任务文件的Git记录回溯。未安装到平板、未正式发布。
+状态：实施、本机验证与fresh R2独立复核完成；交付为debug开发包；用户返回后已单独授权并完成设备覆盖更新。代码备份沿用codex/android-client-backup-20261112，提交由本任务文件的Git记录回溯。dev.4已覆盖安装到平板、未正式发布。
 
 ## 实现与交接
 
@@ -48,7 +48,7 @@
 
 dev.4/code4 debug APK `android/build/deliverables/FlareTune-0.1.0-dev.4-20261113-debug.apk`，17745475字节，SHA-256 `945F9F8ECD973AA12910A0D16D9A793FD28BBE0F752BF48915038693ABDB52CF`。Release合并Manifest不含PreviewActivity/ui_preview或debuggable=true；仅debug带预览入口。凭据来自既有Keystore会话，不新增秘密；构建只读本机JDK/Android SDK，debug签名为本机开发密钥，未提交密钥、local.properties、构建物、原APK研究或私有AI工作状态。
 
-本轮仅本机合成fixture/TLS/播放器与Compose运行，不向真实站点写私有歌单/统计或操作照片库。当前平板dev.3及服务器/插件保持原状；没有ADB/安装/卸载/清data/部署。正式签名和设备新功能验收未执行。需要恢复代码可使用本轮前备份26d8522或dev.3已交付APK；调试包降级是否保留新metadata需按Android安装规则另验，不承诺强制降级。账号资料/头像、Web全部外观参数、离线、私有插件、管理与iOS不纳入本轮听歌补全。
+本轮仅本机合成fixture/TLS/播放器与Compose运行，不向真实站点写私有歌单/统计或操作照片库。开发挂机阶段平板dev.3及服务器/插件保持原状，当时未进行ADB或覆盖安装；随后按用户返回后的明确授权完成dev.4覆盖更新。服务器/插件未部署，未卸载或清data。正式签名和设备新功能验收未执行。需要恢复代码可使用本轮前备份26d8522或dev.3已交付APK；调试包降级是否保留新metadata需按Android安装规则另验，不承诺强制降级。账号资料/头像、Web全部外观参数、离线、私有插件、管理与iOS不纳入本轮听歌补全。
 
 APK签名v1/v2、16KB ZIP对齐与aapt包信息检查通过：com.flaretune.client、dev.4/code4、min23/target36、MainActivity。日志为android/build/listening-apk-{signature,alignment,badging}.log；无安装/设备启动。暂存文件路径/可识别密钥模式检查未发现问题，回执android/build/listening-staged-audit.json仅保存文件摘要，不是整仓安全审计。
 
@@ -57,3 +57,9 @@ APK签名v1/v2、16KB ZIP对齐与aapt包信息检查通过：com.flaretune.clie
 fresh R2 reviewer listening_review最终聚焦复核通过，无剩余阻断项。复用此前完整扫描，检查原六项发现/拖动/三处v3变更及v4系统字号增强，核实81文件快照、77运行与测试输入同当前树零差异、233项XML、正负对照、真实字号/宽屏PNG、APK摘要/签名/16KB对齐及release边界。该复核只读，未参与实现或运行构建/设备。真实云写入、听感/蓝牙/锁屏/后台耗电/厂商兼容为明确未验范围，不伪装通过。
 
 本轮备份基线26d8522，沿用已授权远程origin与codex/android-client-backup-20261112，功能提交标题为feat(android): complete personal listening and playlist workflows。实际提交及远端对应ref由Git记录回读；不合并main、不打tag、不发Release、不把APK/私有资料推入仓库。
+
+## 用户返回后的平板更新（2026-11-13）
+
+用户明确要求将新版更新到平板供其测试，替代先前挂机期间不操作平板的限制。复用已验证APK，不重新构建；deploy-android.ps1 -SkipBuild对唯一已授权连接的平板执行install -r，返回Success，随后启动真实MainActivity，Status ok且回读为前台topResumedActivity。设备回读dev.4/code4、min23/target36；已安装base.apk SHA-256与945F9F8E…ABDB52CF候选全值一致。未卸载、清data或启动独立预览；当前播放会因应用更新重启，持久状态沿用既有恢复合同。
+
+安装/启动日志与精确回读分别为android/build/deploy-dev4-20261113.log、android/build/deploy-dev4-20261113-verification.json。该回执证明覆盖安装和启动成功，不代替用户接下来的真实播放/歌单/歌词与后台功能测试。
