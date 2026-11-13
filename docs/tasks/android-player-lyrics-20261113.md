@@ -24,7 +24,7 @@
 - 宿主42/42针对性Node测试通过；新提交3ed67d45f96a20d2765eddb0b2c13e77eea53b16已备份dev并经既有受控通道部署。source718124dffa54ac7e8973ebad660cf1017896a427f16ddae968accb1b2f652e4a，Worker82cc31bc-8ea9-4d95-8481-3970896f1efc为100%；内容回读匹配source。21项配置/安装记录含revision、5插件包、108首曲库元数据和绑定与部署前一致；独立聚焦审查通过。
 - dev.5/code5 APK：android/build/deliverables/FlareTune-0.1.0-dev.5-20261113-debug.apk，SHA256 FF1F4B4BBA35E8D82E46474733D42DE479251B9E690DF4457041E5DC8976D0BC；签名v1/v2、16KB对齐、badging通过。已执行隔离树deploy脚本，install Success，MainActivity冷启动ok；回读versionCode5/versionName0.1.0-dev.5、base.apk摘要一致，数据保留。安装日志android/build/deploy-dev5-20261113.log。
 
-状态：实现、本机验证、测试站部署及平板覆盖更新完成；独立客户端分支单独远程备份，提交以分支Git记录为准。没有把共享树Gemini新增界面合入本包。尚未做修复后同条件真机帧率A/B或用户实际听感验收；也未取得该中文歌曲修复后带认证HTTP的独立回执，真实资产零副作用重算及部署内容回读与HTTP实测应区分。旧gfx混合会话不用于量化提速。后续整合由下节明确的新指令承接；本文服务端权威与交互回归持续有效，不再恢复客户端语种判断。
+状态：实现、本机验证、测试站部署及平板覆盖更新完成；dev.5修复提交b29eecf先本地固定，随后随下节dev.6共用分支一并远程备份。dev.5包本身没有把共享树Gemini新增界面合入。尚未做修复后同条件真机帧率A/B或用户实际听感验收；也未取得该中文歌曲修复后带认证HTTP的独立回执，真实资产零副作用重算及部署内容回读与HTTP实测应区分。旧gfx混合会话不用于量化提速。后续整合由下节明确的新指令承接；本文服务端权威与交互回归持续有效，不再恢复客户端语种判断。
 
 ## 同一基线整合（用户后续指令）
 
@@ -36,4 +36,4 @@
 
 合并包android/build/deliverables/FlareTune-0.1.0-dev.6-20261113-debug.apk，SHA256 41A70598797BC8EDC6325E68DF5BB8126C25D7B1256CF6F5C6A1F21E9CF6162C，签名v1/v2、16KB ZIP对齐、badging通过。覆盖安装Success；首次启动处于系统PackageUpdateActivity过渡，随后明确start返回com.flaretune.client/.MainActivity、前台与进程存在；回读version6和base.apk摘要一致。未卸载/清data，安装日志android/build/deploy-dev6-20261113.log。
 
-共同工作区同步完成：两树已快进到合并输入f42ba1321e5f73bb4034c598ea572bea0fa82efe，忽略CRLF/LF的逐项源码比较与dev.6证据一致，工作树干净。已测试隔离输入仍逐项匹配原始字节摘要；Git检出对两文件执行换行归一化，不改Kotlin语义。Gemini原始快照保留stash 0fbf01198abd4a34cb9fe20f8c2a007d74339b04；两份无实质差异文件另保留原字节，Git索引状态刷新后快进成功，没有丢弃业务改动。本次收尾说明提交只改文档，远程备份沿用同名分支，最终HEAD及两树/远端一致性以Git回读为准。后续双方从共享FlareTune-Client分支codex/android-client-backup-20261112继续，用户负责调度；隔离树不再独立开展新功能。
+共同工作区同步完成：两树已快进到合并输入f42ba1321e5f73bb4034c598ea572bea0fa82efe，忽略CRLF/LF的逐项源码比较与dev.6证据一致，工作树干净。已测试隔离输入仍逐项匹配原始字节摘要；Git检出对两文件执行换行归一化，不改Kotlin语义。Gemini原始快照保留stash 0fbf01198abd4a34cb9fe20f8c2a007d74339b04；两份无实质差异文件另保留原字节，Git索引状态刷新后快进成功，没有丢弃业务改动。本次收尾说明提交只改文档，远程备份沿用同名分支，本地共同分支、隔离恢复树与远端HEAD一致性已回读；收尾文档后再次核对。隔离树已转为detached恢复用途，已合入的临时本地分支删除，b29eecf/f42ba13仍在共同分支历史中。后续双方从共享FlareTune-Client分支codex/android-client-backup-20261112继续，用户负责调度；隔离树不再独立开展新功能。
