@@ -308,6 +308,16 @@ class LibraryDialogsTest {
         rule.onNodeWithTag("playlist_order_up_b").assertIsNotEnabled()
     }
 
+    @Test fun playlistOrderSaveRemainsDisabledUntilOrderChanges() {
+        val entries = listOf(PlaylistSong(track), PlaylistSong(track.copy(id = "b", title = "Blue hour")))
+        rule.setContent { FlareTuneTheme { PlaylistOrderDialog(playlist(), entries, false, null, false, {}, {}) } }
+        rule.onNodeWithTag("playlist_order_save").assertIsNotEnabled()
+        rule.onNodeWithTag("playlist_order_down_a").performScrollTo().performClick()
+        rule.onNodeWithTag("playlist_order_save").assertIsEnabled()
+        rule.onNodeWithTag("playlist_order_up_a").performScrollTo().performClick()
+        rule.onNodeWithTag("playlist_order_save").assertIsNotEnabled()
+    }
+
     @Test
     @Config(qualifiers = "zh-rCN-w320dp-h640dp-night-mdpi")
     fun narrowChineseFormSupportsLargeTextAndAccessibleSaveCancel() {
@@ -331,6 +341,29 @@ class LibraryDialogsTest {
         rule.onNodeWithTag("playlist_draft_cancel").assertIsDisplayed()
         rule.onNodeWithTag("playlist_draft_save").assertIsDisplayed().assertIsEnabled()
         screenshot("library-form-large-zh")
+    }
+
+    @Test fun scrolledLongPlaylistDragReordersAndSubmitsWithoutCrash() {
+        val entries = (0 until 16).map { idx ->
+            PlaylistSong(track.copy(id = "s$idx", title = "Track $idx"))
+        }
+        val submissions = mutableListOf<List<String>>()
+        rule.setContent { FlareTuneTheme { PlaylistOrderDialog(playlist(), entries, false, null, false, { submissions += it }, {}) } }
+        rule.onNodeWithTag("playlist_order_list").performScrollToNode(hasTestTag("playlist_order_entry_s13"))
+        rule.onNodeWithTag("playlist_order_entry_s0").assertDoesNotExist()
+        rule.onNodeWithTag("playlist_order_list").performScrollToNode(hasTestTag("playlist_order_entry_s11"))
+        rule.onNodeWithTag("playlist_order_entry_s11").assertIsDisplayed()
+        rule.onNodeWithTag("playlist_order_list").performScrollToNode(hasTestTag("playlist_order_entry_s12"))
+        rule.onNodeWithTag("playlist_order_entry_s12").assertIsDisplayed()
+        dragMember("s12", "s11")
+        rule.onNodeWithTag("playlist_order_save").assertIsEnabled().performClick()
+        rule.runOnIdle {
+            val expected = (0 until 16).map { "s$it" }.toMutableList().apply {
+                removeAt(12)
+                add(11, "s12")
+            }
+            assertEquals(listOf(expected), submissions)
+        }
     }
 
     private fun dragMember(from: String, to: String) {

@@ -73,6 +73,7 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -82,6 +83,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import coil.ImageLoader
 import coil.compose.AsyncImage
@@ -106,7 +108,22 @@ fun ClientApp(
     imageLoader: ImageLoader? = null,
 ) {
     var panel by rememberSaveable { mutableStateOf(PlayerPanel.NONE) }
+    var queueReturnPanel by rememberSaveable { mutableStateOf(PlayerPanel.NONE) }
     var panelIdentity by rememberSaveable { mutableStateOf<String?>(null) }
+    var feedbackMessage by remember { mutableStateOf<String?>(null) }
+    var feedbackNonce by remember { mutableIntStateOf(0) }
+    LaunchedEffect(feedbackNonce) {
+        if (feedbackNonce > 0) {
+            delay(1800)
+            feedbackMessage = null
+        }
+    }
+    val showFeedback: (String) -> Unit = { msg ->
+        if (msg.isNotBlank()) {
+            feedbackMessage = msg
+            feedbackNonce++
+        }
+    }
     val systemDark = isSystemInDarkTheme()
     val useLightBarIcons = systemDark || (state.screen == ClientScreen.LIBRARY && panel != PlayerPanel.NONE)
     val hostView = LocalView.current
@@ -134,14 +151,28 @@ fun ClientApp(
     LaunchedEffect(state.screen, state.navigationIdentity, state.playback.current?.id, state.playbackReady, state.queueRestoring) {
         if (state.screen == ClientScreen.RESTORING) return@LaunchedEffect
         if (state.screen != ClientScreen.LIBRARY) {
-            panel = PlayerPanel.NONE; panelIdentity = null
+            panel = PlayerPanel.NONE; queueReturnPanel = PlayerPanel.NONE; panelIdentity = null
         } else {
-            if (panelIdentity != null && panelIdentity != state.navigationIdentity) panel = PlayerPanel.NONE
+            if (panelIdentity != null && panelIdentity != state.navigationIdentity) {
+                panel = PlayerPanel.NONE
+                queueReturnPanel = PlayerPanel.NONE
+            }
             panelIdentity = state.navigationIdentity
-            if (state.playbackReady && !state.queueRestoring && state.playback.current == null) panel = PlayerPanel.NONE
+            if (state.playbackReady && !state.queueRestoring && state.playback.current == null &&
+                (panel == PlayerPanel.PLAYER || (panel == PlayerPanel.QUEUE && queueReturnPanel == PlayerPanel.PLAYER))
+            ) {
+                panel = PlayerPanel.NONE
+                queueReturnPanel = PlayerPanel.NONE
+            }
         }
     }
-    ListeningInteractionHost(state, actions, imageLoader, onNavigateToContent = { panel = PlayerPanel.NONE }) {
+    ListeningInteractionHost(
+        state = state,
+        actions = actions,
+        imageLoader = imageLoader,
+        onNavigateToContent = { panel = PlayerPanel.NONE },
+        onFeedback = showFeedback,
+    ) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(Modifier.fillMaxSize()) {
             when (state.screen) {
@@ -153,18 +184,23 @@ fun ClientApp(
                         if (panel != PlayerPanel.NONE) Modifier.clearAndSetSemantics {} else Modifier,
                     ),
                 ) {
+                    BackHandler(enabled = panel == PlayerPanel.NONE && state.selectedArtist == null && state.selectedAlbum == null && state.selectedPlaylist == null && state.destination != MainDestination.HOME) { actions.navigate(MainDestination.HOME) }
+                    BackHandler(enabled = panel == PlayerPanel.NONE && state.selectedPlaylist != null) { actions.closePlaylist() }
+                    BackHandler(enabled = panel == PlayerPanel.NONE && state.selectedAlbum != null) { actions.closeAlbum() }
+                    BackHandler(enabled = panel == PlayerPanel.NONE && state.selectedArtist != null) { actions.closeArtist() }
                     key(state.navigationIdentity) { ListeningShell(
                         state = state,
                         actions = actions,
                         imageLoader = imageLoader,
                         openPlayer = { panel = PlayerPanel.PLAYER },
+                        openQueue = {
+                            queueReturnPanel = PlayerPanel.NONE
+                            panel = PlayerPanel.QUEUE
+                        },
+                        miniPlayerActive = panel == PlayerPanel.NONE,
                     ) }
                 }
             }
-            BackHandler(enabled = state.screen == ClientScreen.LIBRARY && panel == PlayerPanel.NONE && state.selectedArtist == null && state.selectedAlbum == null && state.selectedPlaylist == null && state.destination != MainDestination.HOME) { actions.navigate(MainDestination.HOME) }
-            BackHandler(enabled = state.screen == ClientScreen.LIBRARY && panel == PlayerPanel.NONE && state.selectedPlaylist != null) { actions.closePlaylist() }
-            BackHandler(enabled = state.screen == ClientScreen.LIBRARY && panel == PlayerPanel.NONE && state.selectedAlbum != null) { actions.closeAlbum() }
-            BackHandler(enabled = state.screen == ClientScreen.LIBRARY && panel == PlayerPanel.NONE && state.selectedArtist != null) { actions.closeArtist() }
             if (state.screen == ClientScreen.LIBRARY && state.playback.current != null) {
                 var skipPlayerExitAnim by remember { mutableStateOf(false) }
                 LaunchedEffect(panel) {
@@ -175,7 +211,7 @@ fun ClientApp(
                     panel = PlayerPanel.NONE
                 }
                 AnimatedVisibility(
-                    visible = panel != PlayerPanel.NONE,
+                    visible = panel == PlayerPanel.PLAYER || (panel == PlayerPanel.QUEUE && queueReturnPanel == PlayerPanel.PLAYER),
                     enter = slideInVertically(tween(250, easing = LinearOutSlowInEasing)) { it } + fadeIn(tween(180)),
                     exit = if (skipPlayerExitAnim) {
                         ExitTransition.None
@@ -190,28 +226,61 @@ fun ClientApp(
                         translationNotice = state.translationNotice,
                         actions = actions,
                         imageLoader = imageLoader,
-                        onQueue = { panel = PlayerPanel.QUEUE },
+                        onQueue = {
+                            queueReturnPanel = PlayerPanel.PLAYER
+                            panel = PlayerPanel.QUEUE
+                        },
                         onClose = {
                             skipPlayerExitAnim = true
                             panel = PlayerPanel.NONE
                         },
                     )
                 }
-                if (panel == PlayerPanel.QUEUE) {
-                    FlareModalSheet(onDismissRequest = { panel = PlayerPanel.PLAYER }) {
-                        val closeQueue: () -> Unit = { panel = PlayerPanel.PLAYER }
-                        QueuePanel(
-                            state = state.playback,
-                            loader = imageLoader,
-                            close = closeQueue,
-                            queueNotice = state.queueNotice,
-                            onRetryRestore = actions::retryQueueRestore,
-                            onRemove = actions::removeQueueItem,
-                            onMove = actions::moveQueueItem,
-                        ) { index ->
-                            actions.selectQueueItem(index)
-                            closeQueue()
-                        }
+            }
+            if (state.screen == ClientScreen.LIBRARY && panel == PlayerPanel.QUEUE) {
+                FlareModalSheet(onDismissRequest = { panel = queueReturnPanel }) {
+                    val closeQueue: () -> Unit = { panel = queueReturnPanel }
+                    QueuePanel(
+                        state = state.playback,
+                        loader = imageLoader,
+                        close = closeQueue,
+                        queueNotice = state.queueNotice,
+                        onRetryRestore = actions::retryQueueRestore,
+                        onRemove = actions::removeQueueItem,
+                        onMove = actions::moveQueueItem,
+                    ) { index ->
+                        actions.selectQueueItem(index)
+                        closeQueue()
+                    }
+                }
+            }
+            AnimatedVisibility(
+                visible = feedbackMessage != null,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 12.dp, start = 24.dp, end = 24.dp)
+                    .zIndex(20f),
+                enter = fadeIn(tween(180)) + slideInVertically(tween(200)) { -it / 2 },
+                exit = fadeOut(tween(220)) + slideOutVertically(tween(200)) { -it / 2 },
+            ) {
+                feedbackMessage?.let { text ->
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.inverseSurface,
+                        contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+                        shadowElevation = 8.dp,
+                        modifier = Modifier
+                            .semantics { liveRegion = LiveRegionMode.Polite }
+                            .testTag("action_feedback_toast"),
+                    ) {
+                        Text(
+                            text = text,
+                            style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                        )
                     }
                 }
             }
@@ -403,29 +472,42 @@ internal fun SongRow(
     buffering: Boolean = false,
     modifier: Modifier = Modifier,
     clickEnabled: Boolean = true,
+    horizontalPadding: Dp = 16.dp,
     onClick: () -> Unit,
 ) {
     val interaction = LocalListeningInteractions.current
     val status = stringResource(if (buffering) R.string.ft_buffering else if (playing) R.string.ft_playing else R.string.ft_paused)
     Row(
-        modifier.fillMaxWidth().heightIn(min = 72.dp)
+        modifier.fillMaxWidth().heightIn(min = 78.dp)
+            .then(if (current) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)) else Modifier)
             .clickable(enabled = clickEnabled, onClick = onClick)
             .then(if (current) Modifier.semantics { stateDescription = status } else Modifier)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = horizontalPadding, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Artwork(song, imageLoader, Modifier.size(48.dp))
-        Column(Modifier.weight(1f)) {
-            Text(song.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Artwork(song, imageLoader, Modifier.size(56.dp), radius = 10.dp, placeholderSize = 26.dp)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                song.title,
+                style = MaterialTheme.typography.titleMedium.copy(
+                    lineHeight = 20.sp,
+                    fontWeight = if (current) FontWeight.SemiBold else FontWeight.Medium,
+                ),
+                color = if (current) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
             Text(
                 song.artist.ifBlank { stringResource(R.string.ft_unknown_artist) },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             if (current) Text(
-                status, style = MaterialTheme.typography.labelMedium,
+                status,
+                style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary,
             )
         }

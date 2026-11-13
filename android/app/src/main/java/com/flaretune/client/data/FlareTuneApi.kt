@@ -468,23 +468,38 @@ class FlareTuneApi(val network: SessionNetwork) : AccountApi {
             nullableString(data, "coverUrl")?.let(address::media))
     }
 
-    override fun playStats(limit: Int, summaryOnly: Boolean): PlayStats {
+    override fun playStats(limit: Int, summaryOnly: Boolean): PlayStats = playStats(limit, summaryOnly, null)
+
+    override fun playStats(limit: Int, summaryOnly: Boolean, days: Int?): PlayStats {
         if (limit !in 1..50) throw ApiFailure(Failure.REQUEST)
+        if (days != null && days !in 1..30) throw ApiFailure(Failure.REQUEST)
         val url = address.endpoint("/api/account/play-stats").newBuilder().addQueryParameter("limit", limit.toString())
-            .apply { if (summaryOnly) addQueryParameter("view", "summary") }.build()
+            .apply {
+                if (summaryOnly) addQueryParameter("view", "summary")
+                if (days != null) addQueryParameter("days", days.toString())
+            }.build()
         val data = memberData(request(url))
         val rows = data.optJSONArray("songs") ?: invalidResponse()
         val songs = (0 until rows.length()).map { index ->
             val row = rows.optJSONObject(index) ?: invalidResponse()
             RankedSong(parseSongMetadata(row), nonNegativeLong(row, "play_count"), nonNegativeLong(row, "last_played_at"))
         }
+        // Old hosts may silently ignore ?days. Never label their all-time counts as recent.
+        val window = days?.let { requestedDays ->
+            val range = data.optJSONObject("window") ?: invalidResponse()
+            val echoedDays = requiredInt(range, "days")
+            val from = nonNegativeLong(range, "from")
+            val to = nonNegativeLong(range, "to")
+            if (echoedDays != requestedDays || to - from != requestedDays * 86_400_000L) invalidResponse()
+            PlayStatsWindow(echoedDays, from, to)
+        }
         if (summaryOnly) {
             if (data.opt("view") != "summary") invalidResponse()
-            return PlayStats(songs, summaryOnly = true)
+            return PlayStats(songs, summaryOnly = true, window = window)
         }
         val counts = data.optJSONObject("playCounts") ?: invalidResponse()
         return PlayStats(songs, counts.keys().asSequence().associateWith { nonNegativeLong(counts, it) },
-            nonNegativeLong(data, "totalPlays"), requiredInt(data, "totalUniqueSongs"))
+            nonNegativeLong(data, "totalPlays"), requiredInt(data, "totalUniqueSongs"), window = window)
     }
 
     override fun submitPlayEvents(events: List<PlayEvent>): PlayEventReceipt {

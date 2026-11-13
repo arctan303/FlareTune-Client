@@ -29,12 +29,14 @@ internal data class ListeningInteractions(
     val createPlaylist: (List<String>) -> Unit,
     val addToPlaylists: (List<Song>) -> Unit,
     val playlist: (PlaylistSummary) -> Unit,
+    val orderPlaylist: (PlaylistSummary) -> Unit = {},
     val addSongs: (PlaylistSummary) -> Unit,
     val artists: () -> Unit,
     val albums: (String) -> Unit,
     val statistics: () -> Unit,
     val clearHistory: () -> Unit,
     val clearQueue: () -> Unit,
+    val feedback: (String) -> Unit = {},
 )
 internal val LocalListeningInteractions = staticCompositionLocalOf<ListeningInteractions?> { null }
 
@@ -53,6 +55,7 @@ internal fun ListeningInteractionHost(
     actions: ClientActions,
     imageLoader: ImageLoader?,
     onNavigateToContent: () -> Unit = {},
+    onFeedback: (String) -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     var song by remember { mutableStateOf<Song?>(null) }
@@ -73,6 +76,7 @@ internal fun ListeningInteractionHost(
     var albumsOpen by remember { mutableStateOf(false) }
     var statsOpen by remember { mutableStateOf(false) }
     var submittedVersion by remember { mutableStateOf<Long?>(null) }
+    var pendingFeedback by remember { mutableStateOf<String?>(null) }
     var coverTarget by remember { mutableStateOf<Pair<String, PlaylistSummary>?>(null) }
     val latestState by rememberUpdatedState(state)
     val owner = state.instanceUrl + "\n" + state.username
@@ -89,7 +93,17 @@ internal fun ListeningInteractionHost(
         submittedVersion = latestState.libraryMutationVersion
         work()
     }
-    fun beginIntent() { actions.dismissLibraryMutationNotice(); submittedVersion = null }
+    fun beginIntent() { actions.dismissLibraryMutationNotice(); submittedVersion = null; pendingFeedback = null }
+    fun openOrderEditor(target: PlaylistSummary) {
+        beginIntent()
+        val current = latestState
+        if (current.selectedPlaylist?.id == target.id && !current.playlistLoading) {
+            orderPlaylist = current.selectedPlaylist
+        } else {
+            waitingOrderId = target.id
+            actions.openPlaylist(target)
+        }
+    }
     fun openSongPicker(target: PlaylistSummary) {
         beginIntent()
         val current = latestState
@@ -116,7 +130,12 @@ internal fun ListeningInteractionHost(
     }
     LaunchedEffect(state.libraryMutationVersion) {
         val previous = submittedVersion
-        if (previous != null && state.libraryMutationVersion > previous) closeEditors()
+        if (previous != null && state.libraryMutationVersion > previous) {
+            val feedbackText = pendingFeedback
+            pendingFeedback = null
+            closeEditors()
+            if (feedbackText != null) onFeedback(feedbackText)
+        }
     }
     LaunchedEffect(state.selectedPlaylist?.id, state.playlistLoading, state.selectedPlaylistEntries, waitingPickerId) {
         if (orderPlaylist != null && orderPlaylist?.id != state.selectedPlaylist?.id) orderPlaylist = null
@@ -138,12 +157,14 @@ internal fun ListeningInteractionHost(
         createPlaylist = { ids -> beginIntent(); initialIds = ids; formPlaylist = null; formOpen = true },
         addToPlaylists = { songs -> beginIntent(); targetSongs = songs.distinctBy { it.id } },
         playlist = { beginIntent(); playlistOptions = it },
+        orderPlaylist = ::openOrderEditor,
         addSongs = ::openSongPicker,
         artists = { artistsOpen = true; actions.refreshArtists() },
         albums = { query -> albumsOpen = true; actions.searchAlbums(query) },
         statistics = { statsOpen = true; actions.refreshPlayStats() },
         clearHistory = { confirm = ListeningConfirmation.CLEAR_HISTORY },
         clearQueue = { confirm = ListeningConfirmation.CLEAR_QUEUE },
+        feedback = onFeedback,
     )
     CompositionLocalProvider(LocalListeningInteractions provides interactions) { content() }
     if (state.screen != ClientScreen.LIBRARY) return
@@ -157,12 +178,29 @@ internal fun ListeningInteractionHost(
         } else null
         val canRemove = state.selectedPlaylist?.kind != "favorite"
             && state.selectedPlaylistEntries.any { it.song.id == selected.id }
+        val isFavorite = selected.id in state.favoriteSongIds
+        val favoriteFeedback = stringResource(
+            if (isFavorite) R.string.ft_feedback_unfavorited else R.string.ft_feedback_favorited,
+        )
+        val playNextFeedback = stringResource(R.string.ft_feedback_play_next)
+        val enqueuedFeedback = stringResource(R.string.ft_feedback_enqueued)
         SongActionsSheet(
-            song = selected, favorite = selected.id in state.favoriteSongIds,
+            song = selected, favorite = isFavorite,
             busy = state.libraryMutationBusy, notice = state.libraryMutationNotice,
-            onToggleFavorite = { submit { actions.toggleFavorite(selected) } },
-            onPlayNext = { actions.playNext(selected); song = null },
-            onEnqueue = { actions.enqueue(listOf(selected)); song = null },
+            onToggleFavorite = {
+                pendingFeedback = favoriteFeedback
+                submit { actions.toggleFavorite(selected) }
+            },
+            onPlayNext = {
+                actions.playNext(selected)
+                song = null
+                onFeedback(playNextFeedback)
+            },
+            onEnqueue = {
+                actions.enqueue(listOf(selected))
+                song = null
+                onFeedback(enqueuedFeedback)
+            },
             onAddToPlaylist = { song = null; targetSongs = listOf(selected); beginIntent() },
             onArtist = {
                 song = null
@@ -234,8 +272,7 @@ internal fun ListeningInteractionHost(
                 }
                 ListeningMenuRow(stringResource(R.string.ft_listening_edit_order), "playlist_menu_order") {
                     playlistOptions = null
-                    if (state.selectedPlaylist?.id == target.id && !state.playlistLoading) orderPlaylist = state.selectedPlaylist
-                    else { waitingOrderId = target.id; actions.openPlaylist(target) }
+                    openOrderEditor(target)
                 }
                 if (target.kind != "favorite") {
                     ListeningMenuRow(stringResource(R.string.ft_listening_edit_playlist), "playlist_menu_edit") {

@@ -16,7 +16,9 @@ internal class ClientNavigationState(private val handle: SavedStateHandle?) {
         val albumId: String?, val playlistId: String?, val artist: String?, val artistId: String?) {
         val hasDetail get() = albumId != null || playlistId != null || artist != null
         fun applyTo(state: ClientUiState) = state.copy(destination = destination, tab = tab, query = query,
-            songLanguage = songLanguage, albumLanguage = albumLanguage, songSort = sort,
+            songLanguage = songLanguage, albumLanguage = albumLanguage,
+            discoverLanguage = if (songLanguage == albumLanguage) songLanguage else "all",
+            songSort = sort,
             selectedAlbum = albumId?.let { Album(it, "", "", knownTrackCount = null) }, albumLoading = albumId != null,
             selectedPlaylist = playlistId?.let { PlaylistSummary(it, "", "playlist") }, playlistLoading = playlistId != null,
             selectedArtist = artist?.let { Artist(it, id = artistId, knownSongCount = null, knownAlbumCount = null) }, artistLoading = artist != null)

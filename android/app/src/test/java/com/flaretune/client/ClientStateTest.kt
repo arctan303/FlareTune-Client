@@ -248,6 +248,304 @@ class ClientStateTest {
         } finally { model.viewModelScope.cancel(); Dispatchers.resetMain() }
     }
 
+    @Test fun discoverNavigationIsolatesSearchQueryAndFiltersArtistsAlbumsSongs() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val api = FakeAccountApi(listOf(song, Song("two", "Second song", artist = "Another", audioUrl = "https://music.example/media/two.mp3")))
+        val model = ClientViewModel(FakeConnections(active(api)), FakePlayback(), dispatcher)
+        try {
+            advanceUntilIdle()
+            model.navigate(MainDestination.SEARCH)
+            model.search("rain"); advanceUntilIdle()
+            assertEquals("rain", model.state.value.query)
+            model.navigate(MainDestination.DISCOVER); advanceUntilIdle()
+            assertEquals(MainDestination.DISCOVER, model.state.value.destination)
+            assertEquals("", model.state.value.query)
+            model.selectDiscoverLanguage("zh"); advanceUntilIdle()
+            assertEquals("zh", model.state.value.discoverLanguage)
+            assertEquals("zh", model.state.value.songLanguage)
+            assertEquals("zh", model.state.value.albumLanguage)
+            assertEquals("zh", api.lastArtistLanguage)
+            assertEquals("zh", api.lastSongLanguage)
+            assertEquals("zh", api.lastAlbumLanguage)
+        } finally { model.viewModelScope.cancel(); Dispatchers.resetMain() }
+    }
+
+    @Test fun discoverLanguageDoesNotFilterSearchSongsAndReturningRestoresDiscoverCatalog() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val api = FakeAccountApi(listOf(song, Song("two", "Second song", artist = "Another", audioUrl = "https://music.example/media/two.mp3")))
+        val model = ClientViewModel(FakeConnections(active(api)), FakePlayback(), dispatcher)
+        try {
+            advanceUntilIdle()
+            model.navigate(MainDestination.DISCOVER); advanceUntilIdle()
+            model.selectDiscoverLanguage("zh"); advanceUntilIdle()
+            assertEquals("zh", model.state.value.discoverLanguage)
+            assertEquals("zh", api.lastSongLanguage)
+            model.navigate(MainDestination.SEARCH); advanceUntilIdle()
+            model.search("rain"); advanceUntilIdle()
+            assertEquals("all", api.lastSongLanguage)
+            assertEquals("rain", model.state.value.query)
+            model.refreshArtists("Someone"); advanceUntilIdle()
+            assertEquals("Someone", model.state.value.artistQuery)
+            model.navigate(MainDestination.DISCOVER); advanceUntilIdle()
+            assertEquals("", model.state.value.query)
+            assertEquals("", model.state.value.artistQuery)
+            assertEquals("zh", model.state.value.discoverLanguage)
+            assertEquals("zh", model.state.value.songLanguage)
+            assertEquals("zh", model.state.value.albumLanguage)
+            assertEquals("zh", api.lastSongLanguage)
+            assertEquals("zh", api.lastAlbumLanguage)
+            assertEquals("zh", api.lastArtistLanguage)
+        } finally { model.viewModelScope.cancel(); Dispatchers.resetMain() }
+    }
+
+    @Test fun playHistorySongBuildsQueueFromHistoryEntriesStartingAtClickedTrack() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val song2 = Song("two", "Second song", audioUrl = "https://music.example/media/two.mp3")
+        val song3 = Song("three", "Third song", audioUrl = "https://music.example/media/three.mp3")
+        val api = FakeAccountApi(listOf(song, song2, song3))
+        val player = FakePlayback()
+        val historyScope = CoroutineScope(SupervisorJob() + dispatcher)
+        val store = InMemoryPlaybackHistoryStore()
+        store.write(
+            HistoryIdentity("https://music.example", auth.account.id),
+            listOf(
+                HistoryEntry("three", "Third song", "", "", 200.0, null, 300),
+                HistoryEntry("two", "Second song", "", "", 190.0, null, 200),
+                HistoryEntry("one", "First song", "", "", 180.0, null, 100),
+            ),
+        )
+        val repository = PlaybackHistoryRepository(store, historyScope, dispatcher)
+        val model = ClientViewModel(FakeConnections(active(api)), player, dispatcher, history = repository)
+        try {
+            advanceUntilIdle()
+            val historyOrder = model.state.value.playHistory.map { it.id }
+            assertEquals(listOf("three", "two", "one"), historyOrder)
+            val clicked = model.state.value.playHistory[1]
+            model.playHistorySong(clicked); advanceUntilIdle()
+            assertEquals("two", player.state.value.current?.id)
+            assertEquals(listOf("three", "two", "one"), player.state.value.queue.map { it.id })
+            assertEquals(1, player.state.value.currentIndex)
+        } finally { model.viewModelScope.cancel(); historyScope.cancel(); Dispatchers.resetMain() }
+    }
+
+    @Test fun playHistorySongStillPlaysClickedTrackWhenOtherHistoryResolutionFails() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val song2 = Song("two", "Second song", audioUrl = "https://music.example/media/two.mp3")
+        val song3 = Song("three", "Third song", audioUrl = "https://music.example/media/three.mp3")
+        val api = FakeAccountApi(listOf(song, song2, song3))
+        val player = FakePlayback()
+        val historyScope = CoroutineScope(SupervisorJob() + dispatcher)
+        val store = InMemoryPlaybackHistoryStore()
+        store.write(
+            HistoryIdentity("https://music.example", auth.account.id),
+            listOf(
+                HistoryEntry("three", "Third song", "", "", 200.0, null, 300),
+                HistoryEntry("two", "Second song", "", "", 190.0, null, 200),
+                HistoryEntry("one", "First song", "", "", 180.0, null, 100),
+            ),
+        )
+        val repository = PlaybackHistoryRepository(store, historyScope, dispatcher)
+        val model = ClientViewModel(FakeConnections(active(api)), player, dispatcher, history = repository)
+        try {
+            advanceUntilIdle()
+            api.failResolveSongs = true
+            val clicked = model.state.value.playHistory[1]
+            model.playHistorySong(clicked); advanceUntilIdle()
+            assertEquals("two", player.state.value.current?.id)
+            assertEquals(listOf("two"), player.state.value.queue.map { it.id })
+            assertEquals(0, player.state.value.currentIndex)
+            assertNull(model.state.value.historyNotice)
+        } finally { model.viewModelScope.cancel(); historyScope.cancel(); Dispatchers.resetMain() }
+    }
+
+    @Test fun continueListeningMixesRecentRepeatsAllTimeStatsAndFavoritesWithDeduplication() {
+        val recentA = RankedSong(Song("r1", "Repeat One", "Artist A", audioUrl = "https://music.example/media/r1.mp3"), 5, 500)
+        val recentDupTitle = RankedSong(Song("r2-alt", "Repeat One", "Artist A", audioUrl = "https://music.example/media/r2a.mp3"), 3, 450)
+        val recentB = RankedSong(Song("r2", "Repeat Two", "Artist B", audioUrl = "https://music.example/media/r2.mp3"), 3, 400)
+        val unplayable = RankedSong(Song("dead", "Unavailable", "Artist X", audioUrl = ""), 10, 900)
+        val frequentA = RankedSong(Song("f1", "Frequent One", "Artist C", audioUrl = "https://music.example/media/f1.mp3"), 20, 300)
+        val frequentB = RankedSong(Song("f2", "Frequent Two", "Artist D", audioUrl = "https://music.example/media/f2.mp3"), 18, 250)
+        val favA = Song("fav1", "Liked One", "Artist E", audioUrl = "https://music.example/media/fav1.mp3")
+        val favB = Song("fav2", "Liked Two", "Artist F", audioUrl = "https://music.example/media/fav2.mp3")
+        val mixed = buildContinueListeningMix(
+            recentStats = listOf(recentA, recentDupTitle, recentB, unplayable),
+            allTimeStats = listOf(unplayable, frequentA, frequentB),
+            favorites = listOf(favA, favB, recentA.song),
+            limit = 6,
+            random = kotlin.random.Random(42),
+        )
+        assertEquals(6, mixed.size)
+        assertEquals(6, mixed.map { it.id }.distinct().size)
+        // Different stable IDs may be different editions of the same title and artist.
+        assertTrue(mixed.all { it.canPlay })
+        assertTrue(mixed.any { it.id == "r1" || it.id == "r2" })
+        assertTrue(mixed.any { it.id == "f1" || it.id == "f2" })
+        assertTrue(mixed.any { it.id == "fav1" || it.id == "fav2" })
+    }
+
+    @Test fun continueListeningAndHomePreviewLockAcrossPlaybackUntilManualRefresh() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val s1 = Song("one", "Track One", "Singer A", audioUrl = "https://music.example/media/1.mp3")
+        val s2 = Song("two", "Track Two", "Singer B", audioUrl = "https://music.example/media/2.mp3")
+        val s3 = Song("three", "Track Three", "Singer C", audioUrl = "https://music.example/media/3.mp3")
+        val s4 = Song("four", "Track Four", "Singer D", audioUrl = "https://music.example/media/4.mp3")
+        val s5 = Song("five", "Track Five", "Singer E", audioUrl = "https://music.example/media/5.mp3")
+        val s6 = Song("six", "Track Six", "Singer F", audioUrl = "https://music.example/media/6.mp3")
+        val s7 = Song("seven", "Track Seven", "Singer G", audioUrl = "https://music.example/media/7.mp3")
+        val api = FakeAccountApi(listOf(s1, s2, s3, s4, s5, s6, s7)).apply {
+            recentStats = PlayStats(songs = listOf(RankedSong(s2, 4, 200), RankedSong(s3, 2, 190)), summaryOnly = true)
+            allTimeStats = PlayStats(songs = listOf(RankedSong(s4, 15, 180), RankedSong(s5, 12, 170)))
+            favoritePlaylistSongs = listOf(s6)
+        }
+        val player = FakePlayback()
+        val historyScope = CoroutineScope(SupervisorJob() + dispatcher)
+        val store = InMemoryPlaybackHistoryStore()
+        store.write(
+            HistoryIdentity("https://music.example", auth.account.id),
+            listOf(HistoryEntry("one", "Track One", "Singer A", "", 180.0, null, 100)),
+        )
+        val repository = PlaybackHistoryRepository(store, historyScope, dispatcher)
+        val model = ClientViewModel(FakeConnections(active(api)), player, dispatcher, history = repository)
+        try {
+            advanceUntilIdle()
+            val initialMix = model.state.value.continueListeningSongs.map { it.id }
+            assertEquals(listOf("two", "three", "four", "five", "six"), initialMix.sortedBy {
+                listOf("two", "three", "four", "five", "six").indexOf(it)
+            })
+            assertEquals("one", model.state.value.homeHistoryPreviewSong?.id)
+            assertTrue(7 in api.requestedStatsDays)
+
+            // Recording playback & changing favorites later updates live history, NOT the locked Home snapshots.
+            api.allTimeStats = PlayStats(songs = listOf(RankedSong(s7, 99, 500)))
+            api.recentStats = PlayStats(songs = listOf(RankedSong(s7, 20, 500)), summaryOnly = true)
+            api.favoritePlaylistSongs = listOf(s7)
+            repository.record(s7, playedAt = 900)
+            model.playSong(s7)
+            model.navigate(MainDestination.HOME)
+            advanceUntilIdle()
+            assertEquals("seven", model.state.value.playHistory.first().id)
+            assertEquals("one", model.state.value.homeHistoryPreviewSong?.id)
+            assertEquals(initialMix, model.state.value.continueListeningSongs.map { it.id })
+
+            // Explicit manual refresh updates the snapshots cleanly.
+            model.refresh()
+            advanceUntilIdle()
+            assertEquals("seven", model.state.value.homeHistoryPreviewSong?.id)
+            assertTrue("seven" in model.state.value.continueListeningSongs.map { it.id })
+        } finally { model.viewModelScope.cancel(); historyScope.cancel(); Dispatchers.resetMain() }
+    }
+
+    @Test fun continueListeningGracefullyFallsBackWhenRecentStatsWindowFails() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val s1 = Song("f1", "Frequent", "Artist 1", audioUrl = "https://music.example/media/f1.mp3")
+        val s2 = Song("fav1", "Favorite", "Artist 2", audioUrl = "https://music.example/media/fav1.mp3")
+        val api = FakeAccountApi(listOf(s1, s2)).apply {
+            failRecentStats = true
+            allTimeStats = PlayStats(songs = listOf(RankedSong(s1, 10, 100)))
+            favoritePlaylistSongs = listOf(s2)
+        }
+        val model = ClientViewModel(FakeConnections(active(api)), FakePlayback(), dispatcher)
+        try {
+            advanceUntilIdle()
+            assertEquals(setOf("f1", "fav1"), model.state.value.continueListeningSongs.map { it.id }.toSet())
+            assertNull(model.state.value.statsNotice)
+        } finally { model.viewModelScope.cancel(); Dispatchers.resetMain() }
+    }
+
+
+    @Test fun continueListeningUsesResolvedSearchSongsAndRefreshReadsDiskBeyondTheVisibleSnapshot() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val searchA = song.copy(id="searched-a", title="Search A", coverUrl="https://music.example/a.jpg")
+        val searchB = song.copy(id="searched-b", title="Search B")
+        val recent = song.copy(id="recent", title="Recent")
+        val frequent = song.copy(id="frequent", title="Frequent")
+        val liked = song.copy(id="liked", title="Liked")
+        val storage = ContinueSearchStorage()
+        val store = SearchHistoryStore(storage)
+        val key = HistoryIdentity("https://music.example", auth.account.id)
+        store.addTerm(key,"This term is not a song")
+        store.addEntity(key,SearchEntity.fromArtist("Not a song either"))
+        store.addEntity(key,SearchEntity.fromSong(searchA))
+        val api = FakeAccountApi(listOf(searchA,searchB,recent,frequent,liked)).apply {
+            favoritePlaylistSongs=listOf(liked)
+            allTimeStats=PlayStats(songs=listOf(RankedSong(frequent,20,100)))
+            recentStats=PlayStats(songs=listOf(RankedSong(recent,3,200)),summaryOnly=true)
+        }
+        val player=FakePlayback()
+        val model=ClientViewModel(FakeConnections(active(api)),player,dispatcher,searchHistoryStore=store)
+        try {
+            advanceUntilIdle()
+            val initial=model.state.value.continueListeningSongs
+            assertEquals(setOf("searched-a","recent","frequent","liked"),initial.map { it.id }.toSet())
+            assertEquals(searchA.coverUrl,initial.single { it.id==searchA.id }.coverUrl)
+            assertTrue(api.resolveRequests.flatten().contains(searchA.id))
+            assertFalse(api.resolveRequests.flatten().contains("Not a song either"))
+            assertTrue(api.requestedStatsDays.containsAll(listOf(1,7)))
+            val index=initial.indexOfFirst { it.id==searchA.id }
+            model.playSongs(initial,index); advanceUntilIdle()
+            assertEquals(initial.map { it.id },player.state.value.queue.map { it.id })
+            assertEquals(searchA.id,player.state.value.current?.id)
+
+            // Search cards stay locked for this session, but refresh must consume the latest disk data.
+            model.navigate(MainDestination.SEARCH); advanceUntilIdle()
+            model.playSong(searchB); advanceUntilIdle()
+            assertEquals(listOf(searchA.id),model.state.value.recentSearches.filter { it.type=="song" }.map { it.id })
+            assertTrue(store.load(key).entities.any { it.id==searchB.id })
+            assertEquals(initial.map { it.id },model.state.value.continueListeningSongs.map { it.id })
+            model.refresh(); advanceUntilIdle()
+            assertTrue(model.state.value.continueListeningSongs.any { it.id==searchB.id })
+        } finally { model.viewModelScope.cancel(); Dispatchers.resetMain() }
+    }
+
+    @Test fun aFailedSearchResolutionReleasesItsQuotaToOtherSources() = runTest {
+        val dispatcher=StandardTestDispatcher(testScheduler); Dispatchers.setMain(dispatcher)
+        val store=SearchHistoryStore(ContinueSearchStorage())
+        store.addEntity(HistoryIdentity("https://music.example",auth.account.id),SearchEntity.fromSong(song.copy(id="missing")))
+        val fallback=(0 until 18).map { song.copy(id="fallback-$it",title="Song $it") }
+        val api=FakeAccountApi(fallback).apply {
+            failResolveSongs=true
+            allTimeStats=PlayStats(songs=fallback.map { RankedSong(it,10,100) })
+        }
+        val model=ClientViewModel(FakeConnections(active(api)),FakePlayback(),dispatcher,searchHistoryStore=store)
+        try {
+            advanceUntilIdle()
+            assertEquals(12,model.state.value.continueListeningSongs.size)
+            assertEquals(12,model.state.value.continueListeningSongs.map { it.id }.distinct().size)
+            assertTrue(model.state.value.continueListeningSongs.none { it.id=="missing" })
+        } finally { model.viewModelScope.cancel(); Dispatchers.resetMain() }
+    }
+
+    @Test fun aLateSearchResolutionCannotRepopulateAReplacementAccount() = runTest {
+        val dispatcher=StandardTestDispatcher(testScheduler); Dispatchers.setMain(dispatcher)
+        val store=SearchHistoryStore(ContinueSearchStorage())
+        store.addEntity(HistoryIdentity("https://music.example",auth.account.id),SearchEntity.fromSong(song))
+        val oldApi=FakeAccountApi(listOf(song))
+        val connections=FakeConnections(active(oldApi))
+        lateinit var model:ClientViewModel
+        oldApi.onResolve={ model.logout() }
+        model=ClientViewModel(connections,FakePlayback(),dispatcher,searchHistoryStore=store)
+        try {
+            advanceUntilIdle()
+            assertEquals(ClientScreen.CONNECT,model.state.value.screen)
+            assertTrue(model.state.value.continueListeningSongs.isEmpty())
+            val replacement=song.copy(id="new-account-song")
+            val newApi=FakeAccountApi(listOf(replacement)).apply {
+                allTimeStats=PlayStats(songs=listOf(RankedSong(replacement,4,100)))
+            }
+            connections.current=active(newApi).copy(auth=auth.copy(account=Account("other-account","other","Other")))
+            model.login("https://music.example","other","password"); advanceUntilIdle()
+            assertEquals(listOf(replacement.id),model.state.value.continueListeningSongs.map { it.id })
+            assertTrue(newApi.resolveRequests.isEmpty())
+        } finally { model.viewModelScope.cancel(); Dispatchers.resetMain() }
+    }
+
     private fun active(api: AccountApi) = ActiveConnection(
         SessionNetwork(InstanceAddress.parse("https://music.example")), api, auth)
 }
@@ -255,17 +553,64 @@ class ClientStateTest {
 private class FakeAccountApi(private val songs: List<Song>) : AccountApi {
     var requests = 0
     var fail = false
+    var failResolveSongs = false
+    val resolveRequests=mutableListOf<List<String>>()
+    var onResolve:(()->Unit)?=null
+    var failRecentStats = false
+    var allTimeStats = PlayStats()
+    var recentStats = PlayStats(summaryOnly = true)
+    var favoritePlaylistSongs: List<Song> = emptyList()
+    val requestedStatsDays = mutableListOf<Int?>()
     var lastQuery = ""
     var lastOffset = 0
+    var lastSongLanguage = "all"
+    var lastAlbumLanguage = "all"
+    var lastArtistLanguage = "all"
     override fun songs(query: String, offset: Int): SongPage {
         requests++; lastQuery = query; lastOffset = offset
         if (fail) throw ApiFailure(Failure.NETWORK)
         return SongPage(songs, offset + 50, true)
     }
+    override fun songs(query: String, offset: Int, language: String, sort: String): SongPage {
+        lastSongLanguage = language
+        return songs(query, offset)
+    }
+    override fun song(id: String): Song {
+        return songs.firstOrNull { it.id == id } ?: throw ApiFailure(Failure.REQUEST)
+    }
+    override fun resolveSongs(ids: List<String>): List<Song> {
+        resolveRequests += ids.toList()
+        onResolve?.invoke()
+        if (failResolveSongs) throw ApiFailure(Failure.NETWORK)
+        return ids.mapNotNull { id -> songs.firstOrNull { it.id == id } }
+    }
+    override fun artists(query: String, offset: Int, language: String): ArtistPage {
+        lastArtistLanguage = language
+        return ArtistPage(listOf(Artist("FlareTune", songs.size, 1)), 0, false, 1)
+    }
     override fun favorites(): List<Song> {
         requests++
         if (fail) throw ApiFailure(Failure.NETWORK)
         return songs
+    }
+    override fun playlists(): List<PlaylistSummary> = if (favoritePlaylistSongs.isEmpty()) emptyList() else {
+        listOf(PlaylistSummary("fav-id", "Liked", "favorite", songCount = favoritePlaylistSongs.size, revision = 1))
+    }
+    override fun playlist(id: String): PlaylistDetail {
+        if (id != "fav-id" || favoritePlaylistSongs.isEmpty()) throw ApiFailure(Failure.REQUEST)
+        return PlaylistDetail(
+            PlaylistSummary("fav-id", "Liked", "favorite", songCount = favoritePlaylistSongs.size, revision = 1),
+            favoritePlaylistSongs.mapIndexed { index, item -> PlaylistSong(item, index) },
+        )
+    }
+    override fun playStats(limit: Int, summaryOnly: Boolean): PlayStats = playStats(limit, summaryOnly, null)
+    override fun playStats(limit: Int, summaryOnly: Boolean, days: Int?): PlayStats {
+        requestedStatsDays += days
+        if (days != null) {
+            if (failRecentStats) throw ApiFailure(Failure.REQUEST)
+            return recentStats
+        }
+        return allTimeStats
     }
 
     val albumItem = Album("album-one", "Evening", "FlareTune", trackCount = 3)
@@ -275,6 +620,10 @@ private class FakeAccountApi(private val songs: List<Song>) : AccountApi {
         onAlbums?.invoke()
         if (fail) throw ApiFailure(Failure.NETWORK)
         return AlbumPage(listOf(albumItem), offset + 20, false)
+    }
+    override fun albums(offset: Int, language: String): AlbumPage {
+        lastAlbumLanguage = language
+        return albums(offset)
     }
     override fun album(id: String): AlbumDetail {
         onDetail?.invoke()
@@ -312,4 +661,11 @@ private class FakePlayback : PlaybackGateway {
     override fun select(index: Int) {}
     override fun retry() {}
     override fun release() {}
+}
+
+private class ContinueSearchStorage:HistoryStorage {
+    private val values=mutableMapOf<String,String>()
+    override fun read(key:String)=values[key]
+    override fun write(key:String,value:String) { values[key]=value }
+    override fun remove(key:String) { values.remove(key) }
 }

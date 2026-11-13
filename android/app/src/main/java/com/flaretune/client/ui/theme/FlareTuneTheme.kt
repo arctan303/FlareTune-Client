@@ -42,11 +42,14 @@ object FlareTokens {
     val RadiusGlass = 20.dp
     val RadiusDock = 20.dp
     val DockHeight = 68.dp
+    val WideDockHeight = 78.dp
+    val CompactNavHeight = 56.dp
+    val CompactMiniPlayerHeight = 62.dp
 
     val TouchTargetMin = 48.dp
     val FloatingDockMaxWidth = 392.dp
-    val WideNavWidth = 288.dp
-    val WideMiniPlayerWidth = 372.dp
+    val WideNavWidth = 490.dp
+    val WideMiniPlayerWidth = 354.dp
     val FloatingDockHorizontalPadding = 20.dp
 
     // Classic full-screen player palette (4-step pure-white vibrant alpha + fallback/scrim).

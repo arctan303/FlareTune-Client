@@ -36,6 +36,8 @@ interface MusicApi {
     fun randomSongs(limit: Int = 20, exclude: List<String> = emptyList()): List<Song> = throw ApiFailure(Failure.REQUEST)
     fun spotlightArtist(exclude: List<String> = emptyList()): SpotlightArtist? = throw ApiFailure(Failure.REQUEST)
     fun playStats(limit: Int = 20, summaryOnly: Boolean = false): PlayStats = throw ApiFailure(Failure.REQUEST)
+    fun playStats(limit: Int = 20, summaryOnly: Boolean = false, days: Int?): PlayStats =
+        if (days == null) playStats(limit, summaryOnly) else throw ApiFailure(Failure.REQUEST)
     fun submitPlayEvents(events: List<PlayEvent>): PlayEventReceipt = throw ApiFailure(Failure.REQUEST)
 
     fun imageSlot(purpose: String, targetId: String): ImageSlot = throw ApiFailure(Failure.REQUEST)

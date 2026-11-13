@@ -7,13 +7,13 @@ import kotlin.math.max
  * Lyric interlude window & three-stage dot progression modeled after Web `interludeState.js`.
  */
 internal object InterludeConfig {
-    const val MIN_GAP_SECONDS = 12.0
-    const val MIN_ACTIVE_SECONDS = 4.0
+    const val MIN_GAP_SECONDS = 7.5
+    const val MIN_ACTIVE_SECONDS = 3.2
     const val INTRO_PREPARE_SECONDS = 2.0
     const val BASE_CHAR_TIME = 0.28
     const val LINE_TAIL_HOLD = 1.2
     const val MIN_SING_DURATION = 2.5
-    const val RETURN_LEAD_TIME = 1.8
+    const val RETURN_LEAD_TIME = 1.6
     const val STAGE_3_LEAD_SECONDS = 0.6
 }
 

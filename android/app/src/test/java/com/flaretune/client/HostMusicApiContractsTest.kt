@@ -194,6 +194,18 @@ class HostMusicApiContractsTest {
         assertFalse(stats.songs.single().song.canPlay); take()
         enqueue(member(JSONObject().put("songs", JSONArray()).put("view", "summary").put("topAlbums", JSONArray())))
         assertTrue(api.playStats(20, true).summaryOnly); assertEquals("summary", take().requestUrl!!.queryParameter("view"))
+        val recentRanked = JSONObject(ranked.toString()).put("play_count", 2).put("last_played_at", 999_000_000L)
+        enqueue(member(JSONObject().put("songs", JSONArray().put(recentRanked)).put("view", "summary").put("topAlbums", JSONArray())
+            .put("window", JSONObject().put("days",7).put("from",395_200_000L).put("to",1_000_000_000L))))
+        val recentStats = api.playStats(30, true, 7)
+        assertEquals("s", recentStats.songs.single().song.id)
+        assertEquals(2L, recentStats.songs.single().playCount)
+        assertEquals(7, recentStats.window?.days)
+        val recentRequest = take().requestUrl!!
+        assertEquals("7", recentRequest.queryParameter("days"))
+        assertEquals("summary", recentRequest.queryParameter("view"))
+        assertEquals("30", recentRequest.queryParameter("limit"))
+        assertThrows(ApiFailure::class.java) { api.playStats(30, true, 31) }
         val before = server.requestCount; assertEquals(0, api.submitPlayEvents(emptyList()).recorded); assertEquals(before, server.requestCount)
         enqueue(member(JSONObject().put("recorded", 0).put("acceptedEventIds", JSONArray().put("stable_event"))))
         assertEquals(listOf("stable_event"), api.submitPlayEvents(listOf(PlayEvent("stable_event", "s", 1234567))).acceptedEventIds)

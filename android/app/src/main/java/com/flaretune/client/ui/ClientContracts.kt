@@ -5,7 +5,7 @@ import com.flaretune.client.data.SearchEntity
 
 enum class ClientScreen { RESTORING, CONNECT, CHANGE_PASSWORD, LIBRARY }
 enum class LibraryTab { CATALOG, FAVORITES, ALBUMS }
-enum class MainDestination { HOME, SEARCH, LIBRARY }
+enum class MainDestination { HOME, DISCOVER, SEARCH, LIBRARY }
 
 data class PlaybackSnapshot(
     val current: Song? = null,
@@ -67,6 +67,7 @@ data class ClientUiState(
     val queueNotice: ClientNotice? = null,
     val songLanguage: String = "all",
     val albumLanguage: String = "all",
+    val discoverLanguage: String = "all",
     val favoriteSongIds: Set<String> = emptySet(),
     val selectedPlaylistEntries: List<PlaylistSong> = emptyList(),
     val playlistShelf: PlaylistShelf? = null,
@@ -111,6 +112,8 @@ data class ClientUiState(
     val artistAlbumsHasMore: Boolean = false,
     val artistAlbumsNotice: ClientNotice? = null,
     val discoverySongs: List<Song> = emptyList(),
+    val continueListeningSongs: List<Song> = emptyList(),
+    val homeHistoryPreviewSong: Song? = null,
     val spotlightArtist: SpotlightArtist? = null,
     val discoveryLoading: Boolean = false,
     val discoveryNotice: ClientNotice? = null,
@@ -142,6 +145,21 @@ interface ClientActions {
     fun seekTo(positionMs: Long)
     fun toggleShuffle()
     fun cycleRepeat()
+    fun setPlaybackMode(
+        shuffle: Boolean,
+        repeatMode: Int,
+        currentShuffle: Boolean = false,
+        currentRepeatMode: Int = 0,
+    ) {
+        if (currentShuffle != shuffle) toggleShuffle()
+        var mode = currentRepeatMode.coerceIn(0, 2)
+        val target = repeatMode.coerceIn(0, 2)
+        var steps = 0
+        while (mode != target && steps++ < 3) {
+            cycleRepeat()
+            mode = (mode + 1) % 3
+        }
+    }
     fun selectQueueItem(index: Int)
     fun retryPlayback()
 
@@ -199,4 +217,5 @@ interface ClientActions {
     fun playHistorySong(song: Song) { playSong(song) }
     fun selectSongLanguage(language: String) {}
     fun selectAlbumLanguage(language: String) {}
+    fun selectDiscoverLanguage(language: String) {}
 }

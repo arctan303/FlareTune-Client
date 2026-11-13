@@ -38,6 +38,7 @@
     <string name="ft_listening_empty_playlist">This playlist is empty. Add your first song.</string>
     <string name="ft_listening_unplayable">Currently unavailable for playback</string>
     <string name="ft_listening_daily">Daily recommendations</string>
+    <string name="ft_listening_random">Random picks</string>
     <string name="ft_listening_spotlight">Spotlight artist</string>
     <string name="ft_listening_remove_history">Remove from play history</string>
     <string name="ft_listening_recent_searches">Recent searches</string>

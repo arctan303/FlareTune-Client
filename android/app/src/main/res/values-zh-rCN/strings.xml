@@ -71,9 +71,18 @@
         <item quantity="other">%1$d 首歌曲</item>
     </plurals>
     <string name="ft_home">主页</string>
+    <string name="ft_discover_page">发现</string>
     <string name="ft_search_page">搜索</string>
-    <string name="ft_library_page">资料库</string>
+    <string name="ft_library_page">歌单库</string>
+    <string name="ft_personal_library">个人歌单库</string>
     <string name="ft_all">全部</string>
+    <string name="ft_lang_zh">华语</string>
+    <string name="ft_lang_en">欧美</string>
+    <string name="ft_lang_ja">日语</string>
+    <string name="ft_lang_ko">韩语</string>
+    <string name="ft_lang_instrumental">纯音乐</string>
+    <string name="ft_lang_other">其他</string>
+    <string name="ft_lang_count_label">%1$s · %2$d</string>
     <string name="ft_music">音乐</string>
     <string name="ft_albums">专辑</string>
     <string name="ft_songs">歌曲</string>
@@ -100,7 +109,7 @@
     <string name="ft_swipe_track_hint">左右滑动切歌</string>
     <string name="ft_tap_for_lyrics">点击封面查看歌词</string>
     <string name="ft_custom_playlists">自建歌单</string>
-    <string name="ft_empty_playlists">暂无自建歌单，接入账号歌单接口后将在此显示。</string>
+    <string name="ft_empty_playlists">还没有自建歌单，点击“创建歌单”创建你的第一个歌单吧。</string>
     <string name="ft_song_categories">歌曲分类</string>
     <string name="ft_queue_empty">播放队列暂时为空</string>
     <string name="ft_play_favorites">一键播放我喜欢的</string>
@@ -125,4 +134,9 @@
     <string name="ft_interlude_dot_stage_1">跳转到间奏第 1 阶段</string>
     <string name="ft_interlude_dot_stage_2">跳转到间奏第 2 阶段</string>
     <string name="ft_interlude_dot_stage_3">跳转到间奏最后阶段</string>
+    <string name="ft_feedback_favorited">已添加到我喜欢的</string>
+    <string name="ft_feedback_unfavorited">已从我喜欢的移出</string>
+    <string name="ft_feedback_play_next">已设为下一首播放</string>
+    <string name="ft_feedback_enqueued">已加入播放队列</string>
+    <string name="ft_feedback_history_removed">已从播放历史移除</string>
 </resources>

@@ -1,6 +1,7 @@
 package com.flaretune.client.ui
 
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -24,6 +25,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -33,33 +35,40 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.ImageLoader
 import coil.compose.AsyncImage
 import com.flaretune.client.R
 import com.flaretune.client.data.SearchEntity
 import com.flaretune.client.model.*
+import kotlinx.coroutines.delay
 import java.text.DateFormat
 import java.util.Date
 
 @Composable
-internal fun ListeningPageTitle(title: String, back: (() -> Unit)? = null, refresh: (() -> Unit)? = null, refreshTag: String = "listening_refresh") {
+internal fun ListeningPageTitle(title: String, back: (() -> Unit)? = null) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         if (back != null) ActionIcon(ClientIcons.ChevronLeft, stringResource(R.string.ft_back), back)
         Text(title, Modifier.weight(1f).padding(horizontal = 8.dp), style = MaterialTheme.typography.headlineMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        if (refresh != null) ActionIcon(ClientIcons.Refresh, stringResource(R.string.ft_refresh), refresh, modifier = Modifier.testTag(refreshTag))
     }
 }
 
@@ -86,8 +95,7 @@ private fun ListeningSectionHeader(
         Text(
             title,
             Modifier.weight(1f),
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.headlineMedium.copy(fontSize = 23.sp, fontWeight = FontWeight.Bold),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -172,7 +180,7 @@ private fun ListeningArtistTile(artist: Artist, loader: ImageLoader?, onClick: (
 }
 
 @Composable
-private fun ListeningArtistCard(artist: Artist, loader: ImageLoader?, modifier: Modifier = Modifier, onClick: () -> Unit) {
+internal fun ListeningArtistCard(artist: Artist, loader: ImageLoader?, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Column(
         modifier.clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick)
             .padding(horizontal = 6.dp, vertical = 8.dp).testTag("browse_artist_" + artist.name),
@@ -216,15 +224,16 @@ private fun ListeningArtistCard(artist: Artist, loader: ImageLoader?, modifier: 
 
 @Composable
 internal fun ArtistBrowseSheet(state: ClientUiState, actions: ClientActions, loader: ImageLoader?, close: () -> Unit) {
-    FlareModalSheet(onDismissRequest = close) {
+    val closeAndReset = {
+        if (state.artistQuery.isNotBlank()) actions.refreshArtists("")
+        close()
+    }
+    FlareModalSheet(onDismissRequest = closeAndReset) {
         val absorbBottom = rememberAbsorbBottomOverscroll()
         Column(Modifier.fillMaxWidth().fillMaxHeight(.9f).navigationBarsPadding().nestedScroll(absorbBottom).testTag("artists_sheet")) {
             FlareSheetHeader(
                 title = stringResource(R.string.ft_listening_artists),
-                onClose = close,
-                trailingActions = {
-                    ActionIcon(ClientIcons.Refresh, stringResource(R.string.ft_refresh), { actions.refreshArtists(state.artistQuery) })
-                },
+                onClose = closeAndReset,
             )
             OutlinedTextField(
                 value = state.artistQuery,
@@ -238,7 +247,7 @@ internal fun ArtistBrowseSheet(state: ClientUiState, actions: ClientActions, loa
             ListeningRetry(state.artistsNotice, { actions.refreshArtists(state.artistQuery) })
             LazyColumn(Modifier.weight(1f)) {
                 if (!state.artistsLoading && state.artists.isEmpty()) item { Text(stringResource(R.string.ft_listening_empty_artists), Modifier.padding(24.dp)) }
-                items(state.artists, key = { it.id ?: ("local:" + it.name) }) { artist -> ListeningArtistTile(artist, loader) { actions.openArtist(artist); close() } }
+                items(state.artists, key = { it.id ?: ("local:" + it.name) }) { artist -> ListeningArtistTile(artist, loader) { actions.openArtist(artist); closeAndReset() } }
                 if (state.artistsHasMore) item { TextButton(onClick = actions::loadMoreArtists, enabled = !state.artistsLoadingMore, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.ft_load_more)) } }
             }
         }
@@ -253,9 +262,6 @@ internal fun ListeningAlbumSearchSheet(state: ClientUiState, actions: ClientActi
             FlareSheetHeader(
                 title = stringResource(R.string.ft_albums),
                 onClose = close,
-                trailingActions = {
-                    ActionIcon(ClientIcons.Refresh, stringResource(R.string.ft_refresh), { actions.searchAlbums(state.albumSearchQuery) })
-                },
             )
             OutlinedTextField(
                 value = state.albumSearchQuery,
@@ -280,6 +286,7 @@ internal fun ListeningAlbumSearchSheet(state: ClientUiState, actions: ClientActi
 internal fun ListeningArtistPage(state: ClientUiState, actions: ClientActions, loader: ImageLoader?, topInset: Dp, bottomInset: Dp) {
     val artist = state.selectedArtist ?: return
     var subview by rememberSaveable(artist.name, artist.id) { mutableStateOf("overview") }
+    BackHandler(enabled = subview != "overview") { subview = "overview" }
     val interaction = LocalListeningInteractions.current
     val listState = rememberLazyListState()
     val scrolledPastHero by remember(subview) {
@@ -306,8 +313,6 @@ internal fun ListeningArtistPage(state: ClientUiState, actions: ClientActions, l
                         ListeningPageTitle(
                             title = artist.name + " · " + stringResource(R.string.ft_songs),
                             back = { subview = "overview" },
-                            refresh = { actions.openArtist(artist) },
-                            refreshTag = "artist_refresh",
                         )
                         if (state.artistLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
                         ListeningRetry(state.artistNotice, { actions.openArtist(artist) })
@@ -331,8 +336,6 @@ internal fun ListeningArtistPage(state: ClientUiState, actions: ClientActions, l
                         ListeningPageTitle(
                             title = artist.name + " · " + stringResource(R.string.ft_albums),
                             back = { subview = "overview" },
-                            refresh = { actions.openArtist(artist) },
-                            refreshTag = "artist_refresh",
                         )
                         if (state.artistAlbumsLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
                         ListeningRetry(state.artistAlbumsNotice, { actions.openArtist(artist) })
@@ -357,11 +360,12 @@ internal fun ListeningArtistPage(state: ClientUiState, actions: ClientActions, l
                     }
                 }
                 else -> {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(bottom = bottomInset),
-                    ) {
+                    Box(Modifier.fillMaxSize()) {
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(bottom = bottomInset),
+                        ) {
                         item(key = "artist-hero") {
                             Box(Modifier.fillMaxWidth().height(316.dp + topInset)) {
                                 if (loader != null && !heroImageUrl.isNullOrBlank()) {
@@ -467,19 +471,19 @@ internal fun ListeningArtistPage(state: ClientUiState, actions: ClientActions, l
                         item(key = "artist-songs-section") {
                             ListeningSectionHeader(
                                 title = stringResource(R.string.ft_songs),
-                                actionLabel = if (state.artistSongs.size > 4 || state.artistHasMore) stringResource(R.string.ft_see_all) else null,
+                                actionLabel = if (state.artistSongs.size > 16 || state.artistHasMore) stringResource(R.string.ft_see_all) else null,
                                 onAction = if (state.artistSongs.isNotEmpty()) {{ subview = "songs" }} else null,
                             )
                             if (!state.artistLoading && state.artistSongs.isEmpty()) {
                                 Text(stringResource(R.string.ft_empty_search), Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                             } else {
-                                SongColumnShelf(
-                                    songs = state.artistSongs.take(20),
+                                UnifiedSongSectionList(
+                                    songs = state.artistSongs,
                                     currentSongId = state.playback.current?.id,
                                     playing = state.playback.playing,
                                     buffering = state.playback.buffering,
                                     loader = loader,
-                                    rowsPerColumn = if (state.artistSongs.size >= 8) 4 else 3,
+                                    limit = 16,
                                     tagPrefix = "artist_song_",
                                 ) { _, index -> actions.playSongs(state.artistSongs, index) }
                             }
@@ -539,17 +543,7 @@ internal fun ListeningArtistPage(state: ClientUiState, actions: ClientActions, l
                             )
                         }
                         if (!scrolledPastHero) Spacer(Modifier.weight(1f))
-                        Surface(
-                            color = iconSurface,
-                            shape = CircleShape,
-                        ) {
-                            IconButton(
-                                onClick = { actions.openArtist(artist) },
-                                modifier = Modifier.testTag("artist_refresh"),
-                            ) {
-                                Icon(ClientIcons.Refresh, stringResource(R.string.ft_refresh), tint = iconTint)
-                            }
-                        }
+                    }
                     }
                 }
             }
@@ -569,9 +563,6 @@ internal fun ListeningStatsSheet(state: ClientUiState, actions: ClientActions, l
             FlareSheetHeader(
                 title = stringResource(R.string.ft_listening_statistics),
                 onClose = close,
-                trailingActions = {
-                    ActionIcon(ClientIcons.Refresh, stringResource(R.string.ft_refresh), actions::refreshPlayStats)
-                },
             )
             Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 FilterChip(!artistsTab, { artistsTab = false }, label = { Text(stringResource(R.string.ft_songs)) })
@@ -600,10 +591,12 @@ internal fun ListeningStatsSheet(state: ClientUiState, actions: ClientActions, l
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun ListeningSearchPage(state: ClientUiState, actions: ClientActions, loader: ImageLoader?, topInset: Dp, bottomInset: Dp) {
-    var query by rememberSaveable(state.query) { mutableStateOf(state.query) }
-    var submittedQuery by rememberSaveable(state.query) { mutableStateOf(state.query) }
+    var query by rememberSaveable { mutableStateOf(state.query) }
+    var submittedQuery by rememberSaveable { mutableStateOf(state.query.trim()) }
     var sectionDetail by rememberSaveable(submittedQuery) { mutableStateOf("overview") }
     val keyboard = LocalSoftwareKeyboardController.current
+    val searchFocusRequester = remember { FocusRequester() }
+    BackHandler(enabled = sectionDetail != "overview") { sectionDetail = "overview" }
 
     fun submitSearch(target: String = query) {
         val cleaned = target.trim()
@@ -623,6 +616,25 @@ internal fun ListeningSearchPage(state: ClientUiState, actions: ClientActions, l
             actions.refreshArtists(state.query)
             actions.searchAlbums(state.query)
         }
+    }
+    LaunchedEffect(state.query) {
+        val cleaned = state.query.trim()
+        if (cleaned != submittedQuery) {
+            query = state.query
+            submittedQuery = cleaned
+            sectionDetail = "overview"
+        }
+    }
+    LaunchedEffect(query) {
+        val cleaned = query.trim()
+        if (cleaned.isEmpty() || cleaned == submittedQuery) return@LaunchedEffect
+        delay(350)
+        if (cleaned == submittedQuery) return@LaunchedEffect
+        submittedQuery = cleaned
+        sectionDetail = "overview"
+        actions.search(cleaned)
+        actions.refreshArtists(cleaned)
+        actions.searchAlbums(cleaned)
     }
 
     val activeSearching = submittedQuery.isNotBlank()
@@ -644,346 +656,378 @@ internal fun ListeningSearchPage(state: ClientUiState, actions: ClientActions, l
         }
     }
 
-    Column(Modifier.fillMaxSize().padding(top = topInset).testTag("search_page")) {
-        // Slim pill search header with a single magnifying glass inside the pill.
-        Row(
-            Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = { next ->
-                    query = next
-                    if (next.isEmpty() && submittedQuery.isNotEmpty()) {
-                        submittedQuery = ""
-                        sectionDetail = "overview"
-                        actions.search("")
-                    }
-                },
-                singleLine = true,
+    FrostedHeaderScaffold(
+        topInset = topInset,
+        modifier = Modifier.fillMaxSize().testTag("search_page"),
+        headerContent = {
+            AccountAvatar(state, actions)
+            Surface(
                 shape = CircleShape,
-                placeholder = { Text(stringResource(R.string.ft_search_hint), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                leadingIcon = {
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.weight(1f)
+                    .height(48.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { searchFocusRequester.requestFocus() },
+            ) {
+                Row(
+                    Modifier.fillMaxSize().padding(start = 2.dp, end = if (query.isEmpty()) 14.dp else 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     IconButton(
                         onClick = { submitSearch() },
-                        modifier = Modifier.testTag("search_submit"),
+                        modifier = Modifier.size(48.dp).testTag("search_submit"),
                     ) {
-                        Icon(ClientIcons.Search, stringResource(R.string.ft_search_action), Modifier.size(20.dp))
+                        Icon(
+                            ClientIcons.Search,
+                            stringResource(R.string.ft_search_action),
+                            Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
-                },
-                trailingIcon = {
-                    if (query.isNotEmpty()) {
-                        IconButton(onClick = {
-                            query = ""
-                            submittedQuery = ""
-                            sectionDetail = "overview"
-                            actions.search("")
-                        }) {
-                            Icon(ClientIcons.Close, stringResource(R.string.ft_clear_search), Modifier.size(18.dp))
-                        }
-                    }
-                },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { submitSearch() }),
-                modifier = Modifier.weight(1f).testTag("search_field"),
-            )
-            ActionIcon(
-                ClientIcons.Refresh,
-                stringResource(R.string.ft_refresh),
-                {
-                    actions.refresh()
-                    if (activeSearching) {
-                        actions.refreshArtists(submittedQuery)
-                        actions.searchAlbums(submittedQuery)
-                    }
-                },
-                modifier = Modifier.testTag("library_refresh"),
-            )
-        }
-
-        val anyLoading = if (activeSearching) {
-            state.loading || state.artistsLoading || state.albumSearchLoading
-        } else {
-            state.loading && state.notice == null
-        }
-        if (anyLoading) {
-            LinearProgressIndicator(Modifier.fillMaxWidth())
-        }
-
-        val visibleNotice = when (sectionDetail) {
-            "artists" -> state.artistsNotice ?: state.notice
-            "albums" -> state.albumSearchNotice ?: state.notice
-            else -> state.notice ?: state.artistsNotice ?: state.albumSearchNotice
-        }
-        ListeningRetry(
-            notice = visibleNotice,
-            retry = {
-                when (sectionDetail) {
-                    "artists" -> actions.refreshArtists(submittedQuery)
-                    "albums" -> actions.searchAlbums(submittedQuery)
-                    else -> {
-                        actions.refresh()
-                        if (activeSearching) {
-                            actions.refreshArtists(submittedQuery)
-                            actions.searchAlbums(submittedQuery)
-                        }
-                    }
-                }
-            },
-            tag = "catalog_retry",
-        )
-
-        if (!activeSearching) {
-            // PRE-SEARCH: Single "Recent searches" section cleanly split by whitespace into
-            // 1) Text search history pills (removable individually) and
-            // 2) Direct picks (opened songs / artists / albums / playlists, no nested card backgrounds).
-            LazyColumn(
-                Modifier.weight(1f).fillMaxWidth().testTag("search_home_feed"),
-                contentPadding = PaddingValues(top = 8.dp, bottom = bottomInset),
-            ) {
-                if (state.recentSearchTerms.isNotEmpty() || state.recentSearches.isNotEmpty()) {
-                    item(key = "recent-searches") {
-                        Column(Modifier.fillMaxWidth().testTag("recent_searches")) {
-                            Row(
-                                Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    stringResource(R.string.ft_listening_recent_searches),
-                                    Modifier.weight(1f),
-                                    style = MaterialTheme.typography.titleLarge,
-                                    fontWeight = FontWeight.Bold,
-                                )
-                                TextButton(onClick = { actions.clearRecentSearches(); actions.clearRecentSearchTerms() }) {
-                                    Text(stringResource(R.string.ft_listening_clear))
-                                }
-                            }
-                            if (state.recentSearchTerms.isNotEmpty()) {
-                                FlowRow(
-                                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                                ) {
-                                    state.recentSearchTerms.forEach { term ->
-                                        key("term:" + term) {
-                                            RecentSearchTermChip(
-                                                term = term,
-                                                onSelect = { submitSearch(term) },
-                                                onRemove = { actions.removeRecentSearchTerm(term) },
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                            if (state.recentSearchTerms.isNotEmpty() && state.recentSearches.isNotEmpty()) {
-                                Spacer(Modifier.height(22.dp))
-                            }
-                            if (state.recentSearches.isNotEmpty()) {
-                                LazyRow(
-                                    Modifier.fillMaxWidth().padding(top = 2.dp),
-                                    contentPadding = PaddingValues(horizontal = 16.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                                ) {
-                                    items(state.recentSearches, key = { it.type + ":" + it.id }) { entry ->
-                                        RecentSearchEntityCard(
-                                            entry = entry,
-                                            coverUrl = if (entry.type == "artist") {
-                                                artistCoverLookup[entry.name.lowercase()]
-                                            } else {
-                                                songCoverLookup[entry.id]
-                                            },
-                                            loader = loader,
-                                            onOpen = { actions.openRecentSearch(entry) },
-                                            onRemove = { actions.removeRecentSearch(entry) },
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    item(key = "search-empty-recent") {
-                        Box(
-                            Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 56.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
+                    Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.CenterStart) {
+                        if (query.isEmpty()) {
                             Text(
-                                stringResource(R.string.ft_search_intro),
-                                style = MaterialTheme.typography.bodyLarge,
+                                stringResource(R.string.ft_search_hint),
+                                style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        BasicTextField(
+                            value = query,
+                            onValueChange = { next ->
+                                query = next
+                                if (next.isEmpty() && submittedQuery.isNotEmpty()) {
+                                    submittedQuery = ""
+                                    sectionDetail = "overview"
+                                    actions.search("")
+                                }
+                            },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(onSearch = { submitSearch() }),
+                            modifier = Modifier.fillMaxWidth().focusRequester(searchFocusRequester).testTag("search_field"),
+                        )
+                    }
+                    if (query.isNotEmpty()) {
+                        IconButton(
+                            onClick = {
+                                query = ""
+                                submittedQuery = ""
+                                sectionDetail = "overview"
+                                actions.search("")
+                            },
+                            modifier = Modifier.size(48.dp),
+                        ) {
+                            Icon(
+                                ClientIcons.Close,
+                                stringResource(R.string.ft_clear_search),
+                                Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
                 }
             }
+        },
+    ) { topClearance ->
+        val anyLoading = if (activeSearching) {
+            state.loading || state.artistsLoading || state.albumSearchLoading
         } else {
-            // POST-SEARCH: Web-aligned horizontal multi-section overview + View All subviews.
+            state.loading && state.notice == null
+        }
+        val visibleNotice = when (sectionDetail) {
+            "artists" -> state.artistsNotice ?: state.notice
+            "albums" -> state.albumSearchNotice ?: state.notice
+            else -> state.notice ?: state.artistsNotice ?: state.albumSearchNotice
+        }
+        val retrySearch: () -> Unit = {
             when (sectionDetail) {
-                "artists" -> {
-                    Column(Modifier.weight(1f).fillMaxWidth()) {
-                        SearchSubviewBackBar(
-                            label = stringResource(R.string.ft_listening_artists),
-                            onBack = { sectionDetail = "overview" },
-                        )
-                        LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("catalog_list"), contentPadding = PaddingValues(bottom = bottomInset)) {
-                            if (!state.artistsLoading && state.artists.isEmpty()) {
-                                item { Text(stringResource(R.string.ft_listening_empty_artists), Modifier.padding(24.dp)) }
-                            }
-                            items(state.artists, key = { it.id ?: ("local:" + it.name) }) { artist ->
-                                ListeningArtistTile(artist, loader) { actions.openArtist(artist) }
-                            }
-                            if (state.artistsHasMore) item {
-                                TextButton(onClick = actions::loadMoreArtists, enabled = !state.artistsLoadingMore, modifier = Modifier.fillMaxWidth()) {
-                                    Text(stringResource(R.string.ft_load_more))
+                "artists" -> actions.refreshArtists(submittedQuery)
+                "albums" -> actions.searchAlbums(submittedQuery)
+                else -> {
+                    actions.refresh()
+                    if (activeSearching) {
+                        actions.refreshArtists(submittedQuery)
+                        actions.searchAlbums(submittedQuery)
+                    }
+                }
+            }
+        }
+
+        Box(Modifier.fillMaxSize()) {
+            if (!activeSearching) {
+                // PRE-SEARCH: Single "Recent searches" section cleanly split by whitespace into
+                // 1) Text search history pills (removable individually) and
+                // 2) Direct picks (opened songs / artists / albums / playlists, no nested card backgrounds).
+                LazyColumn(
+                    Modifier.fillMaxSize().testTag("search_home_feed"),
+                    contentPadding = PaddingValues(top = topClearance + 4.dp, bottom = bottomInset),
+                ) {
+                    if (visibleNotice != null) {
+                        item(key = "search-notice") {
+                            ListeningRetry(notice = visibleNotice, retry = retrySearch, tag = "catalog_retry")
+                        }
+                    }
+                    if (state.recentSearchTerms.isNotEmpty() || state.recentSearches.isNotEmpty()) {
+                        item(key = "recent-searches") {
+                            Column(Modifier.fillMaxWidth().testTag("recent_searches")) {
+                                Row(
+                                    Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        stringResource(R.string.ft_listening_recent_searches),
+                                        Modifier.weight(1f),
+                                        style = MaterialTheme.typography.titleLarge,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                    TextButton(onClick = { actions.clearRecentSearches(); actions.clearRecentSearchTerms() }) {
+                                        Text(stringResource(R.string.ft_listening_clear))
+                                    }
                                 }
+                                if (state.recentSearchTerms.isNotEmpty()) {
+                                    FlowRow(
+                                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                                    ) {
+                                        state.recentSearchTerms.forEach { term ->
+                                            key("term:" + term) {
+                                                RecentSearchTermChip(
+                                                    term = term,
+                                                    onSelect = { submitSearch(term) },
+                                                    onRemove = { actions.removeRecentSearchTerm(term) },
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                if (state.recentSearchTerms.isNotEmpty() && state.recentSearches.isNotEmpty()) {
+                                    Spacer(Modifier.height(22.dp))
+                                }
+                                if (state.recentSearches.isNotEmpty()) {
+                                    LazyRow(
+                                        Modifier.fillMaxWidth().padding(top = 2.dp),
+                                        contentPadding = PaddingValues(horizontal = 16.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                    ) {
+                                        items(state.recentSearches, key = { it.type + ":" + it.id }) { entry ->
+                                            RecentSearchEntityCard(
+                                                entry = entry,
+                                                coverUrl = if (entry.type == "artist") {
+                                                    artistCoverLookup[entry.name.lowercase()]
+                                                } else {
+                                                    songCoverLookup[entry.id]
+                                                },
+                                                loader = loader,
+                                                onOpen = { actions.openRecentSearch(entry) },
+                                                onRemove = { actions.removeRecentSearch(entry) },
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        item(key = "search-empty-recent") {
+                            Box(
+                                Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 56.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    stringResource(R.string.ft_search_intro),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center,
+                                )
                             }
                         }
                     }
                 }
-                "songs" -> {
-                    Column(Modifier.weight(1f).fillMaxWidth()) {
-                        SearchSubviewBackBar(
-                            label = stringResource(R.string.ft_songs),
-                            onBack = { sectionDetail = "overview" },
-                        )
-                        LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("catalog_list"), contentPadding = PaddingValues(bottom = bottomInset)) {
-                            if (!state.loading && state.songs.isEmpty()) {
-                                item { Text(stringResource(R.string.ft_empty_search), Modifier.padding(24.dp)) }
-                            }
-                            itemsIndexed(state.songs, key = { _, song -> song.id }) { index, song ->
-                                SongRow(
-                                    song, loader, song.id == state.playback.current?.id, state.playback.playing, state.playback.buffering,
-                                    modifier = Modifier.testTag("song_" + song.id),
-                                ) { actions.playSongs(state.songs, index) }
-                            }
-                            if (state.hasMore) item {
-                                TextButton(onClick = actions::loadMore, enabled = !state.loadingMore, modifier = Modifier.fillMaxWidth()) {
-                                    Text(stringResource(R.string.ft_load_more))
+            } else {
+                // POST-SEARCH: Web-aligned horizontal multi-section overview + View All subviews.
+                when (sectionDetail) {
+                    "artists" -> {
+                        Column(Modifier.fillMaxSize().padding(top = topClearance)) {
+                            ListeningRetry(notice = visibleNotice, retry = retrySearch, tag = "catalog_retry")
+                            SearchSubviewBackBar(
+                                label = stringResource(R.string.ft_listening_artists),
+                                onBack = { sectionDetail = "overview" },
+                            )
+                            LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("catalog_list"), contentPadding = PaddingValues(bottom = bottomInset)) {
+                                if (!state.artistsLoading && state.artists.isEmpty()) {
+                                    item { Text(stringResource(R.string.ft_listening_empty_artists), Modifier.padding(24.dp)) }
                                 }
-                            }
-                        }
-                    }
-                }
-                "albums" -> {
-                    Column(Modifier.weight(1f).fillMaxWidth()) {
-                        SearchSubviewBackBar(
-                            label = stringResource(R.string.ft_albums),
-                            onBack = { sectionDetail = "overview" },
-                        )
-                        LazyVerticalGrid(
-                            columns = GridCells.Adaptive(152.dp),
-                            modifier = Modifier.weight(1f).fillMaxWidth().testTag("catalog_list"),
-                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = bottomInset),
-                            horizontalArrangement = Arrangement.spacedBy(14.dp),
-                            verticalArrangement = Arrangement.spacedBy(18.dp),
-                        ) {
-                            if (!state.albumSearchLoading && state.searchAlbums.isEmpty()) {
-                                item(span = { GridItemSpan(maxLineSpan) }) {
-                                    Text(stringResource(R.string.ft_listening_empty_albums), Modifier.padding(16.dp))
+                                items(state.artists, key = { it.id ?: ("local:" + it.name) }) { artist ->
+                                    ListeningArtistTile(artist, loader) { actions.openArtist(artist) }
                                 }
-                            }
-                            items(state.searchAlbums, key = { it.id }) { album ->
-                                ListeningAlbumCard(album, loader, Modifier.fillMaxWidth()) { actions.openAlbum(album) }
-                            }
-                            if (state.albumSearchHasMore) {
-                                item(span = { GridItemSpan(maxLineSpan) }) {
-                                    TextButton(onClick = actions::loadMoreSearchAlbums, enabled = !state.albumSearchLoadingMore, modifier = Modifier.fillMaxWidth()) {
+                                if (state.artistsHasMore) item {
+                                    TextButton(onClick = actions::loadMoreArtists, enabled = !state.artistsLoadingMore, modifier = Modifier.fillMaxWidth()) {
                                         Text(stringResource(R.string.ft_load_more))
                                     }
                                 }
                             }
                         }
                     }
-                }
-                else -> {
-                    val nothingFound = !anyLoading &&
-                        state.artists.isEmpty() &&
-                        state.songs.isEmpty() &&
-                        state.searchAlbums.isEmpty() &&
-                        visibleNotice == null
-
-                    LazyColumn(
-                        Modifier.weight(1f).fillMaxWidth().testTag("catalog_list"),
-                        contentPadding = PaddingValues(bottom = bottomInset),
-                    ) {
-                        if (nothingFound) {
-                            item(key = "search-empty") {
-                                Text(
-                                    stringResource(R.string.ft_empty_search),
-                                    Modifier.padding(24.dp),
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                        if (state.artists.isNotEmpty()) {
-                            item(key = "search-artists-section") {
-                                ListeningSectionHeader(
-                                    title = stringResource(R.string.ft_listening_artists),
-                                    actionLabel = if (state.artists.size > 4 || state.artistsHasMore) stringResource(R.string.ft_see_all) else null,
-                                    onAction = if (state.artists.isNotEmpty()) {{ sectionDetail = "artists" }} else null,
-                                )
-                                LazyRow(
-                                    Modifier.fillMaxWidth(),
-                                    contentPadding = PaddingValues(horizontal = 12.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                ) {
-                                    items(state.artists.take(12), key = { it.id ?: ("local:" + it.name) }) { artist ->
-                                        ListeningArtistCard(artist, loader, Modifier.width(128.dp)) { actions.openArtist(artist) }
+                    "songs" -> {
+                        Column(Modifier.fillMaxSize().padding(top = topClearance)) {
+                            ListeningRetry(notice = visibleNotice, retry = retrySearch, tag = "catalog_retry")
+                            SearchSubviewBackBar(
+                                label = stringResource(R.string.ft_songs),
+                                onBack = { sectionDetail = "overview" },
+                            )
+                            LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("catalog_list"), contentPadding = PaddingValues(bottom = bottomInset)) {
+                                if (!state.loading && state.songs.isEmpty()) {
+                                    item { Text(stringResource(R.string.ft_empty_search), Modifier.padding(24.dp)) }
+                                }
+                                itemsIndexed(state.songs, key = { _, song -> song.id }) { index, song ->
+                                    SongRow(
+                                        song, loader, song.id == state.playback.current?.id, state.playback.playing, state.playback.buffering,
+                                        modifier = Modifier.testTag("song_" + song.id),
+                                    ) { actions.playSongs(state.songs, index) }
+                                }
+                                if (state.hasMore) item {
+                                    TextButton(onClick = actions::loadMore, enabled = !state.loadingMore, modifier = Modifier.fillMaxWidth()) {
+                                        Text(stringResource(R.string.ft_load_more))
                                     }
                                 }
                             }
                         }
-                        if (state.songs.isNotEmpty()) {
-                            item(key = "search-songs-section") {
-                                ListeningSectionHeader(
-                                    title = stringResource(R.string.ft_songs),
-                                    actionLabel = if (state.songs.size > 6 || state.hasMore) stringResource(R.string.ft_see_all) else null,
-                                    onAction = if (state.songs.isNotEmpty()) {{ sectionDetail = "songs" }} else null,
-                                    trailing = {
-                                        TextButton(
-                                            onClick = { actions.playSongs(state.songs, 0) },
-                                            modifier = Modifier.testTag("search_play_all"),
-                                        ) {
-                                            Icon(ClientIcons.Play, null, Modifier.size(16.dp))
-                                            Spacer(Modifier.width(4.dp))
-                                            Text(stringResource(R.string.ft_play_all))
+                    }
+                    "albums" -> {
+                        Column(Modifier.fillMaxSize().padding(top = topClearance)) {
+                            ListeningRetry(notice = visibleNotice, retry = retrySearch, tag = "catalog_retry")
+                            SearchSubviewBackBar(
+                                label = stringResource(R.string.ft_albums),
+                                onBack = { sectionDetail = "overview" },
+                            )
+                            LazyVerticalGrid(
+                                columns = GridCells.Adaptive(152.dp),
+                                modifier = Modifier.weight(1f).fillMaxWidth().testTag("catalog_list"),
+                                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = bottomInset),
+                                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(18.dp),
+                            ) {
+                                if (!state.albumSearchLoading && state.searchAlbums.isEmpty()) {
+                                    item(span = { GridItemSpan(maxLineSpan) }) {
+                                        Text(stringResource(R.string.ft_listening_empty_albums), Modifier.padding(16.dp))
+                                    }
+                                }
+                                items(state.searchAlbums, key = { it.id }) { album ->
+                                    ListeningAlbumCard(album, loader, Modifier.fillMaxWidth()) { actions.openAlbum(album) }
+                                }
+                                if (state.albumSearchHasMore) {
+                                    item(span = { GridItemSpan(maxLineSpan) }) {
+                                        TextButton(onClick = actions::loadMoreSearchAlbums, enabled = !state.albumSearchLoadingMore, modifier = Modifier.fillMaxWidth()) {
+                                            Text(stringResource(R.string.ft_load_more))
                                         }
-                                    },
-                                )
-                                SongColumnShelf(
-                                    songs = state.songs.take(20),
-                                    currentSongId = state.playback.current?.id,
-                                    playing = state.playback.playing,
-                                    buffering = state.playback.buffering,
-                                    loader = loader,
-                                    rowsPerColumn = if (state.songs.size >= 8) 4 else 3,
-                                    tagPrefix = "song_",
-                                ) { _, index -> actions.playSongs(state.songs, index) }
+                                    }
+                                }
                             }
                         }
-                        if (state.searchAlbums.isNotEmpty()) {
-                            item(key = "search-albums-section") {
-                                ListeningSectionHeader(
-                                    title = stringResource(R.string.ft_albums),
-                                    actionLabel = if (state.searchAlbums.size > 4 || state.albumSearchHasMore) stringResource(R.string.ft_see_all) else null,
-                                    onAction = if (state.searchAlbums.isNotEmpty()) {{ sectionDetail = "albums" }} else null,
-                                )
-                                LazyRow(
-                                    Modifier.fillMaxWidth(),
-                                    contentPadding = PaddingValues(horizontal = 16.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                                ) {
-                                    items(state.searchAlbums.take(12), key = { it.id }) { album ->
-                                        ListeningAlbumCard(album, loader, Modifier.width(152.dp)) { actions.openAlbum(album) }
+                    }
+                    else -> {
+                        val nothingFound = !anyLoading &&
+                            state.artists.isEmpty() &&
+                            state.songs.isEmpty() &&
+                            state.searchAlbums.isEmpty() &&
+                            visibleNotice == null
+
+                        LazyColumn(
+                            Modifier.fillMaxSize().testTag("catalog_list"),
+                            contentPadding = PaddingValues(top = topClearance + 2.dp, bottom = bottomInset),
+                        ) {
+                            if (visibleNotice != null) {
+                                item(key = "search-overview-notice") {
+                                    ListeningRetry(notice = visibleNotice, retry = retrySearch, tag = "catalog_retry")
+                                }
+                            }
+                            if (nothingFound) {
+                                item(key = "search-empty") {
+                                    Text(
+                                        stringResource(R.string.ft_empty_search),
+                                        Modifier.padding(24.dp),
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                            if (state.artists.isNotEmpty()) {
+                                item(key = "search-artists-section") {
+                                    ListeningSectionHeader(
+                                        title = stringResource(R.string.ft_listening_artists),
+                                        actionLabel = if (state.artists.size > 4 || state.artistsHasMore) stringResource(R.string.ft_see_all) else null,
+                                        onAction = if (state.artists.isNotEmpty()) {{ sectionDetail = "artists" }} else null,
+                                    )
+                                    LazyRow(
+                                        Modifier.fillMaxWidth(),
+                                        contentPadding = PaddingValues(horizontal = 12.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
+                                        items(state.artists.take(12), key = { it.id ?: ("local:" + it.name) }) { artist ->
+                                            ListeningArtistCard(artist, loader, Modifier.width(128.dp)) { actions.openArtist(artist) }
+                                        }
+                                    }
+                                }
+                            }
+                            if (state.songs.isNotEmpty()) {
+                                item(key = "search-songs-section") {
+                                    ListeningSectionHeader(
+                                        title = stringResource(R.string.ft_songs),
+                                        actionLabel = if (state.songs.size > 16 || state.hasMore) stringResource(R.string.ft_see_all) else null,
+                                        onAction = if (state.songs.isNotEmpty()) {{ sectionDetail = "songs" }} else null,
+                                        trailing = {
+                                            TextButton(
+                                                onClick = { actions.playSongs(state.songs, 0) },
+                                                modifier = Modifier.testTag("search_play_all"),
+                                            ) {
+                                                Icon(ClientIcons.Play, null, Modifier.size(16.dp))
+                                                Spacer(Modifier.width(4.dp))
+                                                Text(stringResource(R.string.ft_play_all))
+                                            }
+                                        },
+                                    )
+                                    UnifiedSongSectionList(
+                                        songs = state.songs,
+                                        currentSongId = state.playback.current?.id,
+                                        playing = state.playback.playing,
+                                        buffering = state.playback.buffering,
+                                        loader = loader,
+                                        limit = 16,
+                                        tagPrefix = "song_",
+                                    ) { _, index -> actions.playSongs(state.songs, index) }
+                                }
+                            }
+                            if (state.searchAlbums.isNotEmpty()) {
+                                item(key = "search-albums-section") {
+                                    ListeningSectionHeader(
+                                        title = stringResource(R.string.ft_albums),
+                                        actionLabel = if (state.searchAlbums.size > 4 || state.albumSearchHasMore) stringResource(R.string.ft_see_all) else null,
+                                        onAction = if (state.searchAlbums.isNotEmpty()) {{ sectionDetail = "albums" }} else null,
+                                    )
+                                    LazyRow(
+                                        Modifier.fillMaxWidth(),
+                                        contentPadding = PaddingValues(horizontal = 16.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                                    ) {
+                                        items(state.searchAlbums.take(12), key = { it.id }) { album ->
+                                            ListeningAlbumCard(album, loader, Modifier.width(152.dp)) { actions.openAlbum(album) }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
+            }
+            if (anyLoading) {
+                LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = topClearance))
             }
         }
     }
@@ -1060,14 +1104,26 @@ private fun RecentSearchEntityCard(
                     )
                 }
             }
-            Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.surface,
-                shadowElevation = 2.dp,
-                modifier = Modifier.align(Alignment.TopEnd).size(22.dp),
+            Box(
+                Modifier.align(Alignment.TopEnd)
+                    .size(48.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        role = Role.Button,
+                        onClick = onRemove,
+                    ),
+                contentAlignment = Alignment.TopEnd,
             ) {
-                Box(Modifier.fillMaxSize().clickable(onClick = onRemove), contentAlignment = Alignment.Center) {
-                    Icon(ClientIcons.Close, stringResource(R.string.ft_listening_remove_search), Modifier.size(13.dp))
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surface,
+                    shadowElevation = 2.dp,
+                    modifier = Modifier.size(22.dp),
+                ) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Icon(ClientIcons.Close, stringResource(R.string.ft_listening_remove_search), Modifier.size(13.dp))
+                    }
                 }
             }
         }
@@ -1104,8 +1160,9 @@ private fun RecentSearchTermChip(term: String, onSelect: () -> Unit, onRemove: (
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
-                Modifier.clickable(onClick = onSelect)
-                    .padding(start = 14.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+                Modifier.heightIn(min = 48.dp)
+                    .clickable(onClick = onSelect)
+                    .padding(start = 14.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
@@ -1117,8 +1174,9 @@ private fun RecentSearchTermChip(term: String, onSelect: () -> Unit, onRemove: (
                 )
             }
             Box(
-                Modifier.clickable(onClick = onRemove)
-                    .padding(start = 4.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
+                Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                    .clickable(onClick = onRemove)
+                    .padding(start = 6.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -1144,95 +1202,277 @@ internal fun ListeningSongSortRow(state: ClientUiState, actions: ClientActions) 
     }
 }
 
+private data class LibraryRowModel(
+    val key: String,
+    val name: String,
+    val subtitle: String,
+    val customCoverUrl: String?,
+    val previewCovers: List<String>,
+    val isFavorite: Boolean,
+    val cardTag: String,
+    val moreTag: String?,
+    val onOpen: () -> Unit,
+    val onMore: (() -> Unit)?,
+)
+
 @Composable
 internal fun ListeningLibraryOverview(state: ClientUiState, actions: ClientActions, loader: ImageLoader?, topInset: Dp, bottomInset: Dp) {
     val interaction = LocalListeningInteractions.current
     var editShelf by remember { mutableStateOf(false) }
     val positions = state.playlistShelf?.items?.mapIndexed { index, item -> item.id to index }?.toMap().orEmpty()
     val playlists = state.playlists.sortedBy { positions[it.id] ?: Int.MAX_VALUE }
-
-    Column(Modifier.fillMaxSize().padding(top = topInset).testTag("library_page")) {
-        ListeningPageTitle(
-            title = stringResource(R.string.ft_library_page),
-            refresh = actions::refreshPlaylists,
-            refreshTag = "library_refresh",
-        )
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            FilledTonalButton(
-                onClick = { interaction?.createPlaylist?.invoke(emptyList()) },
-                shape = CircleShape,
-                modifier = Modifier.heightIn(min = 42.dp).testTag("create_playlist"),
-            ) {
-                Icon(ClientIcons.Plus, null, Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(stringResource(R.string.ft_listening_create_playlist))
-            }
-            OutlinedButton(
-                onClick = { editShelf = true },
-                enabled = state.playlistShelf != null && playlists.isNotEmpty() && !state.libraryMutationBusy,
-                shape = CircleShape,
-                modifier = Modifier.heightIn(min = 42.dp).testTag("edit_shelf"),
-            ) {
-                Text(stringResource(R.string.ft_listening_shelf_order))
-            }
+    val libraryEntries = buildList {
+        if (playlists.none { it.kind == "favorite" }) {
+            add(
+                LibraryRowModel(
+                    key = "favorite-entry",
+                    name = stringResource(R.string.ft_liked_songs),
+                    subtitle = pluralStringResourceText(state.favoriteSongs.size),
+                    customCoverUrl = state.latestFavoriteCoverUrl,
+                    previewCovers = state.favoriteSongs.mapNotNull { it.coverUrl }.distinct().take(4),
+                    isFavorite = true,
+                    cardTag = "library_tab_favorites",
+                    moreTag = null,
+                    onOpen = { actions.selectTab(LibraryTab.FAVORITES) },
+                    onMore = null,
+                ),
+            )
         }
-        if (state.playlistsLoading || state.libraryMutationBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
-        ListeningRetry(state.playlistsNotice, actions::refreshPlaylists)
-        state.libraryMutationNotice?.let { Notice(it, Modifier.padding(horizontal = 16.dp)) }
-
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(154.dp),
-            modifier = Modifier.weight(1f).fillMaxWidth().testTag("library_playlists"),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 10.dp, bottom = bottomInset),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
-        ) {
-            if (playlists.none { it.kind == "favorite" }) {
-                item(key = "favorite-entry") {
-                    PlaylistGridCard(
-                        name = stringResource(R.string.ft_liked_songs),
-                        subtitle = pluralStringResourceText(state.favoriteSongs.size),
-                        customCoverUrl = state.latestFavoriteCoverUrl,
-                        previewCovers = state.favoriteSongs.mapNotNull { it.coverUrl }.distinct().take(4),
-                        isFavorite = true,
-                        loader = loader,
-                        cardTag = "library_tab_favorites",
-                        moreTag = null,
-                        onOpen = { actions.selectTab(LibraryTab.FAVORITES) },
-                        onMore = null,
-                    )
-                }
-            }
-            items(playlists, key = { it.id }) { playlist ->
-                PlaylistGridCard(
+        playlists.forEach { playlist ->
+            add(
+                LibraryRowModel(
+                    key = playlist.id,
                     name = playlist.name,
                     subtitle = stringResource(R.string.ft_listening_tracks_count, playlist.songCount),
                     customCoverUrl = playlist.customCoverUrl,
                     previewCovers = playlist.previewCovers,
                     isFavorite = playlist.kind == "favorite",
-                    loader = loader,
                     cardTag = if (playlist.kind == "favorite") "library_tab_favorites" else "library_playlist_" + playlist.id,
                     moreTag = "playlist_more_" + playlist.id,
                     onOpen = { actions.openPlaylist(playlist) },
                     onMore = { interaction?.playlist?.invoke(playlist) },
-                )
-            }
-            if (!state.playlistsLoading && playlists.none { it.kind != "favorite" }) {
-                item(span = { GridItemSpan(maxLineSpan) }) {
-                    Text(
-                        stringResource(R.string.ft_empty_playlists),
-                        Modifier.padding(vertical = 12.dp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                ),
+            )
+        }
+    }
+
+    FrostedHeaderScaffold(
+        topInset = topInset,
+        modifier = Modifier.fillMaxSize().testTag("library_page"),
+        headerContent = {
+            AccountAvatar(state, actions)
+            LazyRow(
+                Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                item(key = "library_heading_pill") {
+                    Box(
+                        Modifier.heightIn(min = 48.dp)
+                            .semantics { heading() }
+                            .testTag("library_heading_pill"),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Box(
+                            Modifier.heightIn(min = 32.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary)
+                                .padding(horizontal = 14.dp, vertical = 6.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                stringResource(R.string.ft_personal_library),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                maxLines = 1,
+                            )
+                        }
+                    }
                 }
+                item(key = "library_create_pill") {
+                    Box(
+                        Modifier.heightIn(min = 48.dp)
+                            .clickable(role = Role.Button) { interaction?.createPlaylist?.invoke(emptyList()) }
+                            .testTag("create_playlist"),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Row(
+                            Modifier.heightIn(min = 32.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .padding(horizontal = 14.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Icon(ClientIcons.Plus, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSurface)
+                            Text(
+                                stringResource(R.string.ft_listening_create_playlist),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+                item(key = "library_order_pill") {
+                    val orderEnabled = state.playlistShelf != null && playlists.isNotEmpty() && !state.libraryMutationBusy
+                    Box(
+                        Modifier.heightIn(min = 48.dp)
+                            .clickable(enabled = orderEnabled, role = Role.Button) { editShelf = true }
+                            .testTag("edit_shelf"),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Box(
+                            Modifier.heightIn(min = 32.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (orderEnabled) 1f else 0.45f))
+                                .padding(horizontal = 14.dp, vertical = 6.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                stringResource(R.string.ft_listening_shelf_order),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (orderEnabled) 1f else 0.42f),
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+    ) { topClearance ->
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val useListLayout = maxWidth < 600.dp
+            val showEmptyHint = !state.playlistsLoading && playlists.none { it.kind != "favorite" }
+            val emptyHint = stringResource(R.string.ft_empty_playlists)
+
+            if (useListLayout) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize().testTag("library_playlists"),
+                    contentPadding = PaddingValues(top = topClearance + 2.dp, bottom = bottomInset),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    if (state.playlistsNotice != null) {
+                        item(key = "library-playlists-retry") {
+                            ListeningRetry(state.playlistsNotice, actions::refreshPlaylists)
+                        }
+                    }
+                    state.libraryMutationNotice?.let { notice ->
+                        item(key = "library-mutation-notice") {
+                            Notice(notice, Modifier.padding(horizontal = 16.dp))
+                        }
+                    }
+                    items(libraryEntries, key = { it.key }) { item ->
+                        PlaylistListRow(item = item, loader = loader)
+                    }
+                    if (showEmptyHint) {
+                        item(key = "library-empty-hint") {
+                            Text(
+                                emptyHint,
+                                Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(154.dp),
+                    modifier = Modifier.fillMaxSize().testTag("library_playlists"),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = topClearance + 6.dp, bottom = bottomInset),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(18.dp),
+                ) {
+                    if (state.playlistsNotice != null) {
+                        item(span = { GridItemSpan(maxLineSpan) }, key = "library-playlists-retry") {
+                            ListeningRetry(state.playlistsNotice, actions::refreshPlaylists)
+                        }
+                    }
+                    state.libraryMutationNotice?.let { notice ->
+                        item(span = { GridItemSpan(maxLineSpan) }, key = "library-mutation-notice") {
+                            Notice(notice)
+                        }
+                    }
+                    items(libraryEntries, key = { it.key }) { item ->
+                        PlaylistGridCard(item = item, loader = loader)
+                    }
+                    if (showEmptyHint) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Text(
+                                emptyHint,
+                                Modifier.padding(vertical = 12.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (state.playlistsLoading || state.libraryMutationBusy) {
+                LinearProgressIndicator(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(top = topClearance))
             }
         }
     }
     if (editShelf) ListeningShelfOrderSheet(state, actions, playlists) { editShelf = false }
+}
+
+@Composable
+private fun PlaylistListRow(
+    item: LibraryRowModel,
+    loader: ImageLoader?,
+) {
+    Row(
+        Modifier.fillMaxWidth()
+            .heightIn(min = 72.dp)
+            .clickable(onClick = item.onOpen)
+            .testTag(item.cardTag)
+            .padding(start = 16.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PlaylistCoverArt(
+            name = item.name,
+            customCoverUrl = item.customCoverUrl,
+            previewCovers = item.previewCovers,
+            isFavorite = item.isFavorite,
+            loader = loader,
+            modifier = Modifier.size(58.dp),
+            radius = 10.dp,
+        )
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                item.name,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                item.subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (item.onMore != null && item.moreTag != null) {
+            IconButton(
+                onClick = item.onMore,
+                modifier = Modifier.size(48.dp).testTag(item.moreTag),
+            ) {
+                Icon(
+                    ClientIcons.More,
+                    stringResource(R.string.ft_more_options),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -1241,44 +1481,37 @@ private fun pluralStringResourceText(count: Int): String =
 
 @Composable
 private fun PlaylistGridCard(
-    name: String,
-    subtitle: String,
-    customCoverUrl: String?,
-    previewCovers: List<String>,
-    isFavorite: Boolean,
+    item: LibraryRowModel,
     loader: ImageLoader?,
-    cardTag: String,
-    moreTag: String?,
-    onOpen: () -> Unit,
-    onMore: (() -> Unit)?,
 ) {
     Column(
         Modifier.fillMaxWidth().clickable(
             interactionSource = remember { MutableInteractionSource() },
             indication = null,
-            onClick = onOpen,
-        ).testTag(cardTag),
+            onClick = item.onOpen,
+        ).testTag(item.cardTag),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(Modifier.fillMaxWidth().aspectRatio(1f)) {
             PlaylistCoverArt(
-                name = name,
-                customCoverUrl = customCoverUrl,
-                previewCovers = previewCovers,
-                isFavorite = isFavorite,
+                name = item.name,
+                customCoverUrl = item.customCoverUrl,
+                previewCovers = item.previewCovers,
+                isFavorite = item.isFavorite,
                 loader = loader,
                 modifier = Modifier.fillMaxSize(),
                 radius = 14.dp,
             )
-            if (onMore != null && moreTag != null) {
-                Surface(
-                    shape = CircleShape,
-                    color = Color.Black.copy(alpha = 0.45f),
-                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+            if (item.onMore != null && item.moreTag != null) {
+                IconButton(
+                    onClick = item.onMore,
+                    modifier = Modifier.align(Alignment.TopEnd).size(48.dp).testTag(item.moreTag),
                 ) {
-                    IconButton(
-                        onClick = onMore,
-                        modifier = Modifier.size(34.dp).testTag(moreTag),
+                    Box(
+                        Modifier.size(32.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.45f)),
+                        contentAlignment = Alignment.Center,
                     ) {
                         Icon(
                             ClientIcons.More,
@@ -1292,7 +1525,7 @@ private fun PlaylistGridCard(
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            name,
+            item.name,
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
             maxLines = 2,
@@ -1301,7 +1534,7 @@ private fun PlaylistGridCard(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
         )
         Text(
-            subtitle,
+            item.subtitle,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
@@ -1413,9 +1646,6 @@ internal fun ListeningPlaylistDetailPage(state: ClientUiState, actions: ClientAc
         testTag = "library_page",
         backTag = "library_playlist_back",
         onBack = actions::closePlaylist,
-        refreshTag = "library_refresh",
-        refreshing = state.playlistLoading,
-        onRefresh = actions::refreshPlaylist,
         headerExtraActions = {
             ActionIcon(
                 ClientIcons.More,
@@ -1450,7 +1680,9 @@ internal fun ListeningPlaylistDetailPage(state: ClientUiState, actions: ClientAc
                     Text(stringResource(R.string.ft_listening_add_songs))
                 }
                 TextButton(
-                    onClick = { interaction?.playlist?.invoke(playlist) },
+                    onClick = { interaction?.orderPlaylist?.invoke(playlist) },
+                    enabled = !state.playlistLoading && !state.libraryMutationBusy,
+                    modifier = Modifier.testTag("playlist_edit_order"),
                 ) {
                     Text(stringResource(R.string.ft_listening_edit_order))
                 }
@@ -1486,15 +1718,22 @@ internal fun ListeningPlaylistDetailPage(state: ClientUiState, actions: ClientAc
 }
 
 @Composable
-internal fun ListeningDiscoverySection(state: ClientUiState, actions: ClientActions, loader: ImageLoader?) {
-    val spotlight = state.spotlightArtist
-    if (state.discoverySongs.isEmpty() && spotlight == null && !state.discoveryLoading && state.discoveryNotice == null) return
+internal fun ListeningDiscoverySection(
+    state: ClientUiState,
+    actions: ClientActions,
+    loader: ImageLoader?,
+) {
+    if (state.discoverySongs.isEmpty() && !state.discoveryLoading && state.discoveryNotice == null) return
     Column(Modifier.fillMaxWidth().testTag("home_discovery")) {
         Row(
-            Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 6.dp),
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 16.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(stringResource(R.string.ft_listening_daily), Modifier.weight(1f), style = MaterialTheme.typography.headlineMedium)
+            Text(
+                stringResource(R.string.ft_listening_random),
+                Modifier.weight(1f),
+                style = MaterialTheme.typography.headlineMedium.copy(fontSize = 21.sp, fontWeight = FontWeight.Bold),
+            )
             ActionIcon(
                 ClientIcons.Refresh,
                 stringResource(R.string.ft_refresh),
@@ -1506,60 +1745,15 @@ internal fun ListeningDiscoverySection(state: ClientUiState, actions: ClientActi
         if (state.discoveryLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
         ListeningRetry(state.discoveryNotice, actions::refreshDiscovery)
         if (state.discoverySongs.isNotEmpty()) {
-            SongColumnShelf(
+            UnifiedSongSectionList(
                 songs = state.discoverySongs,
                 currentSongId = state.playback.current?.id,
                 playing = state.playback.playing,
                 buffering = state.playback.buffering,
                 loader = loader,
-                rowsPerColumn = if (state.discoverySongs.size >= 8) 4 else 3,
+                limit = 16,
                 tagPrefix = "discovery_song_",
             ) { _, index -> actions.playSongs(state.discoverySongs, index) }
-        }
-        if (spotlight != null) {
-            Spacer(Modifier.height(14.dp))
-            Text(
-                stringResource(R.string.ft_listening_spotlight),
-                Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-            )
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerLow,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .clickable {
-                        actions.openArtist(Artist(spotlight.artist, spotlight.songCount, photoUrl = spotlight.photoUrl, coverUrl = spotlight.coverUrl))
-                    }
-                    .testTag("browse_artist_" + spotlight.artist),
-            ) {
-                Row(
-                    Modifier.padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                ) {
-                    val photo = spotlight.photoUrl ?: spotlight.coverUrl
-                    Box(
-                        Modifier.size(64.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(ClientIcons.Artist, null, Modifier.size(32.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        if (loader != null && !photo.isNullOrBlank()) {
-                            AsyncImage(model = photo, imageLoader = loader, contentDescription = spotlight.artist, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                        }
-                    }
-                    Column(Modifier.weight(1f)) {
-                        Text(spotlight.artist, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(
-                            stringResource(R.string.ft_listening_tracks_count, spotlight.songCount),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Icon(ClientIcons.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
         }
     }
 }

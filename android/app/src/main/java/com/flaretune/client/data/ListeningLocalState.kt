@@ -71,9 +71,7 @@ class SearchHistoryStore(private val storage: HistoryStorage) {
         writeLocalJson(storage, listeningStorageKey("search_v1", identity), data)
         snapshot
     }
-    private fun sameEntity(left: SearchEntity, right: SearchEntity): Boolean = left.type == right.type &&
-        if (left.type == "artist" && !left.id.startsWith("yt:artist:") && !right.id.startsWith("yt:artist:"))
-            left.id.trim().lowercase(Locale.ROOT) == right.id.trim().lowercase(Locale.ROOT) else left.id == right.id
+    private fun sameEntity(left: SearchEntity, right: SearchEntity): Boolean = sameSearchEntity(left, right)
     private fun searchTerm(value: String): String = value.trim().also { if (it.isEmpty() || it.length > 200 || it.any { c -> c.code < 32 || c.code == 127 }) localStateFailure() }
     private fun validateEntity(entity: SearchEntity): SearchEntity = entity.also {
         if (it.type !in setOf("song", "artist") || it.id.isBlank() || it.id.length > (if (it.type == "artist") 300 else 256) ||
@@ -81,6 +79,10 @@ class SearchHistoryStore(private val storage: HistoryStorage) {
             it.name.isBlank() || !it.durationSeconds.isFinite() || it.durationSeconds < 0 || !validSongRelations(it.id, it.relations)) localStateFailure()
     }
 }
+
+internal fun sameSearchEntity(left: SearchEntity, right: SearchEntity): Boolean = left.type == right.type &&
+    if (left.type == "artist" && !left.id.startsWith("yt:artist:") && !right.id.startsWith("yt:artist:"))
+        left.id.trim().lowercase(Locale.ROOT) == right.id.trim().lowercase(Locale.ROOT) else left.id == right.id
 
 data class CachedSpotlight(val artist: String, val songCount: Int, val songs: List<QueueEntry>)
 data class DiscoveryCacheSnapshot(val date: String, val songs: List<QueueEntry> = emptyList(), val spotlight: CachedSpotlight? = null, val dailyLoaded: Boolean = false, val spotlightLoaded: Boolean = false)

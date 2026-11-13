@@ -410,6 +410,20 @@ class LyricsCoordinatorTest {
         }
     }
 
+    @Test fun unavailableCannotGenerateEvenWhenCapabilityAndOldTranslationsRemain() = runTest {
+        val original = listOf(LyricLine("original", "returned translation", 1.0))
+        val api = LyricsFakeApi().apply { read = { _, _ -> lyricDoc(
+            lines=original, supported=true, translationState=LyricTranslationStatus.UNAVAILABLE) } }
+        val coordinator = LyricsCoordinator(this, StandardTestDispatcher(testScheduler))
+        coordinator.activate(LyricsFakeConnections(api).current, song)
+        advanceUntilIdle()
+        coordinator.requestTranslation()
+        advanceUntilIdle()
+        assertTrue("Unavailable generation must not POST", api.translations.isEmpty())
+        assertEquals(original, coordinator.state.value.lines)
+        coordinator.clear()
+    }
+
     @Test fun notNeededNeverPostsEvenWhenCapabilityIsTrueAndLanguagesDiffer() = runTest {
         val api = LyricsFakeApi().apply { read = { _, _ -> lyricDoc(supported = true,
             translationState = LyricTranslationStatus.NOT_NEEDED, translationTargetLanguage = "en") } }

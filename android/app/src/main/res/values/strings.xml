@@ -73,9 +73,18 @@
         <item quantity="other">%1$d tracks</item>
     </plurals>
     <string name="ft_home">Home</string>
+    <string name="ft_discover_page">Discover</string>
     <string name="ft_search_page">Search</string>
-    <string name="ft_library_page">Your library</string>
+    <string name="ft_library_page">Playlists</string>
+    <string name="ft_personal_library">Personal playlists</string>
     <string name="ft_all">All</string>
+    <string name="ft_lang_zh">Chinese</string>
+    <string name="ft_lang_en">English &amp; Intl</string>
+    <string name="ft_lang_ja">Japanese</string>
+    <string name="ft_lang_ko">Korean</string>
+    <string name="ft_lang_instrumental">Instrumental</string>
+    <string name="ft_lang_other">Other</string>
+    <string name="ft_lang_count_label">%1$s (%2$d)</string>
     <string name="ft_music">Music</string>
     <string name="ft_albums">Albums</string>
     <string name="ft_songs">Songs</string>
@@ -127,4 +136,9 @@
     <string name="ft_interlude_dot_stage_1">Jump to interlude stage 1</string>
     <string name="ft_interlude_dot_stage_2">Jump to interlude stage 2</string>
     <string name="ft_interlude_dot_stage_3">Jump to final interlude stage</string>
+    <string name="ft_feedback_favorited">Added to liked songs</string>
+    <string name="ft_feedback_unfavorited">Removed from liked songs</string>
+    <string name="ft_feedback_play_next">Playing next</string>
+    <string name="ft_feedback_enqueued">Added to play queue</string>
+    <string name="ft_feedback_history_removed">Removed from play history</string>
 </resources>

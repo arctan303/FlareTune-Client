@@ -207,6 +207,9 @@ class LibraryMutationStateTest {
             f.model.navigate(MainDestination.SEARCH)
             f.model.search("private query"); advanceUntilIdle()
             f.model.playSongs(listOf(librarySong("searched"))); advanceUntilIdle()
+            assertTrue(f.model.state.value.recentSearchTerms.isEmpty())
+            assertTrue(f.model.state.value.recentSearches.isEmpty())
+            f.model.refresh(); advanceUntilIdle()
             assertEquals(listOf("private query"), f.model.state.value.recentSearchTerms)
             assertEquals("searched", f.model.state.value.recentSearches.first().id)
             f.model.removeRecentSearchTerm("private query"); advanceUntilIdle()
@@ -225,6 +228,44 @@ class LibraryMutationStateTest {
                 assertFalse(raw.contains("audioUrl"))
                 assertFalse(raw.contains("coverUrl"))
             }
+        } finally { f.close() }
+    }
+
+    @Test fun searchRecentSnapshotStaysLockedAcrossQuickPlaybackAndNewSearchesUntilRefresh() = runTest {
+        val storage = LibraryMemoryStorage()
+        val seedStore = SearchHistoryStore(storage)
+        val key = HistoryIdentity("https://music.example", "library-account")
+        seedStore.addTerm(key, "second term")
+        seedStore.addTerm(key, "first term")
+        seedStore.addEntity(key, SearchEntity.fromSong(librarySong("song-two")))
+        seedStore.addEntity(key, SearchEntity.fromSong(librarySong("song-one")))
+        val f = LibraryFixture(this, storage)
+        try {
+            advanceUntilIdle()
+            f.model.navigate(MainDestination.SEARCH)
+            assertEquals(listOf("first term", "second term"), f.model.state.value.recentSearchTerms)
+            assertEquals(listOf("song-one", "song-two"), f.model.state.value.recentSearches.map { it.id })
+
+            // Quick-playing a song from recent searches never reorders the visible or persisted list.
+            val secondEntity = f.model.state.value.recentSearches[1]
+            f.model.openRecentSearch(secondEntity); advanceUntilIdle()
+            assertEquals("song-two", f.player.state.value.current?.id)
+            assertEquals(listOf("song-one", "song-two"), f.model.state.value.recentSearches.map { it.id })
+
+            // New searches and search-result plays record on disk without mutating the locked UI snapshot.
+            f.model.search("third term"); advanceUntilIdle()
+            f.model.playSongs(listOf(librarySong("song-three"))); advanceUntilIdle()
+            assertEquals(listOf("first term", "second term"), f.model.state.value.recentSearchTerms)
+            assertEquals(listOf("song-one", "song-two"), f.model.state.value.recentSearches.map { it.id })
+
+            // Explicit removal updates the visible snapshot immediately without surfacing unrefreshed writes.
+            f.model.removeRecentSearchTerm("first term"); advanceUntilIdle()
+            assertEquals(listOf("second term"), f.model.state.value.recentSearchTerms)
+
+            // Manual refresh unlocks and syncs the latest recorded snapshot (and quick-play did not reorder song-two ahead of song-one).
+            f.model.refresh(); advanceUntilIdle()
+            assertEquals(listOf("third term", "second term"), f.model.state.value.recentSearchTerms)
+            assertEquals(listOf("song-three", "song-one", "song-two"), f.model.state.value.recentSearches.map { it.id })
         } finally { f.close() }
     }
 

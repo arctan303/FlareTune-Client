@@ -3,12 +3,16 @@ package com.flaretune.client
 import android.app.Application
 import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import com.flaretune.client.model.*
 import com.flaretune.client.ui.*
 import com.flaretune.client.ui.theme.FlareTuneTheme
@@ -78,7 +82,8 @@ class ClientUiTest {
         rule.onNodeWithTag("song_track-0").performClick()
         rule.runOnIdle { assertEquals("track-0", actions.song?.id) }
         rule.onNodeWithTag("nav_search").performClick()
-        rule.onNodeWithTag("library_refresh").performClick()
+        rule.onNodeWithTag("account_menu").performClick()
+        rule.onNodeWithTag("account_refresh").performClick()
         rule.onNodeWithTag("search_field").performTextInput("rain")
         rule.onNodeWithTag("search_submit").performClick()
         rule.runOnIdle {
@@ -92,6 +97,8 @@ class ClientUiTest {
     @Test fun homeAlbumCardsOpenARealDetailAndPlayItsFirstTrack() {
         render(fixture())
         rule.onNodeWithTag("home_page").assertExists()
+        rule.onNodeWithTag("nav_discover").performClick()
+        rule.onNodeWithTag("discover_page").assertExists()
         rule.onNodeWithTag("album_album0").performScrollTo().performClick()
         rule.onNodeWithTag("album_detail").assertExists()
         rule.onNodeWithTag("album_play").performScrollTo().performClick()
@@ -101,7 +108,7 @@ class ClientUiTest {
         }
         screenshot("v2-album")
         rule.onNodeWithTag("album_back").assertIsDisplayed().performClick()
-        rule.onNodeWithTag("home_page").assertExists()
+        rule.onNodeWithTag("discover_page").assertExists()
     }
 
     @Test fun playbackQueueSeekVolumeAndBackgroundRemainFunctional() {
@@ -150,11 +157,27 @@ class ClientUiTest {
     @Test
     @Config(qualifiers = "zh-rCN-w390dp-h844dp-night-mdpi")
     fun compactHomeShowsRichContentAboveSeparateNavigationAndPlayer() {
-        render(fixture())
+        render(fixture().copy(
+            artists = listOf(Artist("FlareTune", 4, 2)),
+            languageCounts = mapOf("all" to 12, "zh" to 3, "en" to 5),
+        ))
         rule.onNodeWithTag("dock_compact").assertExists()
-        rule.onNodeWithTag("album_album0").assertExists()
+        val dockBounds = rule.onNodeWithTag("dock_compact").fetchSemanticsNode().boundsInRoot
+        val rootBounds = rule.onNodeWithTag("home_page").fetchSemanticsNode().boundsInRoot
+        val density = rule.density.density
+        assertTrue("Compact dock should flush to left/right/bottom edges", dockBounds.left <= 1f && kotlin.math.abs(dockBounds.right - rootBounds.right) <= 1f && kotlin.math.abs(dockBounds.bottom - rootBounds.bottom) <= 1f)
+        assertTrue("Compact dock should keep enlarged balanced height (134..146dp), was ${dockBounds.height / density}dp", dockBounds.height / density in 134f..146f)
+        rule.onNodeWithTag("home_featured_cards").assertExists()
+        rule.onNodeWithTag("home_favorites").assertExists()
+        rule.onNodeWithTag("home_history").assertExists()
+        rule.onNodeWithTag("nav_discover").assertExists()
         rule.onNodeWithTag("nav_home").assertIsSelected()
         screenshot("v2-home-compact")
+        rule.onNodeWithTag("nav_discover").performClick()
+        rule.onNodeWithTag("discover_page").assertExists()
+        rule.onNodeWithTag("discover_lang_zh").assertExists()
+        rule.onNodeWithTag("discover_artist_shelf").assertExists()
+        rule.onNodeWithTag("album_album0").assertExists()
     }
 
     @Test
@@ -162,6 +185,7 @@ class ClientUiTest {
     fun wideHomePlacesNavigationAndMiniPlayerSideBySide() {
         render(fixture())
         rule.onNodeWithTag("dock_wide").assertExists()
+        rule.onNodeWithTag("nav_discover").assertExists()
         val nav = rule.onNodeWithTag("nav_library").fetchSemanticsNode().boundsInRoot
         val mini = rule.onNodeWithTag("mini_player").fetchSemanticsNode().boundsInRoot
         assertTrue("Wide dock overlaps", nav.right <= mini.left)
@@ -175,6 +199,9 @@ class ClientUiTest {
     @Config(qualifiers = "zh-rCN-w360dp-h640dp-night-mdpi")
     fun chineseDarkLibrarySupportsLargeTextAndVisibleControls() {
         render(fixture(MainDestination.LIBRARY), largeText = true)
+        val density = rule.density.density
+        val miniPlayerBounds = rule.onNodeWithTag("mini_player").fetchSemanticsNode().boundsInRoot
+        assertTrue("Compact mini player should expand for 200% fontScale (>=74dp), was ${miniPlayerBounds.height / density}dp", miniPlayerBounds.height / density >= 74f)
         rule.onNodeWithTag("library_tab_favorites").performClick()
         rule.runOnIdle { assertEquals(LibraryTab.FAVORITES, actions.tab) }
         screenshot("v2-library-large-zh")
@@ -185,29 +212,85 @@ class ClientUiTest {
 
     @Test
     @Config(qualifiers = "zh-rCN-w320dp-h760dp-night-mdpi")
-    fun narrowFloatingWindowKeepsAllThreeNavigationDestinationsReachable() {
+    fun narrowFloatingWindowKeepsAllFourNavigationDestinationsReachable() {
         render(fixture())
         rule.onNodeWithTag("dock_compact").assertExists()
+        val dockBounds = rule.onNodeWithTag("dock_compact").fetchSemanticsNode().boundsInRoot
+        val rootBounds = rule.onNodeWithTag("home_page").fetchSemanticsNode().boundsInRoot
+        val density = rule.density.density
+        assertTrue("Compact dock should flush to left/right/bottom edges", dockBounds.left <= 1f && kotlin.math.abs(dockBounds.right - rootBounds.right) <= 1f && kotlin.math.abs(dockBounds.bottom - rootBounds.bottom) <= 1f)
+        assertTrue("Compact dock should keep enlarged balanced height (134..146dp), was ${dockBounds.height / density}dp", dockBounds.height / density in 134f..146f)
+        rule.onNodeWithTag("nav_discover").performClick()
+        rule.onNodeWithTag("discover_page").assertExists()
         rule.onNodeWithTag("nav_search").performClick()
         rule.onNodeWithTag("search_field").assertIsDisplayed()
         rule.onNodeWithTag("nav_library").performClick()
+        rule.onNodeWithTag("account_menu").assertIsEnabled()
         rule.onNodeWithTag("library_tab_favorites").performClick()
         rule.runOnIdle { assertEquals(LibraryTab.FAVORITES, actions.tab) }
-        rule.onNodeWithTag("library_refresh").assertIsEnabled()
+        rule.onNodeWithTag("library_tab_catalog").assertIsEnabled()
         screenshot("v2-floating-library")
     }
 
 
     @Test fun androidBackClosesThePlayerBeforeTheUnderlyingAlbum() {
         render(fixture())
-        rule.onNodeWithTag("album_album0").performClick()
+        rule.onNodeWithTag("nav_discover").performClick()
+        rule.onNodeWithTag("album_album0").performScrollTo().performClick()
         rule.onNodeWithTag("mini_player").performClick()
         rule.onNodeWithTag("full_player").assertExists()
         rule.runOnIdle { rule.activity.onBackPressedDispatcher.onBackPressed() }
         rule.onNodeWithTag("full_player").assertDoesNotExist()
         rule.onNodeWithTag("album_detail").assertExists()
         rule.runOnIdle { rule.activity.onBackPressedDispatcher.onBackPressed() }
+        rule.onNodeWithTag("discover_page").assertExists()
+        rule.runOnIdle { rule.activity.onBackPressedDispatcher.onBackPressed() }
         rule.onNodeWithTag("home_page").assertExists()
+    }
+
+    @Test fun discoverShowsLanguageCountsWithoutHomeAlbumsAndDispatchesFilter() {
+        render(
+            fixture().copy(
+                discoverySongs = listOf(songs[2], songs[3]),
+                artists = listOf(Artist("FlareTune", 4, 2)),
+                languageCounts = mapOf("all" to 12, "zh" to 3, "en" to 5),
+            ),
+        )
+        rule.onNodeWithTag("home_page").assertExists()
+        rule.onNodeWithTag("home_discovery").assertExists()
+        rule.onNodeWithTag("home_album_shelf").assertDoesNotExist()
+        rule.onNodeWithTag("nav_discover").performClick()
+        rule.onNodeWithTag("discover_page").assertExists()
+        rule.onNodeWithText("Chinese").assertExists()
+        rule.onNodeWithText("Chinese (3)").assertDoesNotExist()
+        rule.onNodeWithTag("discover_lang_zh").performClick()
+        rule.runOnIdle { assertEquals("zh", actions.discoverLanguageSelected) }
+    }
+
+    @Test fun mobileLyricsBackReturnsToArtworkAndTrackSkipPreservesLyricsPane() {
+        val lyrics = LyricState(
+            songId = songs[0].id,
+            status = LyricStatus.READY,
+            lines = listOf(LyricLine("Line 1", timeSeconds = 0.0)),
+            activeLyricIndex = 0,
+        )
+        val state = mutableStateOf(fixture().copy(lyricState = lyrics))
+        actions.onNavigate = { state.value = state.value.copy(destination = it) }
+        rule.setContent { FlareTuneTheme { ClientApp(state.value, actions, null) } }
+        rule.onNodeWithTag("mini_player").performClick()
+        rule.onNodeWithTag("player_lyrics_toggle").assertDoesNotExist()
+        rule.onNodeWithTag("player_artwork").performClick()
+        rule.onNodeWithTag("player_lyrics_list").assertExists()
+        rule.runOnIdle {
+            state.value = state.value.copy(
+                playback = state.value.playback.copy(current = songs[1], currentIndex = 1),
+                lyricState = lyrics.copy(songId = songs[1].id),
+            )
+        }
+        rule.onNodeWithTag("player_lyrics_list").assertExists()
+        rule.runOnIdle { rule.activity.onBackPressedDispatcher.onBackPressed() }
+        rule.onNodeWithTag("full_player").assertExists()
+        rule.onNodeWithTag("player_lyrics_list").assertDoesNotExist()
     }
 
     @Test fun translationSwitchAndGenerationRemainSeparateAndMiniPlayerObeysSwitch() {
@@ -232,9 +315,10 @@ class ClientUiTest {
         rule.onNodeWithTag("mini_player").assertIsDisplayed()
         rule.onAllNodesWithText("你好世界").assertCountEquals(0)
 
-        // Open full player, toggle display via shared action without triggering generation.
+        // Open full player, tap artwork/preview to open lyrics, toggle display without triggering generation.
         rule.onNodeWithTag("mini_player").performClick()
-        rule.onNodeWithTag("player_lyrics_toggle").performScrollTo().performClick()
+        rule.onNodeWithTag("player_lyrics_toggle").assertDoesNotExist()
+        rule.onNodeWithTag("player_artwork").performClick()
         rule.onAllNodesWithText("你好世界").assertCountEquals(0)
         rule.onNodeWithTag("player_translate_button").performClick()
         rule.runOnIdle {
@@ -289,6 +373,64 @@ class ClientUiTest {
         rule.runOnIdle { assertTrue(actions.movedQueuePairs.contains(0 to 1)) }
     }
 
+    @Test fun subpageBackButtonReturnsToDiscoverWithoutClosingApp() {
+        render(fixture(MainDestination.DISCOVER))
+        rule.onNodeWithTag("discover_page").assertExists()
+        rule.onNodeWithTag("discover_all_songs").performScrollTo().performClick()
+        rule.onNodeWithTag("home_all_songs_page").assertExists()
+        rule.runOnUiThread { rule.activity.onBackPressedDispatcher.onBackPressed() }
+        rule.onNodeWithTag("discover_page").assertExists()
+        rule.onNodeWithTag("home_all_songs_page").assertDoesNotExist()
+    }
+
+    @Test fun discoverDoesNotRenderSpotlightArtistCard() {
+        render(fixture(MainDestination.DISCOVER).copy(
+            artists = listOf(Artist("FlareTune", 4, 2)),
+            spotlightArtist = SpotlightArtist("Hidden Spotlight", 5, songs.take(3)),
+        ))
+        rule.onNodeWithTag("discover_page").assertExists()
+        rule.onNodeWithTag("discover_artist_shelf").assertExists()
+        rule.onNodeWithText("Hidden Spotlight").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "zh-rCN-w390dp-h844dp-night-mdpi")
+    fun narrowLibraryUsesVerticalListRowsAndClearsTopSafeInset() {
+        val playlists = listOf(
+            PlaylistSummary("fav", "我的收藏", "favorite", songCount = 13),
+            PlaylistSummary("p1", "夜间流行", "regular", songCount = 8),
+        )
+        render(fixture(MainDestination.LIBRARY).copy(
+            playlists = playlists,
+            playlistShelf = PlaylistShelf(2, items = playlists.map { ShelfItem(it.id) }),
+        ))
+        val density = rule.density.density
+        val accountBounds = rule.onNodeWithTag("account_menu").fetchSemanticsNode().boundsInRoot
+        assertTrue("Top header must clear >=24dp safe inset, was ${accountBounds.top / density}dp", accountBounds.top / density >= 23.9f)
+        val rootBounds = rule.onNodeWithTag("library_page").fetchSemanticsNode().boundsInRoot
+        val favBounds = rule.onNodeWithTag("library_tab_favorites").fetchSemanticsNode().boundsInRoot
+        val secondBounds = rule.onNodeWithTag("library_playlist_p1").fetchSemanticsNode().boundsInRoot
+        assertTrue("Narrow library rows should fill list width, was ${favBounds.width / rootBounds.width}", favBounds.width >= rootBounds.width * 0.85f)
+        assertTrue("Narrow library rows should stack vertically", secondBounds.top >= favBounds.bottom - 1f && kotlin.math.abs(secondBounds.left - favBounds.left) <= 2f)
+        screenshot("v2-library-narrow-list")
+    }
+
+    @Test
+    @Config(qualifiers = "zh-rCN-w1280dp-h800dp-night-mdpi")
+    fun wideLibraryPreservesMultiColumnGridCards() {
+        val playlists = listOf(
+            PlaylistSummary("fav", "我的收藏", "favorite", songCount = 13),
+            PlaylistSummary("p1", "夜间流行", "regular", songCount = 8),
+        )
+        render(fixture(MainDestination.LIBRARY).copy(
+            playlists = playlists,
+            playlistShelf = PlaylistShelf(2, items = playlists.map { ShelfItem(it.id) }),
+        ))
+        val favBounds = rule.onNodeWithTag("library_tab_favorites").fetchSemanticsNode().boundsInRoot
+        val secondBounds = rule.onNodeWithTag("library_playlist_p1").fetchSemanticsNode().boundsInRoot
+        assertTrue("Wide library should keep multi-column grid row", kotlin.math.abs(secondBounds.top - favBounds.top) <= 2f && secondBounds.left >= favBounds.right - 1f)
+    }
+
     private fun fixtureLoader(): coil.ImageLoader {
         val palettes = listOf(0xFF174C59.toInt(), 0xFF614676.toInt(), 0xFFAF7047.toInt(),
             0xFF335B72.toInt(), 0xFF9D3F54.toInt(), 0xFF8D7D48.toInt())
@@ -330,6 +472,144 @@ class ClientUiTest {
             assertTrue(bitmap.width > 100 && bitmap.height > 100)
         }
     }
+
+    @Test fun mobileLyricsTopRowReturnsToArtworkAndTranslationSharesTopRow() {
+        val lyrics = LyricState(
+            songId = songs[0].id,
+            status = LyricStatus.READY,
+            lines = listOf(LyricLine("Line 1", translation = "第一行", timeSeconds = 0.0)),
+            activeLyricIndex = 0,
+            translationState = LyricTranslationStatus.READY,
+        )
+        val state = mutableStateOf(fixture().copy(lyricState = lyrics, translationEnabled = true))
+        actions.onNavigate = { state.value = state.value.copy(destination = it) }
+        rule.setContent { FlareTuneTheme { ClientApp(state.value, actions, fixtureLoader()) } }
+        rule.onNodeWithTag("mini_player").performClick()
+        val artBounds = rule.onNodeWithTag("player_artwork").fetchSemanticsNode().boundsInRoot
+        val seekBounds = rule.onNodeWithTag("player_seek").fetchSemanticsNode().boundsInRoot
+        val moreSongBounds = rule.onNodeWithTag("player_more").fetchSemanticsNode().boundsInRoot
+        val rootWidth = rule.onNodeWithTag("full_player").fetchSemanticsNode().boundsInRoot.width
+        assertEquals(rootWidth / 2f, artBounds.center.x, 3f)
+        assertTrue(seekBounds.left >= 18f)
+        assertTrue(moreSongBounds.right <= rootWidth - 8f)
+        val seekBefore = rule.onNodeWithTag("player_seek").fetchSemanticsNode().boundsInRoot
+        val modeBefore = rule.onNodeWithTag("player_mode").fetchSemanticsNode().boundsInRoot
+        val playBefore = rule.onNodeWithTag("player_play").fetchSemanticsNode().boundsInRoot
+        screenshot("v2-player-mobile-song")
+        rule.onNodeWithTag("player_lyric_preview").performClick()
+        rule.onNodeWithTag("player_lyrics_list").assertExists()
+        screenshot("v2-player-mobile-lyrics")
+        val seekLyrics = rule.onNodeWithTag("player_seek").fetchSemanticsNode().boundsInRoot
+        val modeLyrics = rule.onNodeWithTag("player_mode").fetchSemanticsNode().boundsInRoot
+        val playLyrics = rule.onNodeWithTag("player_play").fetchSemanticsNode().boundsInRoot
+        assertEquals(seekBefore.top, seekLyrics.top, 0.5f)
+        assertEquals(seekBefore.bottom, seekLyrics.bottom, 0.5f)
+        assertEquals(modeBefore.top, modeLyrics.top, 0.5f)
+        assertEquals(playBefore.top, playLyrics.top, 0.5f)
+        assertEquals(playBefore.height, playLyrics.height, 0.5f)
+        val topRowBounds = rule.onNodeWithTag("player_lyrics_top_row").fetchSemanticsNode().boundsInRoot
+        val translateBounds = rule.onNodeWithTag("player_translate_button").fetchSemanticsNode().boundsInRoot
+        val moreBounds = rule.onNodeWithTag("player_more").fetchSemanticsNode().boundsInRoot
+        assertEquals(moreBounds.center.y, translateBounds.center.y, 2f)
+        assertTrue(translateBounds.top >= topRowBounds.top - 4f && translateBounds.bottom <= topRowBounds.bottom + 4f)
+        rule.onNodeWithTag("player_lyrics_top_row").performClick()
+        rule.onNodeWithTag("player_lyrics_list").assertDoesNotExist()
+        rule.onNodeWithTag("player_artwork").assertExists()
+        val seekAfter = rule.onNodeWithTag("player_seek").fetchSemanticsNode().boundsInRoot
+        val playAfter = rule.onNodeWithTag("player_play").fetchSemanticsNode().boundsInRoot
+        assertEquals(seekBefore.top, seekAfter.top, 0.5f)
+        assertEquals(playBefore.top, playAfter.top, 0.5f)
+    }
+
+    @Test fun compactFloatingPlayerHidesClippedPreviewAndExpandsLyricsViewport() {
+        val lyrics = LyricState(
+            songId = songs[0].id,
+            status = LyricStatus.READY,
+            lines = listOf(
+                LyricLine("Short line", translation = "短句", timeSeconds = 0.0),
+                LyricLine("Second line", translation = "第二句", timeSeconds = 3.0),
+            ),
+            activeLyricIndex = 0,
+            translationState = LyricTranslationStatus.READY,
+        )
+        rule.setContent {
+            FlareTuneTheme {
+                Box(Modifier.size(320.dp, 470.dp)) {
+                    NowPlayingScreen(
+                        state = PlaybackSnapshot(songs[0], songs, 0, true, positionMs = 30_000, durationMs = 180_000),
+                        lyricState = lyrics,
+                        translationEnabled = true,
+                        actions = actions,
+                        imageLoader = null,
+                        onClose = {},
+                        onQueue = {},
+                    )
+                }
+            }
+        }
+        rule.onNodeWithTag("player_artwork").assertIsDisplayed()
+        rule.onNodeWithTag("player_play").assertIsDisplayed()
+        rule.onNodeWithTag("player_lyric_preview").assertDoesNotExist()
+        val seekSong = rule.onNodeWithTag("player_seek").fetchSemanticsNode().boundsInRoot
+        val playSong = rule.onNodeWithTag("player_play").fetchSemanticsNode().boundsInRoot
+        screenshot("v2-player-floating-song")
+        rule.onNodeWithTag("player_artwork").performClick()
+        rule.onNodeWithTag("player_lyrics_list").assertExists()
+        screenshot("v2-player-floating-lyrics")
+        val lyricsBounds = rule.onNodeWithTag("player_lyrics_list").fetchSemanticsNode().boundsInRoot
+        val topRowBounds = rule.onNodeWithTag("player_lyrics_top_row").fetchSemanticsNode().boundsInRoot
+        val seekBounds = rule.onNodeWithTag("player_seek").fetchSemanticsNode().boundsInRoot
+        val playLyrics = rule.onNodeWithTag("player_play").fetchSemanticsNode().boundsInRoot
+        assertEquals(seekSong.top, seekBounds.top, 0.5f)
+        assertEquals(playSong.top, playLyrics.top, 0.5f)
+        assertEquals(playSong.height, playLyrics.height, 0.5f)
+        assertTrue(lyricsBounds.height >= 240f)
+        assertTrue(lyricsBounds.top >= topRowBounds.bottom - 2f)
+        assertTrue(lyricsBounds.bottom <= seekBounds.top + 2f)
+    }
+
+    @Test fun karaokeFocusCharOffsetTracksWordProgressAccurately() {
+        val words = listOf(
+            LyricWord("One ", 1.0, 2.0),
+            LyricWord("Two", 2.0, 4.0),
+        )
+        assertEquals(0f, computeKaraokeFocusCharOffset(words, 0.5), 0.01f)
+        assertEquals(2f, computeKaraokeFocusCharOffset(words, 1.5), 0.01f)
+        assertEquals(5.5f, computeKaraokeFocusCharOffset(words, 3.0), 0.01f)
+        assertEquals(7f, computeKaraokeFocusCharOffset(words, 5.0), 0.01f)
+    }
+
+    @Test fun wordSyncedMiniPlayerAndPreviewStripRenderWordLyricsWithoutBreakingLayout() {
+        val longLineText = "This is a very long karaoke lyric line tracking smoothly across the viewport"
+        val words = listOf(
+            LyricWord("This is a very ", 1.0, 2.0),
+            LyricWord("long karaoke lyric ", 2.0, 3.0),
+            LyricWord("line tracking smoothly across the viewport", 3.0, 6.0),
+        )
+        val wordLyrics = LyricState(
+            songId = songs[0].id,
+            status = LyricStatus.READY,
+            lines = listOf(
+                LyricLine(longLineText, translation = "这是一句超长卡拉OK歌词", timeSeconds = 1.0, endTimeSeconds = 6.0, words = words),
+            ),
+            activeLyricIndex = 0,
+            syncMode = "word",
+            translationState = LyricTranslationStatus.READY,
+        )
+        render(fixture(MainDestination.HOME).copy(
+            playback = PlaybackSnapshot(songs[0], songs, 0, playing = false, positionMs = 3_500, durationMs = 180_000),
+            lyricState = wordLyrics,
+        ))
+        rule.onNodeWithTag("mini_player").assertIsDisplayed()
+        rule.onNodeWithText(longLineText).assertExists()
+
+        rule.onNodeWithTag("mini_player").performClick()
+        rule.onNodeWithTag("player_lyric_preview").assertIsDisplayed()
+        val previewBounds = rule.onNodeWithTag("player_lyric_preview").fetchSemanticsNode().boundsInRoot
+        val density = rule.density.density
+        assertTrue("Word preview strip should stay compact (<=90dp), was ${previewBounds.height / density}dp", previewBounds.height / density <= 90f)
+        rule.onNodeWithText(longLineText).assertExists()
+    }
 }
 
 private class RecordingActions : ClientActions {
@@ -356,7 +636,9 @@ private class RecordingActions : ClientActions {
     var onCloseAlbum: () -> Unit = {}
     var onVolume: (Float) -> Unit = {}
     var onSetTranslationEnabled: (Boolean) -> Unit = {}
+    var discoverLanguageSelected: String? = null
     override fun navigate(destination: MainDestination) { this.destination = destination; onNavigate(destination) }
+    override fun selectDiscoverLanguage(language: String) { discoverLanguageSelected = language }
     override fun loadMoreAlbums() {}
     override fun openAlbum(album: Album) { this.album = album; onAlbum(album) }
     override fun closeAlbum() { onCloseAlbum() }

@@ -3,7 +3,11 @@ package com.flaretune.client.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -15,14 +19,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -39,6 +44,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import com.flaretune.client.R
 import com.flaretune.client.model.ClientNotice
 import com.flaretune.client.model.PlaylistSong
@@ -383,9 +390,9 @@ private class PlaylistOrderController(
     val stale: Boolean,
     val valid: Boolean,
     val canEdit: Boolean,
+    val modified: Boolean,
     val draggedIdState: MutableState<String?>,
     val dragCenterYState: MutableFloatState,
-    val rowBounds: MutableMap<String, Rect>,
 ) {
     var draggedId: String?
         get() = draggedIdState.value
@@ -404,12 +411,13 @@ private fun rememberPlaylistOrderController(
 ): PlaylistOrderController {
     // Keep complete membership, including unavailable tracks. Playback projections are unsuitable here.
     val initial = remember(playlist.id) { entries.toList() }
+    val initialIds = remember(initial) { initial.map { it.song.id } }
     val baseRevision by rememberSaveable(playlist.id) { mutableStateOf(playlist.revision) }
     val draft = remember(playlist.id) { mutableStateListOf<PlaylistSong>().apply { addAll(initial) } }
     val stale = conflict || baseRevision != playlist.revision || initial != entries
     val valid = draft.map { it.song.id }.distinct().size == draft.size
     val canEdit = !busy && !stale
-    val rowBounds = remember(playlist.id) { mutableStateMapOf<String, Rect>() }
+    val modified by remember(initialIds) { derivedStateOf { draft.map { it.song.id } != initialIds } }
     val draggedIdState = remember(playlist.id) { mutableStateOf<String?>(null) }
     val dragCenterYState = remember(playlist.id) { mutableFloatStateOf(0f) }
     LaunchedEffect(canEdit) { if (!canEdit) draggedIdState.value = null }
@@ -418,9 +426,9 @@ private fun rememberPlaylistOrderController(
         stale = stale,
         valid = valid,
         canEdit = canEdit,
+        modified = modified,
         draggedIdState = draggedIdState,
         dragCenterYState = dragCenterYState,
-        rowBounds = rowBounds,
     )
 }
 
@@ -433,90 +441,136 @@ private fun PlaylistOrderListContent(
 ) {
     val draft = controller.draft
     val canEdit = controller.canEdit
+    val haptic = LocalHapticFeedback.current
+    val listState = rememberLazyListState()
+    val density = LocalDensity.current
+    val edgeThresholdPx = remember(density) { with(density) { 56.dp.toPx() } }
+    val maxScrollStepPx = remember(density) { with(density) { 14.dp.toPx() } }
+    var listHeightPx by remember { mutableFloatStateOf(0f) }
     fun finishDrag() { controller.draggedId = null }
-    Column(
-        modifier.verticalScroll(rememberScrollState()),
+    fun reorderDragged(id: String, direction: Int) {
+        if (direction == 0) return
+        val visible = listState.layoutInfo.visibleItemsInfo
+        var current = draft.indexOfFirst { it.song.id == id }
+        while (current >= 0 && current + direction in draft.indices) {
+            val next = current + direction
+            val nextInfo = visible.firstOrNull { it.key == draft[next].song.id } ?: break
+            val threshold = if (direction > 0) nextInfo.offset + nextInfo.size * 0.35f else nextInfo.offset + nextInfo.size * 0.65f
+            if ((direction > 0 && controller.dragCenterY < threshold) || (direction < 0 && controller.dragCenterY > threshold)) break
+            draft.add(next, draft.removeAt(current))
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            current = next
+        }
+    }
+    LaunchedEffect(controller.draggedId) {
+        val activeId = controller.draggedId ?: return@LaunchedEffect
+        while (isActive && controller.draggedId == activeId) {
+            val pointerY = controller.dragCenterY
+            val delta = when {
+                listHeightPx <= 0f -> 0f
+                pointerY < edgeThresholdPx && listState.canScrollBackward -> {
+                    val ratio = ((edgeThresholdPx - pointerY) / edgeThresholdPx).coerceIn(0.2f, 1f)
+                    -maxScrollStepPx * ratio
+                }
+                pointerY > listHeightPx - edgeThresholdPx && listState.canScrollForward -> {
+                    val ratio = ((pointerY - (listHeightPx - edgeThresholdPx)) / edgeThresholdPx).coerceIn(0.2f, 1f)
+                    maxScrollStepPx * ratio
+                }
+                else -> 0f
+            }
+            if (delta != 0f) {
+                listState.scrollBy(delta)
+                reorderDragged(activeId, if (delta > 0f) 1 else -1)
+            }
+            delay(16L)
+        }
+    }
+    LazyColumn(
+        modifier = modifier.onSizeChanged { listHeightPx = it.height.toFloat() }.testTag("playlist_order_list"),
+        state = listState,
+        userScrollEnabled = controller.draggedId == null,
         verticalArrangement = Arrangement.spacedBy(FlareTokens.SpaceSm),
     ) {
-        if (controller.stale) LibraryConflict()
-        notice?.let { Notice(it) }
-        if (!controller.valid) Text(stringResource(R.string.ft_library_invalid_membership), color = MaterialTheme.colorScheme.error)
-        if (draft.isEmpty()) Text(stringResource(R.string.ft_library_empty_playlist))
-        draft.forEachIndexed { index, entry ->
-            // A stable key keeps the pointer gesture alive when this member changes index.
-            key(entry.song.id) {
-                val id = entry.song.id
-                val dragging = controller.draggedId == id
-                Box(
-                    Modifier.fillMaxWidth().zIndex(if (dragging) 1f else 0f)
-                        .onGloballyPositioned { coordinates ->
-                            val position = coordinates.positionInRoot()
-                            val bounds = Rect(position.x, position.y, position.x + coordinates.size.width, position.y + coordinates.size.height)
-                            if (controller.rowBounds[id] != bounds) controller.rowBounds[id] = bounds
-                        }.testTag("playlist_order_entry_" + id),
+        if (controller.stale) item(key = "order-stale") { LibraryConflict() }
+        if (notice != null) item(key = "order-notice") { Notice(notice) }
+        if (!controller.valid) item(key = "order-invalid") {
+            Text(stringResource(R.string.ft_library_invalid_membership), color = MaterialTheme.colorScheme.error)
+        }
+        if (draft.isEmpty()) item(key = "order-empty") {
+            Text(stringResource(R.string.ft_library_empty_playlist))
+        }
+        itemsIndexed(draft, key = { _, entry -> entry.song.id }) { index, entry ->
+            val id = entry.song.id
+            val dragging = controller.draggedId == id
+            val slotInfo = if (dragging) listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == id } else null
+            Box(
+                Modifier.fillMaxWidth().zIndex(if (dragging) 1f else 0f).testTag("playlist_order_entry_" + id),
+            ) {
+                Column(
+                    Modifier.fillMaxWidth().graphicsLayer {
+                        translationY = if (dragging && slotInfo != null) {
+                            controller.dragCenterY - (slotInfo.offset + slotInfo.size / 2f)
+                        } else 0f
+                    }.then(if (dragging) Modifier.background(MaterialTheme.colorScheme.surfaceContainer) else Modifier),
                 ) {
-                    Column(
-                        Modifier.fillMaxWidth().graphicsLayer {
-                            translationY = if (dragging) controller.dragCenterY - (controller.rowBounds[id]?.center?.y ?: controller.dragCenterY) else 0f
-                        }.then(if (dragging) Modifier.background(MaterialTheme.colorScheme.surfaceContainer) else Modifier),
-                    ) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text(entry.song.title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-                            val dragLabel = stringResource(R.string.ft_library_drag_song, entry.song.title)
-                            Box(
-                                Modifier.size(FlareTokens.TouchTargetMin).testTag("playlist_order_drag_" + id)
-                                    .semantics { contentDescription = dragLabel; if (!canEdit) disabled() }
-                                    .pointerInput(id, canEdit) {
-                                        if (canEdit) detectDragGesturesAfterLongPress(
-                                            onDragStart = {
-                                                controller.rowBounds[id]?.let { bounds ->
-                                                    controller.dragCenterY = bounds.center.y
-                                                    controller.draggedId = id
-                                                }
-                                            },
-                                            onDrag = { change, amount ->
-                                                change.consume()
-                                                if (controller.draggedId == id) {
-                                                    controller.dragCenterY += amount.y
-                                                    val direction = if (amount.y > 0f) 1 else if (amount.y < 0f) -1 else 0
-                                                    var current = draft.indexOfFirst { it.song.id == id }
-                                                    while (direction != 0 && current >= 0 && current + direction in draft.indices) {
-                                                        val next = current + direction
-                                                        val boundary = controller.rowBounds[draft[next].song.id]?.center?.y ?: break
-                                                        if ((direction > 0 && controller.dragCenterY < boundary) || (direction < 0 && controller.dragCenterY > boundary)) break
-                                                        draft.add(next, draft.removeAt(current))
-                                                        current = next
-                                                    }
-                                                }
-                                            },
-                                            onDragEnd = ::finishDrag,
-                                            onDragCancel = ::finishDrag,
-                                        )
-                                    },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(ClientIcons.DragHandle, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(entry.song.title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                        val dragLabel = stringResource(R.string.ft_library_drag_song, entry.song.title)
+                        Box(
+                            Modifier.size(FlareTokens.TouchTargetMin).testTag("playlist_order_drag_" + id)
+                                .semantics { contentDescription = dragLabel; if (!canEdit) disabled() }
+                                .pointerInput(id, canEdit) {
+                                    if (canEdit) detectDragGesturesAfterLongPress(
+                                        onDragStart = {
+                                            val info = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == id }
+                                                ?: return@detectDragGesturesAfterLongPress
+                                            controller.dragCenterY = info.offset + info.size / 2f
+                                            controller.draggedId = id
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        },
+                                        onDrag = { change, amount ->
+                                            change.consume()
+                                            if (controller.draggedId == id) {
+                                                controller.dragCenterY += amount.y
+                                                val direction = if (amount.y > 0f) 1 else if (amount.y < 0f) -1 else 0
+                                                reorderDragged(id, direction)
+                                            }
+                                        },
+                                        onDragEnd = ::finishDrag,
+                                        onDragCancel = ::finishDrag,
+                                    )
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(ClientIcons.DragHandle, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        if (entry.song.artist.isNotBlank()) Text(entry.song.artist, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        if (!entry.canPlay) Text(stringResource(R.string.ft_library_unavailable_member), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                            Text(stringResource(R.string.ft_library_position, index + 1, draft.size), style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
-                            IconButton(
-                                onClick = { draft.add(index - 1, draft.removeAt(index)) }, enabled = canEdit && controller.draggedId == null && index > 0,
-                                modifier = Modifier.size(FlareTokens.TouchTargetMin).testTag("playlist_order_up_" + id),
-                            ) { Icon(ClientIcons.ChevronDown, stringResource(R.string.ft_library_move_up, entry.song.title), Modifier.rotate(180f)) }
-                            IconButton(
-                                onClick = { draft.add(index + 1, draft.removeAt(index)) }, enabled = canEdit && controller.draggedId == null && index < draft.lastIndex,
-                                modifier = Modifier.size(FlareTokens.TouchTargetMin).testTag("playlist_order_down_" + id),
-                            ) { Icon(ClientIcons.ChevronDown, stringResource(R.string.ft_library_move_down, entry.song.title)) }
-                        }
-                        HorizontalDivider()
                     }
+                    if (entry.song.artist.isNotBlank()) Text(entry.song.artist, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (!entry.canPlay) Text(stringResource(R.string.ft_library_unavailable_member), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                        Text(stringResource(R.string.ft_library_position, index + 1, draft.size), style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+                        IconButton(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                draft.add(index - 1, draft.removeAt(index))
+                            },
+                            enabled = canEdit && controller.draggedId == null && index > 0,
+                            modifier = Modifier.size(FlareTokens.TouchTargetMin).testTag("playlist_order_up_" + id),
+                        ) { Icon(ClientIcons.ChevronDown, stringResource(R.string.ft_library_move_up, entry.song.title), Modifier.rotate(180f)) }
+                        IconButton(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                draft.add(index + 1, draft.removeAt(index))
+                            },
+                            enabled = canEdit && controller.draggedId == null && index < draft.lastIndex,
+                            modifier = Modifier.size(FlareTokens.TouchTargetMin).testTag("playlist_order_down_" + id),
+                        ) { Icon(ClientIcons.ChevronDown, stringResource(R.string.ft_library_move_down, entry.song.title)) }
+                    }
+                    HorizontalDivider()
                 }
             }
         }
-        LibraryBusy(busy)
+        if (busy) item(key = "order-busy") { LibraryBusy(busy) }
     }
 }
 
@@ -545,7 +599,7 @@ fun PlaylistOrderDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = controller.canEdit && controller.valid && controller.draggedId == null,
+                enabled = controller.canEdit && controller.valid && controller.modified && controller.draggedId == null,
                 onClick = { onSubmit(controller.draft.map { it.song.id }) },
                 modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("playlist_order_save"),
             ) { Text(stringResource(R.string.ft_library_save)) }
@@ -601,7 +655,7 @@ internal fun PlaylistOrderSheet(
                     modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("playlist_order_cancel"),
                 ) { Text(stringResource(R.string.ft_library_cancel)) }
                 Button(
-                    enabled = controller.canEdit && controller.valid && controller.draggedId == null,
+                    enabled = controller.canEdit && controller.valid && controller.modified && controller.draggedId == null,
                     onClick = { onSubmit(controller.draft.map { it.song.id }) },
                     modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("playlist_order_save"),
                 ) { Text(stringResource(R.string.ft_library_save)) }

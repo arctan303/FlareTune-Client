@@ -43,12 +43,15 @@ data class ArtistPage(val artists: List<Artist>, val nextOffset: Int, val hasMor
 data class ArtistDetail(val artist: Artist, val songs: List<Song>, val nextOffset: Int, val hasMore: Boolean, val capped: Boolean = false, val albums: List<Album> = emptyList())
 data class SpotlightArtist(val artist: String, val songCount: Int, val songs: List<Song>, val photoUrl: String? = null, val coverUrl: String? = null)
 data class RankedSong(val song: Song, val playCount: Long, val lastPlayedAt: Long)
+data class PlayStatsWindow(val days: Int, val fromMs: Long, val toMs: Long)
+
 data class PlayStats(
     val songs: List<RankedSong> = emptyList(),
     val playCounts: Map<String, Long>? = null,
     val totalPlays: Long? = null,
     val totalUniqueSongs: Int? = null,
     val summaryOnly: Boolean = false,
+    val window: PlayStatsWindow? = null,
 )
 data class PlayEvent(val eventId: String, val songId: String, val playedAt: Long)
 data class PlayEventReceipt(val recorded: Int, val acceptedEventIds: List<String>)

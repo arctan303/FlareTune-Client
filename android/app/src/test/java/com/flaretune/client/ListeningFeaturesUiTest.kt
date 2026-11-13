@@ -145,6 +145,20 @@ class ListeningFeaturesUiTest {
         rule.runOnIdle { assertEquals(1, controller.orderWrites) }
     }
 
+    @Test fun playlistDetailEditOrderButtonOpensOrderSheetDirectly() {
+        render(fixture().copy(selectedPlaylist = regular, selectedPlaylistEntries = songs.mapIndexed { i, s -> PlaylistSong(s, i) }, playlistSongs = songs.filter { it.canPlay }))
+        rule.onNodeWithTag("playlist_edit_order").performClick()
+        rule.onNodeWithTag("playlist_order_dialog").assertExists()
+        rule.onNodeWithTag("playlist_order_save").assertIsNotEnabled()
+    }
+
+    @Test fun songActionFeedbackToastAppearsOnPlayNext() {
+        render(fixture(MainDestination.SEARCH).copy(query = "first"))
+        rule.onNodeWithTag("song_more_first").performClick()
+        rule.onNodeWithTag("song_action_next").performClick()
+        rule.onNodeWithTag("action_feedback_toast").assertExists()
+    }
+
     @Test fun deletingAPlaylistRequiresConfirmationAndDoesNotClearAudioQueue() {
         render(fixture().copy(selectedPlaylist = regular, selectedPlaylistEntries = songs.map { PlaylistSong(it) }, playlistSongs = songs.filter { it.canPlay }))
         rule.onNodeWithTag("playlist_more_commute").performClick()
@@ -211,11 +225,19 @@ class ListeningFeaturesUiTest {
 
     @Test fun continueListeningIncludesOnlyTheOnePlayedTrackFromALargeQueue() {
         val queue = listOf(songs.first()) + (0 until 29).map { Song("queued-$it", "Queued $it", audioUrl="https://fixture.invalid/$it.mp3") }
-        render(fixture(MainDestination.HOME).copy(playback=PlaybackSnapshot(songs.first(),queue,0,true),playHistory=listOf(songs.first())))
-        rule.onNodeWithTag("home_feed").performScrollToNode(hasTestTag("home_history_song_first"))
-        rule.onNodeWithTag("home_history_song_queued-0").assertDoesNotExist()
-        rule.onNodeWithTag("home_history_song_first").performClick()
-        rule.runOnIdle { assertEquals("first", controller.historyPlayed); assertEquals(30,controller.state.value.playback.queue.size) }
+        render(fixture(MainDestination.HOME).copy(
+            playback = PlaybackSnapshot(songs.first(), queue, 0, true),
+            playHistory = listOf(songs.first()),
+            continueListeningSongs = listOf(songs.first()),
+        ))
+        rule.onNodeWithTag("home_feed").performScrollToNode(hasTestTag("home_continue_song_first"))
+        rule.onNodeWithTag("home_continue_song_queued-0").assertDoesNotExist()
+        rule.onNodeWithTag("home_continue_song_first").performClick()
+        rule.runOnIdle { assertEquals(songs.first().id, controller.state.value.playback.current?.id) }
+        rule.onNodeWithTag("home_feed").performScrollToNode(hasTestTag("home_history"))
+        rule.onNodeWithTag("home_history").performClick()
+        rule.onNodeWithTag("history_song_first").assertExists()
+        rule.onNodeWithTag("history_song_queued-0").assertDoesNotExist()
     }
 
     @Test @Config(qualifiers = "zh-rCN-w390dp-h844dp-night-mdpi")
@@ -284,11 +306,134 @@ class ListeningFeaturesUiTest {
         assertTrue("Favorites cover must draw vibrant red heart (red=$redPixels)", redPixels > 400)
     }
 
+    @Test @Config(qualifiers = "zh-rCN-w1280dp-h800dp-mdpi")
+    fun homeFavoritesUsesLatestCoverAndWideSongShelvesKeepRowHeightAcrossColumns() {
+        val sampleSongs = (0 until 12).map { index ->
+            Song("song-$index", "Track $index", "Artist $index", audioUrl = "https://fixture.invalid/$index.mp3", coverUrl = "https://fixture.invalid/cover/$index.jpg")
+        }
+        render(
+            fixture(MainDestination.HOME).copy(
+                latestFavoriteCoverUrl = "https://fixture.invalid/cover/latest-fav.jpg",
+                continueListeningSongs = sampleSongs,
+                songs = sampleSongs,
+            ),
+        )
+        val favBounds = rule.onNodeWithTag("home_favorites").fetchSemanticsNode().boundsInRoot
+        val dockBounds = rule.onNodeWithTag("dock_wide").fetchSemanticsNode().boundsInRoot
+        val navHomeBounds = rule.onNodeWithTag("nav_home").fetchSemanticsNode().boundsInRoot
+        val navLibBounds = rule.onNodeWithTag("nav_library").fetchSemanticsNode().boundsInRoot
+        val miniBounds = rule.onNodeWithTag("mini_player").fetchSemanticsNode().boundsInRoot
+        rule.onNodeWithTag("favorite_heart_cover").assertDoesNotExist()
+        rule.onNodeWithTag("home_feed").performScrollToNode(hasTestTag("home_continue_song_song-0"))
+        val rootWidth = rule.onNodeWithTag("home_page").fetchSemanticsNode().boundsInRoot.width
+        val col1Row0 = rule.onNodeWithTag("home_continue_song_song-0").fetchSemanticsNode().boundsInRoot
+        val col1Row3 = rule.onNodeWithTag("home_continue_song_song-3").fetchSemanticsNode().boundsInRoot
+        val col2Row0 = rule.onNodeWithTag("home_continue_song_song-4").fetchSemanticsNode().boundsInRoot
+        val col3Row0 = rule.onNodeWithTag("home_continue_song_song-8").fetchSemanticsNode().boundsInRoot
+        val density = rule.density.density
+        assertTrue("Wide hero card should be enlarged (>=320dp wide, >=190dp tall), got ${favBounds.width / density}x${favBounds.height / density}dp", favBounds.width / density >= 320f && favBounds.height / density >= 190f)
+        assertTrue("Wide dock should be enlarged (~78dp tall, >=880dp wide on 1280dp), got ${dockBounds.width / density}x${dockBounds.height / density}dp", dockBounds.height / density >= 76f && dockBounds.width / density >= 880f)
+        val navWidth = navLibBounds.right - navHomeBounds.left
+        assertTrue("Navigation bar ($navWidth) must be wider than mini player (${miniBounds.width})", navWidth > miniBounds.width)
+        assertTrue("Row height must remain >= 78dp (${col1Row0.height / density}dp)", col1Row0.height / density >= 78f)
+        assertTrue("Row 4 of col 1 sits below row 0", col1Row3.top > col1Row0.bottom)
+        assertTrue("Column 2 sits to the right of Column 1 at same vertical level", col2Row0.left > col1Row0.right && kotlin.math.abs(col2Row0.top - col1Row0.top) < 2f)
+        val colWidthFraction = col1Row0.width / rootWidth
+        assertTrue("Column width (~2/5 of screen) should be 0.35..0.44, was $colWidthFraction", colWidthFraction in 0.35f..0.44f)
+        val col3VisibleFraction = (rootWidth - col3Row0.left) / rootWidth
+        assertTrue("Column 3 should peek ~1/5 of screen (0.14..0.24), was $col3VisibleFraction", col3VisibleFraction in 0.14f..0.24f)
+    }
+
+    @Test @Config(qualifiers = "zh-rCN-w412dp-h915dp-mdpi")
+    fun phoneHomeEnlargesHeroCardsSupportsTopFiltersAndClearsBottomGestureBar() {
+        render(
+            fixture(MainDestination.HOME).copy(
+                continueListeningSongs = songs.filter { it.canPlay },
+                discoverySongs = songs.filter { it.canPlay },
+            ),
+        )
+        val density = rule.density.density
+        val favBounds = rule.onNodeWithTag("home_favorites").fetchSemanticsNode().boundsInRoot
+        assertTrue(
+            "Phone hero card should be enlarged (>=290dp wide, >=170dp tall), got ${favBounds.width / density}x${favBounds.height / density}dp",
+            favBounds.width / density >= 290f && favBounds.height / density >= 170f,
+        )
+        val dockBounds = rule.onNodeWithTag("dock_compact").fetchSemanticsNode().boundsInRoot
+        val navBounds = rule.onNodeWithTag("nav_discover").fetchSemanticsNode().boundsInRoot
+        val bottomClearanceDp = (dockBounds.bottom - navBounds.bottom) / density
+        assertTrue("Compact nav should clear floating gesture pill (>=12dp), got ${bottomClearanceDp}dp", bottomClearanceDp >= 12f)
+
+        rule.onNodeWithTag("home_filter_all").assertExists()
+        rule.onNodeWithTag("home_filter_continue").assertExists()
+        rule.onNodeWithTag("home_filter_discovery").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("home_discovery").assertIsDisplayed()
+        rule.onNodeWithTag("home_filter_all").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("home_favorites").assertIsDisplayed()
+    }
+
     @Test @Config(qualifiers = "zh-rCN-w360dp-h740dp-night-mdpi")
     fun renderLargeTextPlaylistAndAccessibleControls() {
         render(fixture().copy(selectedPlaylist = regular, selectedPlaylistEntries = songs.map { PlaylistSong(it) }, playlistSongs = songs.filter { it.canPlay }), largeText = true)
         rule.onNodeWithTag("playlist_add_songs").performScrollTo().assertIsDisplayed()
         screenshot("listening-playlist-large")
+    }
+
+    @Test
+    fun searchDebouncePreservesTrailingSpaceWhileTypingAndSyncsExternalReset() {
+        render(fixture(MainDestination.SEARCH))
+        rule.onNodeWithTag("search_field").performTextInput("rain ")
+        rule.mainClock.advanceTimeBy(450)
+        rule.waitForIdle()
+        rule.runOnIdle { assertEquals("rain", controller.query) }
+        rule.onNodeWithTag("search_field").assert(hasText("rain "))
+        rule.runOnIdle { controller.search("") }
+        rule.waitForIdle()
+        rule.onNodeWithTag("search_field").assert(hasText(""))
+    }
+
+    @Test @Config(qualifiers = "zh-rCN-w412dp-h915dp-mdpi")
+    fun homeHidesDiscoveryPillWhenEmptyAndHighlightsLibraryAtBottom() {
+        val sampleSongs = (0 until 12).map { index ->
+            Song("song-$index", "Track $index", "Artist $index", audioUrl = "https://fixture.invalid/$index.mp3")
+        }
+        render(
+            fixture(MainDestination.HOME).copy(
+                continueListeningSongs = sampleSongs,
+                discoverySongs = emptyList(),
+                discoveryLoading = false,
+                discoveryNotice = null,
+                songs = sampleSongs,
+            ),
+        )
+        rule.onNodeWithTag("home_filter_discovery").assertDoesNotExist()
+        rule.onNodeWithTag("home_filter_all").assertIsSelected()
+        rule.onNodeWithTag("home_feed").performTouchInput { repeat(4) { swipeUp() } }
+        rule.waitForIdle()
+        rule.onNodeWithTag("home_filter_library").assertIsSelected()
+    }
+
+    @Test @Config(qualifiers = "zh-rCN-w412dp-h915dp-mdpi")
+    fun mainTabsOmitTopRightRefreshAndLibraryEmptyPromptMatchesButtonLabel() {
+        render(
+            fixture(MainDestination.LIBRARY).copy(
+                playlists = emptyList(),
+                playlistShelf = PlaylistShelf(1, items = emptyList()),
+            ),
+        )
+        rule.onNodeWithTag("library_refresh").assertDoesNotExist()
+        rule.onNodeWithTag("library_heading_pill").assertExists()
+        rule.onNodeWithText("还没有自建歌单，点击“创建歌单”创建你的第一个歌单吧。").assertIsDisplayed()
+        rule.onNodeWithTag("nav_discover").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("discover_refresh").assertDoesNotExist()
+        rule.onNodeWithTag("nav_search").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("search_refresh").assertDoesNotExist()
+        rule.onNodeWithTag("nav_home").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("home_refresh").assertDoesNotExist()
     }
 
     private fun screenshot(name: String) {

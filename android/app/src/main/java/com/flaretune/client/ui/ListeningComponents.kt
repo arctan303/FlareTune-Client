@@ -346,29 +346,38 @@ internal fun PlaylistCoverArt(
 }
 
 /**
- * Web-aligned multi-row horizontally scrolling song shelf (3 or 4 tracks per vertical column).
- * Adapts smoothly across narrow phones, split-screen windows, and wide tablets.
+ * Multi-row horizontally scrolling shelf of unified [SongRow] items (up to [limit] tracks,
+ * [rowsPerColumn] tracks per vertical column, defaulting to 4 rows per column). Wide layouts
+ * (>= 700dp) size each column to ~2/5 of the available width so two full columns show while the
+ * third peeks ~1/5 on the right.
  */
 @Composable
-internal fun SongColumnShelf(
+internal fun UnifiedSongSectionList(
     songs: List<Song>,
     currentSongId: String?,
     playing: Boolean,
     buffering: Boolean,
     loader: ImageLoader?,
     modifier: Modifier = Modifier,
-    rowsPerColumn: Int = if (songs.size >= 8) 4 else 3,
+    limit: Int = 16,
+    rowsPerColumn: Int = 4,
     tagPrefix: String = "shelf_song_",
     onSelect: (Song, Int) -> Unit,
 ) {
-    if (songs.isEmpty()) return
-    val columns = remember(songs, rowsPerColumn) { songs.chunked(rowsPerColumn.coerceAtLeast(1)) }
+    val visible = remember(songs, limit) { songs.take(limit) }
+    if (visible.isEmpty()) return
+    val safeRows = rowsPerColumn.coerceAtLeast(1)
+    val columns = remember(visible, safeRows) { visible.chunked(safeRows) }
     BoxWithConstraints(modifier.fillMaxWidth()) {
-        val columnWidth = ((maxWidth - 40.dp) * 0.86f).coerceIn(272.dp, 348.dp)
+        val columnWidth = if (maxWidth >= 700.dp) {
+            ((maxWidth - 26.dp) * 0.40f).coerceIn(272.dp, 540.dp)
+        } else {
+            ((maxWidth - 20.dp) * 0.86f).coerceIn(264.dp, 360.dp)
+        }
         LazyRow(
             Modifier.fillMaxWidth(),
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(horizontal = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             itemsIndexed(columns, key = { colIdx, col -> "col_${colIdx}_${col.firstOrNull()?.id}" }) { colIdx, columnSongs ->
                 Column(
@@ -376,70 +385,23 @@ internal fun SongColumnShelf(
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     columnSongs.forEachIndexed { rowIdx, song ->
-                        val flatIndex = colIdx * rowsPerColumn + rowIdx
-                        CompactShelfSongRow(
+                        val flatIndex = colIdx * safeRows + rowIdx
+                        val current = song.id == currentSongId
+                        SongRow(
                             song = song,
-                            loader = loader,
-                            current = song.id == currentSongId,
+                            imageLoader = loader,
+                            current = current,
                             playing = playing,
-                            buffering = buffering,
-                            modifier = Modifier.testTag(tagPrefix + song.id),
+                            buffering = current && buffering,
+                            horizontalPadding = 6.dp,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .testTag(tagPrefix + song.id),
                             onClick = { onSelect(song, flatIndex) },
                         )
                     }
                 }
             }
-        }
-    }
-}
-
-@Composable
-internal fun CompactShelfSongRow(
-    song: Song,
-    loader: ImageLoader?,
-    current: Boolean,
-    playing: Boolean,
-    buffering: Boolean = false,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
-) {
-    val interaction = LocalListeningInteractions.current
-    val status = stringResource(if (buffering) R.string.ft_buffering else if (playing) R.string.ft_playing else R.string.ft_paused)
-    Row(
-        modifier
-            .fillMaxWidth()
-            .heightIn(min = 60.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
-            .then(if (current) Modifier.semantics { stateDescription = status } else Modifier)
-            .padding(horizontal = 6.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Artwork(song, loader, Modifier.size(48.dp), radius = 10.dp, placeholderSize = 22.dp)
-        Column(Modifier.weight(1f)) {
-            Text(
-                song.title,
-                style = MaterialTheme.typography.titleMedium,
-                color = if (current) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                song.artist.ifBlank { stringResource(R.string.ft_unknown_artist) },
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        if (interaction != null) {
-            ActionIcon(
-                ClientIcons.More,
-                stringResource(R.string.ft_listening_song_actions),
-                { interaction.song(song) },
-                modifier = Modifier.testTag("song_more_" + song.id),
-            )
         }
     }
 }
@@ -464,9 +426,6 @@ internal fun CollectionDetailScaffold(
     testTag: String,
     backTag: String = "detail_back",
     onBack: () -> Unit,
-    refreshTag: String? = null,
-    refreshing: Boolean = false,
-    onRefresh: (() -> Unit)? = null,
     headerExtraActions: @Composable RowScope.() -> Unit = {},
     primaryActions: @Composable () -> Unit,
     loading: Boolean = false,
@@ -555,15 +514,6 @@ internal fun CollectionDetailScaffold(
                     Spacer(Modifier.weight(1f))
                 }
                 headerExtraActions()
-                if (onRefresh != null) {
-                    ActionIcon(
-                        ClientIcons.Refresh,
-                        stringResource(R.string.ft_refresh),
-                        onRefresh,
-                        enabled = !refreshing,
-                        modifier = if (refreshTag != null) Modifier.testTag(refreshTag) else Modifier,
-                    )
-                }
             }
 
             if (loading) {
@@ -792,10 +742,14 @@ internal fun PlayHistoryPage(
                         buffering = state.playback.buffering,
                         modifier = Modifier.weight(1f).testTag("history_song_" + song.id),
                     ) { actions.playHistorySong(song) }
+                    val removedMessage = stringResource(R.string.ft_feedback_history_removed)
                     ActionIcon(
                         ClientIcons.Trash,
                         stringResource(R.string.ft_listening_remove_history),
-                        { actions.removeHistory(song.id) },
+                        {
+                            actions.removeHistory(song.id)
+                            listeningInteractions?.feedback?.invoke(removedMessage)
+                        },
                         modifier = Modifier.testTag("history_remove_" + song.id),
                     )
                 }

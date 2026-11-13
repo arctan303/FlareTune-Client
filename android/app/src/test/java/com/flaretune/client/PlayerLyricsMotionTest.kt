@@ -42,10 +42,12 @@ class PlayerLyricsMotionTest {
     private var translated by mutableStateOf(false)
     private var current by mutableStateOf(song)
     private var lastSeek: Long? = null
+    private var translationRequests = 0
     private lateinit var contentView: android.view.View
     private val actions = object : ClientActions {
         override fun seekTo(positionMs: Long) { lastSeek = positionMs }
         override fun setTranslationEnabled(enabled: Boolean) { translated = enabled }
+        override fun requestLyricTranslation() { translationRequests++ }
         override fun login(instanceUrl:String,username:String,password:String) {}
         override fun changePassword(currentPassword:String,newPassword:String) {}
         override fun logout() {}; override fun selectTab(tab:LibraryTab) {}
@@ -185,8 +187,38 @@ class PlayerLyricsMotionTest {
     }
     @Test fun aServerNotNeededResultHidesActionsEvenWhenCapabilityIsTrue() {
         current=song.copy(language="zh")
-        lyrics=lyrics.copy(lines=lines.map { it.copy(translation=null) },translationTargetLanguage="zh-CN",
+        // Keep stale returned translations: NOT_NEEDED must still suppress both controls.
+        lyrics=lyrics.copy(translationTargetLanguage="zh-CN",
             translationState=LyricTranslationStatus.NOT_NEEDED)
+        render()
+        rule.onNodeWithTag("player_translate_button").assertDoesNotExist()
+        rule.onNodeWithTag("player_generate_translation").assertDoesNotExist()
+    }
+    @Test fun returnedLegacyTranslationRemainsReadableWithoutGenerationCapability() {
+        lyrics=lyrics.copy(translationSupported=false, translationState=LyricTranslationStatus.UNAVAILABLE)
+        render()
+        rule.onNodeWithTag("player_translate_button").assertExists().performClick()
+        settle()
+        rule.onNodeWithText(lines.first().translation!!).assertExists()
+        rule.onNodeWithTag("player_generate_translation").assertDoesNotExist()
+        assertEquals(0, translationRequests)
+        screenshot("translation-returned-legacy")
+    }
+    @Test fun changingToNotNeededRemovesThePreviousSongsTranslationControls() {
+        render()
+        rule.onNodeWithTag("player_translate_button").assertExists()
+        rule.runOnIdle {
+            current=song.copy(id="not-needed", language="unknown")
+            lyrics=lyrics.copy(songId=current.id, translationState=LyricTranslationStatus.NOT_NEEDED)
+        }
+        settle()
+        rule.onNodeWithTag("player_translate_button").assertDoesNotExist()
+        rule.onNodeWithTag("player_generate_translation").assertDoesNotExist()
+        assertEquals(0, translationRequests)
+        screenshot("translation-not-needed")
+    }
+    @Test fun instrumentalStatusCannotExposeStaleTranslationControls() {
+        lyrics=lyrics.copy(status=LyricStatus.INSTRUMENTAL)
         render()
         rule.onNodeWithTag("player_translate_button").assertDoesNotExist()
         rule.onNodeWithTag("player_generate_translation").assertDoesNotExist()
@@ -284,16 +316,39 @@ class PlayerLyricsMotionTest {
                 words = listOf(LyricWord("After", 17.0, 18.4), LyricWord("interlude", 18.5, 20.0)),
             ),
         )
-        // Line-only short intro (<12s) stays hidden; exact word interlude [5.0, 15.2] activates and computes dot progress.
+        // Short line-only intro (<7.5s) stays hidden; >=7.5s lowered threshold activates cleanly.
         val shortLineIntro = computeInterludeUiState(
             currentTimeSeconds = 1.0,
-            lines = listOf(LyricLine("Line intro", timeSeconds = 9.0)),
+            lines = listOf(LyricLine("Short intro", timeSeconds = 6.0)),
             activeIndex = -1,
             lineIndex = 0,
             userScrolling = false,
             syncMode = "line",
         )
         assertFalse(shortLineIntro.isInterlude)
+
+        val mediumLineIntro = computeInterludeUiState(
+            currentTimeSeconds = 1.0,
+            lines = listOf(LyricLine("Medium intro", timeSeconds = 8.5)),
+            activeIndex = -1,
+            lineIndex = 0,
+            userScrolling = false,
+            syncMode = "line",
+        )
+        assertTrue(mediumLineIntro.isInterlude)
+
+        val mediumBetweenLines = computeInterludeUiState(
+            currentTimeSeconds = 5.5,
+            lines = listOf(
+                LyricLine("First", timeSeconds = 1.0),
+                LyricLine("Second", timeSeconds = 9.0),
+            ),
+            activeIndex = 0,
+            lineIndex = 0,
+            userScrolling = false,
+            syncMode = "line",
+        )
+        assertTrue(mediumBetweenLines.isInterlude)
 
         val midBetween = computeInterludeUiState(
             currentTimeSeconds = 10.1,

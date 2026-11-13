@@ -161,6 +161,20 @@ object ClientIcons {
         moveTo(3f, 10f); lineTo(12f, 2.5f); lineTo(21f, 10f); lineTo(21f, 20.5f)
         lineTo(15f, 20.5f); lineTo(15f, 14f); lineTo(9f, 14f); lineTo(9f, 20.5f); lineTo(3f, 20.5f); close()
     }
+    val Discover = lines("Discover") {
+        moveTo(12f, 3f)
+        curveTo(16.97f, 3f, 21f, 7.03f, 21f, 12f)
+        curveTo(21f, 16.97f, 16.97f, 21f, 12f, 21f)
+        curveTo(7.03f, 21f, 3f, 16.97f, 3f, 12f)
+        curveTo(3f, 7.03f, 7.03f, 3f, 12f, 3f); close()
+        moveTo(15.6f, 8.4f); lineTo(13.8f, 13.8f); lineTo(8.4f, 15.6f); lineTo(10.2f, 10.2f); close()
+    }
+    val Stats = lines("Stats") {
+        moveTo(5f, 20f); lineTo(5f, 13f)
+        moveTo(10f, 20f); lineTo(10f, 7f)
+        moveTo(15f, 20f); lineTo(15f, 11f)
+        moveTo(20f, 20f); lineTo(20f, 4f)
+    }
     val Library = lines("Library") {
         moveTo(4f, 4f); lineTo(4f, 20f)
         moveTo(8.5f, 4f); lineTo(8.5f, 20f)

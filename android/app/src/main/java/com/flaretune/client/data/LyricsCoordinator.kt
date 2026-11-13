@@ -7,6 +7,7 @@ import com.flaretune.client.model.LyricState
 import com.flaretune.client.model.LyricStatus
 import com.flaretune.client.model.LyricTranslationStatus
 import com.flaretune.client.model.Song
+import com.flaretune.client.model.canRequestLyricTranslation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -101,11 +102,7 @@ class LyricsCoordinator(
         val currentSong = song ?: return@synchronized
         val current = mutableState.value
         val reference = resultRef ?: return@synchronized
-        if (job?.isActive == true || current.status != LyricStatus.READY ||
-            !current.translationSupported || current.translationState in setOf(
-                LyricTranslationStatus.PENDING, LyricTranslationStatus.READY, LyricTranslationStatus.NOT_NEEDED,
-            )
-        ) return@synchronized
+        if (job?.isActive == true || !current.canRequestLyricTranslation) return@synchronized
         startLocked(active, currentSong.id, reference, translate = true)
     }
 

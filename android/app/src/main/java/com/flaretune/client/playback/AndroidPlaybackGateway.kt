@@ -109,6 +109,12 @@ class AndroidPlaybackGateway(private val context: Context, private val runtime: 
     override fun seekTo(positionMs: Long) { controller?.run { if (duration > 0) seekTo(positionMs.coerceIn(0, duration)) } }
     override fun toggleShuffle() { controller?.run { shuffleModeEnabled = !shuffleModeEnabled } }
     override fun cycleRepeat() { controller?.run { repeatMode = (repeatMode + 1) % 3 } }
+    override fun setPlaybackMode(shuffle: Boolean, repeatMode: Int) {
+        controller?.run {
+            shuffleModeEnabled = shuffle
+            this.repeatMode = repeatMode.coerceIn(0, 2)
+        }
+    }
     override fun select(index: Int) { controller?.run { if (index in 0 until mediaItemCount) { seekToDefaultPosition(index); play() } } }
     override fun removeQueueItem(index: Int) { controller?.let { removePlayerQueueItem(it, index) } }
     override fun moveQueueItem(fromIndex: Int, toIndex: Int) { controller?.let { movePlayerQueueItem(it, fromIndex, toIndex) } }
