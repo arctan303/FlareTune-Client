@@ -1,5 +1,5 @@
 {
-  "status": "draft-unselected",
+  "status": "selected-awaiting-white-variant-and-integration",
   "date": "2026-11-13",
   "deployment": false,
   "concepts": [
@@ -87,5 +87,14 @@
       "app": "F-spark/app.svg",
       "notification": "F-spark/notification.svg"
     }
-  ]
+  ],
+  "selected": {
+    "concept": "C",
+    "name": "声流",
+    "applicationBackground": "#FFFFFF",
+    "fixedBackground": true,
+    "notification": "transparent-monochrome",
+    "integration": "wait-for-Gemini-to-stop-writing",
+    "deployed": false
+  }
 }

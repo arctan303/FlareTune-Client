@@ -37,3 +37,12 @@
 合并包android/build/deliverables/FlareTune-0.1.0-dev.6-20261113-debug.apk，SHA256 41A70598797BC8EDC6325E68DF5BB8126C25D7B1256CF6F5C6A1F21E9CF6162C，签名v1/v2、16KB ZIP对齐、badging通过。覆盖安装Success；首次启动处于系统PackageUpdateActivity过渡，随后明确start返回com.flaretune.client/.MainActivity、前台与进程存在；回读version6和base.apk摘要一致。未卸载/清data，安装日志android/build/deploy-dev6-20261113.log。
 
 共同工作区同步完成：两树已快进到合并输入f42ba1321e5f73bb4034c598ea572bea0fa82efe，忽略CRLF/LF的逐项源码比较与dev.6证据一致，工作树干净。已测试隔离输入仍逐项匹配原始字节摘要；Git检出对两文件执行换行归一化，不改Kotlin语义。Gemini原始快照保留stash 0fbf01198abd4a34cb9fe20f8c2a007d74339b04；两份无实质差异文件另保留原字节，Git索引状态刷新后快进成功，没有丢弃业务改动。本次收尾说明提交只改文档，远程备份沿用同名分支，本地共同分支、隔离恢复树与远端HEAD一致性已回读；收尾文档后再次核对。隔离树已转为detached恢复用途，已合入的临时本地分支删除，b29eecf/f42ba13仍在共同分支历史中。后续双方从共享FlareTune-Client分支codex/android-client-backup-20261112继续，用户负责调度；隔离树不再独立开展新功能。
+
+
+## 翻译入口复核与用户澄清（2026-11-13 后续）
+
+用户要求再次确认按钮来自接口，随后明确已有译文直接显示是正常兼容；目标是杜绝无需翻译时仍有按钮，Worker由另一位助手修复。此前“非ready的旧tlyric必须移除”仅为本协作审计建议，已被用户否定，不作为待实现要求。有效REQ-20、设计入口与数据合同已原位同步；不新增客户端语种/字符/同目标语言判断，不修改Worker或插件。
+
+本次为R1局部维护：既有显示开关和NOT_NEEDED条件保留，抽取共享生成资格供UI与协调器使用。旧协调器使用负面排除列表，可能接受UNAVAILABLE/supported=true的直接调用，尽管UI不展示该生成按钮；现只允许IDLE/FAILED，PENDING仅作进度。已有译文解析、渲染和显示偏好不改。补充NOT_NEEDED夹带旧译文、切歌清旧按钮、纯音乐、无生成能力仍可显示已返回译文，以及不可用状态不POST的行为回归。
+
+协作边界：仅锚点修改共享播放器的生成资格和新增import，不覆盖Gemini其余界面改动；其余UI仍为在途工作。本机验证捕获118个Android输入，HEAD为1e0eca4737b14ac56f7865c0135d8522e2c2cbe6并含共享树快照，固定于宿主output/translation-controls-20261113/candidate，source-input.json记录逐文件SHA256。未将该快照整体回写/提交、未合并图标、未部署到平板。原guard负对照已失败于“Unavailable generation must not POST”（1/1失败，非编译错误）；修复后65/65聚焦回归通过（接口16、协调器27、播放器22），assembleDebug及lintDebug通过：0 错误/68 警告/0 提示。已目视1280×800本机模拟渲染：NOT_NEEDED无按钮、返回的旧译文可见且白色显示开关保留；无自动POST。固定候选逐文件摘要未变化，本轮5个源码/测试文件与共享工作区一致；期间仅其他协作者ClientUiTest继续变化，不宣称完整Gemini回归已覆盖。日志、原失败XML、截图和validation-summary.json位于上述证据目录。候选APK SHA256为18616887BF518F52F2CA8FF34B3619913DE7DF9FF1352FE84CA72FC33D86A532，仅本机产物，未安装平板；Worker接口必要性误报仍由另一位助手修复。

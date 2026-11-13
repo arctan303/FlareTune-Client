@@ -25,7 +25,8 @@
 | 个人歌单列表 | `playlists`、`playlistsLoading`、`playlistsNotice` | `refreshPlaylists()`、`openPlaylist(PlaylistSummary)` |
 | 个人歌单详情 | `selectedPlaylist`、`playlistSongs`、`playlistLoading`、`playlistNotice` | `closePlaylist()`、`refreshPlaylist()`；歌曲行 `playSong` |
 | 首页收藏 | `favoriteSongs`、`latestFavoriteCoverUrl`、`favoritesLoading`、`favoritesNotice` | `refreshFavorites()` 只刷新；`playFavorites()` 重新取完整详情再播放 |
-| 继续收听/历史 | `playHistory: List<Song>`、`historyNotice` | `playHistorySong(Song)` 在当前身份下重新解析音频后播放 |
+| 继续收听 | `continueListeningSongs: List<Song>` | `playSongs(continueListeningSongs,index)` 播放当前混合列表 |
+| 播放历史 | `playHistory: List<Song>`、`historyNotice` | `playHistorySong(Song)` 在当前身份下重新解析音频后播放 |
 | 歌曲分类 | `songLanguage: String = "all"` | `selectSongLanguage(String)`，只影响歌曲/搜索/收藏分类与分页 |
 | 专辑分类 | `albumLanguage: String = "all"` | `selectAlbumLanguage(String)`，与歌曲分类独立 |
 | 队列恢复 | `queueRestoring: Boolean`、`queueNotice: ClientNotice?` | 空播放器且恢复失败时 `retryQueueRestore()`；已有用户队列优先 |
@@ -66,7 +67,7 @@
 - 切歌、账号/实例、会话代次或歌曲language变化均撤销旧请求；晚返回不能污染新曲目/账号。401/精确account_changed与歌词resultRef冲突分别处理，不通过message子串注销账号。
 - pending由协调器最多追加20次GET轮询，默认3秒间隔；UI只显示polling和状态，不自行无限轮询。409 LYRIC_RESULT_RETIRED/CHANGED最多做一次新来源选择恢复；失败可显式retryLyrics。
 - Android与Web共用歌词接口和工作台来源链。服务端决定有无歌词、已有译文、是否支持/需要翻译；客户端不根据Song.language、歌名或字符覆盖这一结论。GET可按服务端既有自动补全策略产生pending，客户端只消费/有界轮询，不因进入播放器或显示开关主动POST。仅严格instrumental的既有零请求分支保持原约定。
-- 只有用户明确调用 `requestLyricTranslation()` 才触发当前有效resultRef的 `POST /api/lyrics/translation`。resultRef由协调器内部保管，不出现在ClientUiState，不由UI持久化或拼装。服务端supported且state为IDLE/PENDING/FAILED才有生成状态入口；NOT_NEEDED不显示翻译入口。译文显示开关还要求确有返回的译文行，不能用supported替代实际译文。
+- 只有用户明确调用 `requestLyricTranslation()` 才触发当前有效resultRef的 `POST /api/lyrics/translation`。resultRef由协调器内部保管，不出现在ClientUiState，不由UI持久化或拼装。服务端supported且state为IDLE/PENDING/FAILED才有生成状态入口；PENDING仅显示不可重复点击的进度，只有IDLE/FAILED可提交POST，UNAVAILABLE不提交。NOT_NEEDED不显示翻译入口，即使supported=true或存在旧译文；纯音乐无入口。译文显示开关要求确有返回的译文行，不能用supported替代实际译文。已有行内tlyric兼容保留，UNAVAILABLE/supported=false只禁止新生成，不删除接口已返回的译文或其显示开关（NOT_NEEDED除外）。
 - 生成/补译轮询失败但当前引用仍有效时，保留READY原文、激活行和播放，translationState=FAILED并显示独立安全提示；无效/退役引用、越权、歌曲删除、退出/切号仍优先执行原有清理/失败规则，不能用旧词掩盖。
 - `toggleTranslation/setTranslationEnabled` 默认关闭，通过设备私有 `playback_display_v1` 偏好保存，仅控制显示；不会POST生成、切换来源、修改服务端AI设置。保存失败保留原开关值并设置translationNotice。
 - 无译文/上游不可用/结构错误不能通过放宽parser、强行改sourceId或修改实例来源顺序掩盖；宿主资产/工作台问题独立排障。
@@ -97,7 +98,9 @@ val shownTranslation = line?.translation.takeIf { state.translationEnabled }
 
 ## 5. 继续收听与设备历史
 
-**继续收听/历史读取state.playHistory；完整当前队列读取state.playback.queue。两者不得互相兜底。**
+**继续收听读取state.continueListeningSongs；历史读取state.playHistory；完整当前队列读取state.playback.queue。三者不得互相兜底。**
+
+CONTINUE-LISTENING-20261113：继续收听按近期/收藏/累计/搜索4/3/3/2名额混排，近期7天次数>=2且24小时重复优先；来源+稳定ID去重而非标题/歌手合并。同池顺延、跨池补位，候选耗尽显示实际数量。累计次数加权、收藏随机、搜索实体按最近顺序加权；仅歌曲实体参与，并经当前连接重新解析，保留来源/版本和最新封面，失败释放名额。启动/显式刷新读取真实本机搜索记录，不消费可能已锁定的旧展示列表；所有数据到齐后生成一次快照，后续播放/切歌不重排。账号/实例切换、刷新代际拒绝迟到结果。
 
 历史由实际Media3 Service的current+isPlaying事件记录；整队列、暂停/恢复、拖动或仅恢复暂停队列不记录为已经听过。最近播放倒序、同songId去重、最多200条；再次真正切回该曲会更新位置。VM销毁后服务播放仍可记录，单纯页面存活不作为记录条件。
 
@@ -178,9 +181,9 @@ dev.7与Web的catalogRead/musicSource链路对齐：Artist新增默认兼容的i
 - 歌手详情selectedArtist、artistSongs、artistAlbums及各自Loading/More/HasMore/Notice；openArtist/closeArtist、loadMoreArtistSongs/loadMoreArtistAlbums。署名拆分沿Web规则，专辑用真实opaque ID，不自造ID。
 - discoverySongs/spotlightArtist/discoveryLoading/Notice，refreshDiscovery消费已有random/spotlight宿主接口；当日账号+实例metadata缓存先重解析当前媒体，刷新有Web同类冷却。不是新增AI或插件推荐算法。
 - recentSearches是song/artist实体，recentSearchTerms是提交的词，不在每次输入时保存。openRecentSearch会重新解析；实体/词可单删、清空，私有分键，退出清UI而不抹除其他主体历史。只存展示元数据。
-- playHistoryPlayedAt提供本机实际播放时间，removeHistory/clearHistory仅改活跃身份下历史，不解绑后续记录、不清队列或云统计。“继续收听”来自playHistory，队列有独立入口。
+- playHistoryPlayedAt提供本机实际播放时间，removeHistory/clearHistory仅改活跃身份下历史，不解绑后续记录、不清队列或云统计。“继续收听”来自continueListeningSongs的独立混合快照，队列有独立入口。
 - playSongs(songs,startIndex,shuffle)明确当前列表上下文；playNext/enqueue/clearQueue作用真实Media3 Timeline并同步持久化，不回写歌单。历史/恢复占位会按当前身份重解析，不捏造已播放记录。
-- playStats/statsLoading/Notice与refreshPlayStats是真实GET /api/account/play-stats；常听歌手按真实常听单曲聚合，不把队列或最近记录当次数。
+- playStats/statsLoading/Notice与refreshPlayStats是真实GET /api/account/play-stats；常听歌手按真实常听单曲聚合，不把队列或最近记录当次数。窗口查询复用该接口的days=1/7与view=summary，PlayStats.window为PlayStatsWindow(days,fromMs,toMs)，必须匹配请求且跨度为days×86400000；缺失/错误回显按无近期统计降级，不把累计榜充作近期榜。时间均毫秒，窗口内play_count/last_played_at不可与累计混用；无days保持原DTO兼容。
 - 独立QualifiedListeningTracker每播放迭代最多一事件：真实连续进度累计30秒，短于60秒曲目半程也合格；暂停/seek跳跃不算。Service后台同样采样，不能用历史启动事件冒充。PlayEventRepository以稳定eventId私有持久化、最多25批次、只删除acceptedEventIds、失败退避重试；身份退役拒绝旧ack污染新主体，未确认旧事件仅由原身份后续重试，不持久化网络凭据/媒体URL。
 - 音量与译文显示仅本机偏好；gain即时控制并有界去抖保存，不触系统或蓝牙音量，不修改服务器来源/AI配置。
 
