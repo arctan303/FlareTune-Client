@@ -109,54 +109,29 @@ internal val WidePlayerContainerSpring = spring<Float>(
  */
 internal val PlayerSheetDraggingShape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
 
-internal const val ThumbArtworkPx = 192
-internal const val PlayerPrewarmArtworkPx = 512
+internal const val ThumbArtworkPx = com.flaretune.client.playback.THUMB_ARTWORK_PX
+internal const val PlayerPrewarmArtworkPx = com.flaretune.client.playback.PLAYER_PREWARM_ARTWORK_PX
 
-internal fun quantizeArtworkDecodePx(requestedPx: Int): Int = when {
-    requestedPx <= 0 -> PlayerPrewarmArtworkPx
-    requestedPx <= ThumbArtworkPx -> ThumbArtworkPx
-    else -> PlayerPrewarmArtworkPx
-}
+internal fun quantizeArtworkDecodePx(requestedPx: Int): Int =
+    com.flaretune.client.playback.quantizeArtworkDecodePx(requestedPx)
 
 internal fun coverMemoryCacheKey(coverUrl: String, targetPx: Int): MemoryCache.Key =
-    MemoryCache.Key(if (targetPx > 0) "$coverUrl#s=$targetPx" else coverUrl)
+    com.flaretune.client.playback.coverMemoryCacheKey(coverUrl, targetPx)
 
 internal fun findBestCoverMemoryCacheKey(
     imageLoader: ImageLoader?,
     coverUrl: String,
     preferredPx: Int,
-): MemoryCache.Key? {
-    val memoryCache = imageLoader?.memoryCache ?: return null
-    val candidates = buildList {
-        add(coverMemoryCacheKey(coverUrl, preferredPx))
-        if (preferredPx != PlayerPrewarmArtworkPx) add(coverMemoryCacheKey(coverUrl, PlayerPrewarmArtworkPx))
-        if (preferredPx != ThumbArtworkPx) add(coverMemoryCacheKey(coverUrl, ThumbArtworkPx))
-        add(MemoryCache.Key(coverUrl))
-    }
-    return candidates.firstOrNull { memoryCache[it] != null }
-        ?: memoryCache.keys.firstOrNull { it.key == coverUrl && memoryCache[it] != null }
-}
+): MemoryCache.Key? =
+    com.flaretune.client.playback.findBestCoverMemoryCacheKey(imageLoader, coverUrl, preferredPx)
 
 internal fun buildCoverImageRequest(
     context: Context,
     coverUrl: String,
     targetPx: Int,
     imageLoader: ImageLoader?,
-): ImageRequest {
-    val cacheKey = coverMemoryCacheKey(coverUrl, targetPx)
-    val placeholderKey = findBestCoverMemoryCacheKey(imageLoader, coverUrl, targetPx)
-    return ImageRequest.Builder(context)
-        .data(coverUrl)
-        .apply {
-            if (targetPx > 0) size(targetPx, targetPx)
-            memoryCacheKey(cacheKey)
-            if (placeholderKey != null && placeholderKey != cacheKey) {
-                placeholderMemoryCacheKey(placeholderKey)
-            }
-        }
-        .crossfade(false)
-        .build()
-}
+): ImageRequest =
+    com.flaretune.client.playback.buildCoverImageRequest(context, coverUrl, targetPx, imageLoader)
 
 private fun rectsDiffer(a: Rect?, b: Rect, tolerancePx: Float = 0.75f): Boolean {
     if (a == null) return true

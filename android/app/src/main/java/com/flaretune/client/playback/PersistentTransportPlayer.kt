@@ -1,6 +1,8 @@
 package com.flaretune.client.playback
 
 import androidx.media3.common.ForwardingSimpleBasePlayer
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.SimpleBasePlayer.State
 import androidx.media3.common.Timeline
@@ -10,7 +12,8 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 
 /**
- * Keeps the system's standard previous/next controls present at music queue boundaries.
+ * Keeps the system's standard previous/next controls present at music queue boundaries and
+ * optionally transforms system-published [MediaMetadata] without mutating underlying [MediaItem]s.
  *
  * State and seeks use the same forwarding player, so MediaSession observes the same commands its
  * listeners receive. Queue order, shuffle/repeat and controller authorization remain unchanged.
@@ -18,6 +21,16 @@ import com.google.common.util.concurrent.ListenableFuture
 @androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 internal class PersistentTransportPlayer(player: Player) : ForwardingSimpleBasePlayer(player) {
     internal val delegateExoPlayer: ExoPlayer? get() = getPlayer() as? ExoPlayer
+    private var systemMetadataTransform: ((MediaItem?, MediaMetadata, Boolean) -> MediaMetadata)? = null
+
+    fun setSystemMetadataTransform(transform: ((MediaItem?, MediaMetadata, Boolean) -> MediaMetadata)?) {
+        systemMetadataTransform = transform
+        invalidateState()
+    }
+
+    fun invalidateSystemMetadata() {
+        invalidateState()
+    }
 
     override fun getState(): State {
         val state = super.getState()
@@ -39,7 +52,16 @@ internal class PersistentTransportPlayer(player: Player) : ForwardingSimpleBaseP
                 commands.add(Player.COMMAND_SEEK_TO_PREVIOUS).add(Player.COMMAND_SEEK_TO_NEXT)
             }
         }
-        return state.buildUpon().setAvailableCommands(commands.build()).build()
+        val builder = state.buildUpon().setAvailableCommands(commands.build())
+        val mappedMetadata = systemMetadataTransform?.invoke(
+            delegate.currentMediaItem,
+            state.currentMetadata,
+            delegate.isPlaying,
+        )
+        if (mappedMetadata != null && mappedMetadata != state.currentMetadata) {
+            builder.setPlaylist(state.timeline, state.currentTracks, mappedMetadata)
+        }
+        return builder.build()
     }
 
     override fun handleSeek(mediaItemIndex: Int, positionMs: Long, seekCommand: Int): ListenableFuture<*> {

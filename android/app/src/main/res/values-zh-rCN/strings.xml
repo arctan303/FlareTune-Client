@@ -189,6 +189,11 @@
     <string name="ft_settings_section_playback">播放与歌词</string>
     <string name="ft_settings_translation_title">默认显示歌词译文</string>
     <string name="ft_settings_translation_desc">存在可用译文时默认展示在原词下方。</string>
+    <string name="ft_settings_bluetooth_lyrics_title">蓝牙歌词</string>
+    <string name="ft_settings_bluetooth_lyrics_desc">系统通知栏/锁屏控件也将同步显示当前歌词。</string>
+    <string name="ft_settings_bluetooth_lyrics_off">关闭</string>
+    <string name="ft_settings_bluetooth_lyrics_bluetooth_audio">仅蓝牙音频</string>
+    <string name="ft_settings_bluetooth_lyrics_always">始终开启</string>
     <string name="ft_settings_keep_screen_on_title">全屏播歌时防息屏</string>
     <string name="ft_settings_keep_screen_on_desc">在全屏播放页播放音乐期间保持屏幕常亮。</string>
     <string name="ft_settings_sleep_fade_note">定时休眠倒计时结束时，会先平缓降音再自动暂停。</string>

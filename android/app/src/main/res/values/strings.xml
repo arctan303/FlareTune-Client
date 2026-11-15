@@ -191,6 +191,11 @@
     <string name="ft_settings_section_playback">Playback &amp; lyrics</string>
     <string name="ft_settings_translation_title">Show lyric translations by default</string>
     <string name="ft_settings_translation_desc">Display translated lines beneath original lyrics when available.</string>
+    <string name="ft_settings_bluetooth_lyrics_title">Bluetooth lyrics</string>
+    <string name="ft_settings_bluetooth_lyrics_desc">System notification and lock screen media controls will also display the current lyric line.</string>
+    <string name="ft_settings_bluetooth_lyrics_off">Off</string>
+    <string name="ft_settings_bluetooth_lyrics_bluetooth_audio">Bluetooth audio only</string>
+    <string name="ft_settings_bluetooth_lyrics_always">Always on</string>
     <string name="ft_settings_keep_screen_on_title">Keep screen on while playing</string>
     <string name="ft_settings_keep_screen_on_desc">Prevent display sleep in the full-screen player.</string>
     <string name="ft_settings_sleep_fade_note">Sleep timer gently fades playback out before pausing.</string>

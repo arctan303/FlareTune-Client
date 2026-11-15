@@ -83,6 +83,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -99,6 +101,7 @@ import coil.request.ImageRequest
 import coil.request.SuccessResult
 import com.flaretune.client.R
 import com.flaretune.client.data.AppThemeMode
+import com.flaretune.client.data.BluetoothLyricsMode
 import com.flaretune.client.data.SavedAccountSummary
 import com.flaretune.client.playback.SleepTimerMode
 import com.flaretune.client.ui.theme.isFlareDarkTheme
@@ -1074,7 +1077,10 @@ internal fun SettingsScreen(
                     )
                 }
 
-                SettingsSectionCard(title = stringResource(R.string.ft_settings_section_playback)) {
+                SettingsSectionCard(
+                    title = stringResource(R.string.ft_settings_section_playback),
+                    tag = "ft_settings_section_playback",
+                ) {
                     SettingsSwitchRow(
                         icon = ClientIcons.Translate,
                         title = stringResource(R.string.ft_settings_translation_title),
@@ -1082,6 +1088,11 @@ internal fun SettingsScreen(
                         checked = state.translationEnabled,
                         onCheckedChange = actions::setTranslationEnabled,
                         tag = "settings_translation_switch",
+                    )
+                    SettingsDivider()
+                    SettingsBluetoothLyricsSelectorRow(
+                        selected = state.bluetoothLyricsMode,
+                        onSelect = actions::setBluetoothLyricsMode,
                     )
                     SettingsDivider()
                     SettingsSwitchRow(
@@ -1441,9 +1452,13 @@ private fun pluralStringOrEmptyHistory(count: Int): String? = if (count > 0) {
 @Composable
 private fun SettingsSectionCard(
     title: String,
+    tag: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(
+        modifier = if (tag != null) Modifier.testTag(tag) else Modifier,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         Text(
             title,
             style = MaterialTheme.typography.titleSmall,
@@ -1538,6 +1553,96 @@ private fun SettingsThemeSelectorRow(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsBluetoothLyricsSelectorRow(
+    selected: BluetoothLyricsMode,
+    onSelect: (BluetoothLyricsMode) -> Unit,
+) {
+    val options = remember {
+        listOf(
+            Triple(BluetoothLyricsMode.OFF, R.string.ft_settings_bluetooth_lyrics_off, "settings_bluetooth_lyrics_off"),
+            Triple(BluetoothLyricsMode.BLUETOOTH_AUDIO, R.string.ft_settings_bluetooth_lyrics_bluetooth_audio, "settings_bluetooth_lyrics_bluetooth_audio"),
+            Triple(BluetoothLyricsMode.ALWAYS, R.string.ft_settings_bluetooth_lyrics_always, "settings_bluetooth_lyrics_always"),
+        )
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .testTag("settings_bluetooth_lyrics"),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(
+                ClientIcons.Lyrics,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    stringResource(R.string.ft_settings_bluetooth_lyrics_title),
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    stringResource(R.string.ft_settings_bluetooth_lyrics_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f))
+                .padding(4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            options.forEach { (mode, labelRes, tag) ->
+                val isSelected = selected == mode
+                val containerBg = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent
+                val contentTint = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .clip(RoundedCornerShape(9.dp))
+                        .background(containerBg)
+                        .semantics { this.selected = isSelected }
+                        .clickable(role = Role.RadioButton) { onSelect(mode) }
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                        .testTag(tag),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        stringResource(labelRes),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                        color = contentTint,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (isSelected) {
+                        Spacer(Modifier.width(8.dp))
+                        Icon(
+                            ClientIcons.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = contentTint,
+                        )
+                    }
                 }
             }
         }

@@ -232,3 +232,11 @@ Song 新增默认兼容的 source、artists:List<SongArtist>、artistId、albumI
 - **首页“来自你的曲库”按语种比例取最新与歌单排序/批量选择（Batch C）**：
   - `FlareTune` 服务端 `/api/songs?counts=language` 及 `/api/songs?language=...` 扩展对未打标语种（`language IS NULL OR TRIM(language) = ''`）的计数与筛选支持（`untagged`）；客户端首页按各语种（含未打标）曲库占比分配展示名额，并在每个语种桶内按入库最新顺序（`sort=desc`）拉取合并，兼容未升级服务端做降级合并。
   - 歌单库（`PlaylistSortMode`：自定义排序 / 最近更新 / 名称 / 曲目数）与歌单内歌曲排序（`PlaylistSongSortMode`：自定义 / 标题 / 歌手 / 最近加入及升序降序快捷键）持久化至本机轻量存储；歌单详情、搜索结果、全部歌曲与专辑详情接入统一多选态（`selectedSongIds`）与批量底部操作（下一首播放、加入队列、加入歌单、批量移除）。
+
+## 蓝牙歌词与系统封面缓存契约（2026-11-15 新增）
+
+对应任务计划见 [蓝牙歌词与切歌封面缓存任务](tasks/android-bluetooth-lyrics-cover-20261115.md)：
+
+- **蓝牙歌词三态偏好与驱动**：`TranslationPreferences` 扩展 `BluetoothLyricsMode`（`OFF` 默认 / `BLUETOOTH_AUDIO` / `ALWAYS`）持久化至 `playback_display_v1`，经 `ClientUiState.bluetoothLyricsMode` 与 `ClientActions.setBluetoothLyricsMode(mode)` 暴露；`PlaybackRuntime` 为当前 `ActiveConnection` 托管共享 `LyricsCoordinator`，供 `ClientViewModel` 与 `PlaybackService` 共同读取同一份歌词状态并在息屏/后台按播放进度同步行索引。
+- **零污染系统元数据映射**：`Song.item()` 与 `toSingleNextBundle()` 在 `MediaMetadata.extras` 中显式保留真实曲目字段，使 `MediaItem.song()` 与 `PlayedTrackTracker` 等内部消费者不受系统输出层覆写影响；`PlaybackService` 仅在满足模式条件（含 `AudioManager` 蓝牙音频输出设备检测）、处于播放态且当前行文本非空时，在 `MediaSession` 暴露层覆写 `title = activeLine.text`、`artist = "${song.title} - ${song.artist}"`（无歌手则仅 `song.title`），仅随整行切换刷新并自动回退。
+- **`CoilBitmapLoader` 共享缓存与邻曲预热**：`PlaybackService` 使用接入 `PlaybackRuntime.imageLoader` 的自定义 `CoilBitmapLoader`（取代隔离的 `CacheBitmapLoader(DataSourceBitmapLoader)`），命中 Coil 内存缓存时同步返回 `Futures.immediateFuture(bitmap)`，切歌及队列拓扑变更时异步预热当前、`previousQueueIndex` 与 `nextQueueIndex` 封面（严格保留现有按身份隔离磁盘缓存）。

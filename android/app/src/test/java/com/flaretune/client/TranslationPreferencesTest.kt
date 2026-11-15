@@ -3,6 +3,7 @@ package com.flaretune.client
 import android.content.Context
 import com.flaretune.client.data.AndroidTranslationPreferences
 import com.flaretune.client.data.AppThemeMode
+import com.flaretune.client.data.BluetoothLyricsMode
 import com.flaretune.client.ui.ClientUiState
 import org.junit.Assert.*
 import org.junit.Test
@@ -74,5 +75,28 @@ class TranslationPreferencesTest {
         assertEquals(AppThemeMode.LIGHT, AndroidTranslationPreferences(context).readThemeMode())
         first.writeThemeMode(AppThemeMode.SYSTEM)
         assertEquals(AppThemeMode.SYSTEM, AndroidTranslationPreferences(context).readThemeMode())
+    }
+
+    @Test fun bluetoothLyricsModeDefaultsToOffPersistsAndHandlesCorruptValues() {
+        val context = RuntimeEnvironment.getApplication()
+        val backing = context.getSharedPreferences("playback_display_v1", Context.MODE_PRIVATE)
+        backing.edit().clear().commit()
+        val first = AndroidTranslationPreferences(context)
+        assertEquals(BluetoothLyricsMode.OFF, first.readBluetoothLyricsMode())
+        assertTrue(backing.all.isEmpty())
+        assertEquals(BluetoothLyricsMode.OFF, ClientUiState().bluetoothLyricsMode)
+
+        first.writeBluetoothLyricsMode(BluetoothLyricsMode.BLUETOOTH_AUDIO)
+        assertEquals(BluetoothLyricsMode.BLUETOOTH_AUDIO, AndroidTranslationPreferences(context).readBluetoothLyricsMode())
+        assertEquals("bluetooth_audio", backing.getString("bluetooth_lyrics_mode", null))
+
+        first.writeBluetoothLyricsMode(BluetoothLyricsMode.ALWAYS)
+        assertEquals(BluetoothLyricsMode.ALWAYS, AndroidTranslationPreferences(context).readBluetoothLyricsMode())
+
+        first.writeBluetoothLyricsMode(BluetoothLyricsMode.OFF)
+        assertEquals(BluetoothLyricsMode.OFF, AndroidTranslationPreferences(context).readBluetoothLyricsMode())
+
+        backing.edit().putString("bluetooth_lyrics_mode", "CORRUPT_VALUE").commit()
+        assertEquals(BluetoothLyricsMode.OFF, AndroidTranslationPreferences(context).readBluetoothLyricsMode())
     }
 }

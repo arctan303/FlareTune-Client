@@ -44,9 +44,11 @@ class ClientViewModel(
     private var translationEnabled = runCatching { translationPreferences?.read() ?: false }.getOrDefault(false)
     private var keepScreenOnEnabled = runCatching { translationPreferences?.readKeepScreenOn() ?: true }.getOrDefault(true)
     private var themeMode = runCatching { translationPreferences?.readThemeMode() ?: AppThemeMode.SYSTEM }.getOrDefault(AppThemeMode.SYSTEM)
+    private var bluetoothLyricsMode = runCatching { translationPreferences?.readBluetoothLyricsMode() ?: BluetoothLyricsMode.OFF }.getOrDefault(BluetoothLyricsMode.OFF)
     private val preferenceMutex = Mutex()
     private var keepScreenRevision = 0L
     private var themeModeRevision = 0L
+    private var bluetoothLyricsRevision = 0L
     private var addingAccount = false
     private val mutable = MutableStateFlow(freshUi(instanceUrl = connections.lastOrigin, translationEnabled = translationEnabled, playback = PlaybackSnapshot(volume = preferredVolume)))
     val state: StateFlow<ClientUiState> = mutable
@@ -54,7 +56,8 @@ class ClientViewModel(
     val playbackPositionMs: StateFlow<Long> = mutablePlaybackPositionMs
     val sleepTimerFlow: StateFlow<SleepTimerState> get() = player.sleepTimerFlow
     val imageLoader: ImageLoader? get() = player.imageLoader
-    private val lyrics = LyricsCoordinator(viewModelScope, ioDispatcher)
+    private val ownsLyricsCoordinator = player.sharedLyricsCoordinator == null
+    private val lyrics: LyricsCoordinator = player.sharedLyricsCoordinator ?: LyricsCoordinator(viewModelScope, ioDispatcher)
     private var identity = 0L
     private var splashNonce = 0
     private val searchMutex = Mutex()
@@ -166,6 +169,7 @@ class ClientViewModel(
             splashNonce = splashNonce,
             keepScreenOnEnabled = keepScreenOnEnabled,
             themeMode = themeMode,
+            bluetoothLyricsMode = bluetoothLyricsMode,
         )
     }
 
@@ -272,6 +276,7 @@ class ClientViewModel(
     )
 
     init {
+        player.setBluetoothLyricsMode(bluetoothLyricsMode)
         viewModelScope.launch {
             state.map(::navigationStateSignature).distinctUntilChanged().collect { saveNavigationState() }
         }
@@ -630,6 +635,25 @@ class ClientViewModel(
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 if (revision == themeModeRevision) mutable.value = mutable.value.copy(notice = ClientNotice.STORAGE_FAILED)
+            }
+        }
+    }
+
+    override fun setBluetoothLyricsMode(mode: BluetoothLyricsMode) {
+        val revision = ++bluetoothLyricsRevision
+        viewModelScope.launch {
+            try {
+                withContext(ioDispatcher) { preferenceMutex.withLock {
+                    if (revision == bluetoothLyricsRevision) translationPreferences?.writeBluetoothLyricsMode(mode)
+                } }
+                if (revision == bluetoothLyricsRevision) {
+                    bluetoothLyricsMode = mode
+                    player.setBluetoothLyricsMode(mode)
+                    mutable.value = mutable.value.copy(bluetoothLyricsMode = mode)
+                }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (revision == bluetoothLyricsRevision) mutable.value = mutable.value.copy(notice = ClientNotice.STORAGE_FAILED)
             }
         }
     }
@@ -3007,7 +3031,7 @@ class ClientViewModel(
         player.setUiVisible(visible)
         if (visible && current() != null && discoveryCheckedDate != today()) loadDiscovery(false)
     }
-    override fun onCleared() { lyrics.clear(); player.release() }
+    override fun onCleared() { if (ownsLyricsCoordinator) lyrics.clear(); player.release() }
 
     private companion object {
         val languages = setOf("all", "zh", "en", "ja", "ko", "instrumental", "ru", "es", "fr", "de",

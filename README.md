@@ -35,6 +35,7 @@ FlareTune 官方音乐客户端，专注于音乐播放体验。
 - [首版需求与范围](docs/Product-Spec.md)
 - [本轮界面实现、验证与待验事项](docs/tasks/android-listening-ui-20261112.md)
 - [第二轮体验与队列优化规划](docs/tasks/android-ux-round2-20261115.md)
+- [蓝牙歌词与切歌封面缓存任务](docs/tasks/android-bluetooth-lyrics-cover-20261115.md)
 - [第一轮功能基础](docs/tasks/android-listening-foundation-20261112.md)
 
 ## 设计研究

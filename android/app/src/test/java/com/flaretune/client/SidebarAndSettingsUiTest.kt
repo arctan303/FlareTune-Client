@@ -3,12 +3,16 @@ package com.flaretune.client
 import android.app.Application
 import android.os.SystemClock
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -17,8 +21,11 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.height
 import com.flaretune.client.data.AppThemeMode
+import com.flaretune.client.data.BluetoothLyricsMode
 import com.flaretune.client.data.SavedAccountSummary
 import com.flaretune.client.model.Album
 import com.flaretune.client.model.PlayStats
@@ -100,6 +107,7 @@ class SidebarAndSettingsUiTest {
         var sleepCancelledCalls = 0
         var keepScreenOnSet: Boolean? = null
         var themeModeSet: AppThemeMode? = null
+        var bluetoothLyricsModeSet: BluetoothLyricsMode? = null
         var translationSet: Boolean? = null
         var cacheClearCalls = 0
         var refreshCalls = 0
@@ -148,6 +156,10 @@ class SidebarAndSettingsUiTest {
 
         override fun setThemeMode(mode: AppThemeMode) {
             themeModeSet = mode
+        }
+
+        override fun setBluetoothLyricsMode(mode: BluetoothLyricsMode) {
+            bluetoothLyricsModeSet = mode
         }
 
         override fun setTranslationEnabled(enabled: Boolean) {
@@ -603,5 +615,73 @@ class SidebarAndSettingsUiTest {
             "Settings scroll viewport must extend behind floating dock (scrollBottom=${scrollBounds.bottom}, dockTop=${dockBounds.top})",
             scrollBounds.bottom > dockBounds.top,
         )
+    }
+
+    @Test
+    fun settingsScreenBluetoothLyricsSelectorSupportsThreeStatesAnd200PercentFontScale() {
+        val actions = FakeSidebarActions()
+        var currentMode by mutableStateOf(BluetoothLyricsMode.OFF)
+        val baseState = ClientUiState(
+            screen = ClientScreen.LIBRARY,
+            destination = MainDestination.HOME,
+            instanceUrl = "https://music.example.com",
+            username = "alice",
+            accountName = "Alice",
+            savedAccounts = accounts,
+            songs = listOf(track),
+            playback = PlaybackSnapshot(track, listOf(track), 0, playing = true),
+        )
+        rule.setContent {
+            val baseDensity = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(baseDensity.density, fontScale = 2.0f)) {
+                FlareTuneTheme {
+                    ClientApp(
+                        state = baseState.copy(bluetoothLyricsMode = currentMode),
+                        actions = object : ClientActions by actions {
+                            override fun setBluetoothLyricsMode(mode: BluetoothLyricsMode) {
+                                actions.setBluetoothLyricsMode(mode)
+                                currentMode = mode
+                            }
+                        },
+                    )
+                }
+            }
+        }
+
+        rule.onNodeWithTag("account_menu").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("drawer_settings").performClick()
+        rule.waitForIdle()
+
+        rule.onNodeWithTag("ft_settings_section_playback").performScrollTo()
+        rule.onNodeWithTag("settings_bluetooth_lyrics_off").performScrollTo().assertIsDisplayed().assertIsSelected()
+        rule.onNodeWithTag("settings_bluetooth_lyrics_bluetooth_audio").performScrollTo().assertIsDisplayed().assertIsNotSelected()
+        rule.onNodeWithTag("settings_bluetooth_lyrics_always").performScrollTo().assertIsDisplayed().assertIsNotSelected()
+
+        val res = rule.activity.resources
+        rule.onNodeWithText(res.getString(R.string.ft_settings_bluetooth_lyrics_title)).assertIsDisplayed()
+        rule.onNodeWithText(res.getString(R.string.ft_settings_bluetooth_lyrics_desc)).assertIsDisplayed()
+        rule.onNodeWithText(res.getString(R.string.ft_settings_bluetooth_lyrics_off)).assertIsDisplayed()
+        rule.onNodeWithText(res.getString(R.string.ft_settings_bluetooth_lyrics_bluetooth_audio)).assertIsDisplayed()
+        rule.onNodeWithText(res.getString(R.string.ft_settings_bluetooth_lyrics_always)).assertIsDisplayed()
+
+        listOf(
+            "settings_bluetooth_lyrics_off",
+            "settings_bluetooth_lyrics_bluetooth_audio",
+            "settings_bluetooth_lyrics_always",
+        ).forEach { tag ->
+            val bounds = rule.onNodeWithTag(tag).getBoundsInRoot()
+            assertTrue("Expected $tag height >= 48.dp at 200% fontScale, was ${bounds.height}", bounds.height >= 48.dp)
+        }
+
+        rule.onNodeWithTag("settings_bluetooth_lyrics_bluetooth_audio").performScrollTo().performClick()
+        rule.waitForIdle()
+        assertEquals(BluetoothLyricsMode.BLUETOOTH_AUDIO, actions.bluetoothLyricsModeSet)
+        rule.onNodeWithTag("settings_bluetooth_lyrics_bluetooth_audio").assertIsSelected()
+
+        rule.onNodeWithTag("settings_bluetooth_lyrics_always").performScrollTo().performClick()
+        rule.waitForIdle()
+        assertEquals(BluetoothLyricsMode.ALWAYS, actions.bluetoothLyricsModeSet)
+        rule.onNodeWithTag("settings_bluetooth_lyrics_always").assertIsSelected()
     }
 }

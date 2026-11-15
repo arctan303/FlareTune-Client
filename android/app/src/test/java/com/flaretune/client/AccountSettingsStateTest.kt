@@ -408,6 +408,28 @@ class AccountSettingsStateTest {
         } finally { f.close() }
     }
 
+    @Test fun bluetoothLyricsModePersistsSyncsToGatewayAndRollsBackOnStorageFailure() = runTest {
+        val f = Fixture(this)
+        try {
+            advanceUntilIdle()
+            assertEquals(BluetoothLyricsMode.OFF, f.model.state.value.bluetoothLyricsMode)
+            assertEquals(BluetoothLyricsMode.OFF, f.player.bluetoothLyricsModeSet)
+
+            f.model.setBluetoothLyricsMode(BluetoothLyricsMode.BLUETOOTH_AUDIO)
+            advanceUntilIdle()
+            assertEquals(BluetoothLyricsMode.BLUETOOTH_AUDIO, f.model.state.value.bluetoothLyricsMode)
+            assertEquals(BluetoothLyricsMode.BLUETOOTH_AUDIO, f.preferences.bluetoothLyricsMode)
+            assertEquals(BluetoothLyricsMode.BLUETOOTH_AUDIO, f.player.bluetoothLyricsModeSet)
+
+            f.preferences.failWrite = true
+            f.model.setBluetoothLyricsMode(BluetoothLyricsMode.ALWAYS)
+            advanceUntilIdle()
+            assertEquals(BluetoothLyricsMode.BLUETOOTH_AUDIO, f.model.state.value.bluetoothLyricsMode)
+            assertEquals(BluetoothLyricsMode.BLUETOOTH_AUDIO, f.player.bluetoothLyricsModeSet)
+            assertEquals(ClientNotice.STORAGE_FAILED, f.model.state.value.notice)
+        } finally { f.close() }
+    }
+
     private class Fixture(
         scope: TestScope,
         coverImageProcessor: CoverImageProcessor? = null,
@@ -438,6 +460,7 @@ private fun accountSong(id: String) = Song(id, id, audioUrl = "https://music.exa
 private class DevicePreferences : TranslationPreferences {
     var keep = true
     var themeMode = AppThemeMode.SYSTEM
+    var bluetoothLyricsMode = BluetoothLyricsMode.OFF
     var failWrite = false
     override fun read() = false
     override fun write(enabled: Boolean) {}
@@ -445,6 +468,8 @@ private class DevicePreferences : TranslationPreferences {
     override fun writeKeepScreenOn(enabled: Boolean) { if (failWrite) throw ApiFailure(Failure.STORAGE); keep = enabled }
     override fun readThemeMode() = themeMode
     override fun writeThemeMode(mode: AppThemeMode) { if (failWrite) throw ApiFailure(Failure.STORAGE); themeMode = mode }
+    override fun readBluetoothLyricsMode() = bluetoothLyricsMode
+    override fun writeBluetoothLyricsMode(mode: BluetoothLyricsMode) { if (failWrite) throw ApiFailure(Failure.STORAGE); bluetoothLyricsMode = mode }
 }
 
 private class AccountConnections : Connections {
@@ -544,6 +569,7 @@ private class AccountPlayer(scope: TestScope) : PlaybackGateway {
     private val timer = PlaybackSleepTimer()
     override val sleepTimerFlow get() = timer.state
     var gain = .7f
+    var bluetoothLyricsModeSet: BluetoothLyricsMode? = null
     var connectionGate: CompletableDeferred<Unit>? = null
     init {
         timer.attach(this, scope.backgroundScope, object : PlaybackSleepTimer.Target {
@@ -572,5 +598,6 @@ private class AccountPlayer(scope: TestScope) : PlaybackGateway {
     override fun cycleRepeat() {}
     override fun select(index: Int) {}
     override fun retry() {}
+    override fun setBluetoothLyricsMode(mode: BluetoothLyricsMode) { bluetoothLyricsModeSet = mode }
     override fun release() {}
 }

@@ -7,6 +7,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.flaretune.client.model.*
 import com.flaretune.client.data.AppThemeMode
+import com.flaretune.client.data.BluetoothLyricsMode
 import com.flaretune.client.data.PlayedCollectionType
 import com.flaretune.client.data.SearchEntity
 import com.flaretune.client.data.SavedAccountSummary
@@ -49,6 +50,7 @@ data class ClientUiState(
     val splashNonce: Int = 0,
     val keepScreenOnEnabled: Boolean = true,
     val themeMode: AppThemeMode = AppThemeMode.SYSTEM,
+    val bluetoothLyricsMode: BluetoothLyricsMode = BluetoothLyricsMode.OFF,
     val imageCacheClearResult: ImageCacheClearResult? = null,
     val busy: Boolean = false,
     val notice: ClientNotice? = null,
@@ -239,6 +241,7 @@ interface ClientActions {
     fun cancelSleepTimer() {}
     fun setKeepScreenOnEnabled(enabled: Boolean) {}
     fun setThemeMode(mode: AppThemeMode) {}
+    fun setBluetoothLyricsMode(mode: BluetoothLyricsMode) {}
     fun clearImageCache() {}
     fun updateDisplayName(displayName: String) {}
     fun setAccountAvatar(sourceUri: String) {}

@@ -2,6 +2,8 @@ package com.flaretune.client.playback
 
 import coil.ImageLoader
 import com.flaretune.client.data.ActiveConnection
+import com.flaretune.client.data.BluetoothLyricsMode
+import com.flaretune.client.data.LyricsCoordinator
 import com.flaretune.client.model.Song
 import com.flaretune.client.ui.PlaybackSnapshot
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -14,6 +16,8 @@ interface PlaybackGateway {
     val state: StateFlow<PlaybackSnapshot>
     val positionMsFlow: Flow<Long> get() = state.map { it.positionMs }.distinctUntilChanged()
     val sleepTimerFlow: StateFlow<SleepTimerState> get() = inactiveSleepTimer
+    val sharedLyricsCoordinator: LyricsCoordinator? get() = null
+    fun setBluetoothLyricsMode(mode: BluetoothLyricsMode) {}
     fun setSleepTimer(minutes: Int) {}
     fun setSleepTimerEndOfTrack() {}
     fun setSleepTimerFinishCurrentTrack(enabled: Boolean) {

@@ -14,6 +14,8 @@ import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
 import coil.ImageLoader
 import com.flaretune.client.data.ActiveConnection
+import com.flaretune.client.data.BluetoothLyricsMode
+import com.flaretune.client.data.LyricsCoordinator
 import com.flaretune.client.model.Song
 import com.flaretune.client.model.SongRelations
 import com.flaretune.client.model.relations
@@ -42,6 +44,10 @@ class AndroidPlaybackGateway(private val context: Context, private val runtime: 
     private val livePositionMs = MutableStateFlow(0L)
     override val positionMsFlow: StateFlow<Long> = livePositionMs
     override val sleepTimerFlow: StateFlow<SleepTimerState> get() = runtime.sleepTimer.state
+    override val sharedLyricsCoordinator: LyricsCoordinator get() = runtime.lyricsCoordinator
+    override fun setBluetoothLyricsMode(mode: BluetoothLyricsMode) {
+        runtime.setBluetoothLyricsMode(mode)
+    }
     override fun setSleepTimer(minutes: Int) {
         if (controller != null && runtime.connection?.network?.isActive == true) runtime.sleepTimer.setSleepTimer(minutes)
     }
@@ -201,10 +207,15 @@ class AndroidPlaybackGateway(private val context: Context, private val runtime: 
     override fun release() { disconnect(); scope.cancel() }
 }
 
+internal const val EXTRA_ORIGINAL_TITLE = "original_title"
+internal const val EXTRA_ORIGINAL_ARTIST = "original_artist"
+
 internal fun Song.item(): MediaItem = MediaItem.Builder().setMediaId(id).setUri(audioUrl)
     .setMediaMetadata(MediaMetadata.Builder().setTitle(title).setArtist(artist).setAlbumTitle(album)
         .setArtworkUri(coverUrl?.let(Uri::parse))
         .setExtras(Bundle().apply {
+            putString(EXTRA_ORIGINAL_TITLE, title)
+            putString(EXTRA_ORIGINAL_ARTIST, artist)
             putString("audio_url", audioUrl); putDouble("duration_seconds", durationSeconds); putString("language", language)
             putString("song_relations_v1", JSONObject().putSongRelations(id, relations).toString())
         })
@@ -215,9 +226,20 @@ internal fun MediaItem.song(): Song {
         mediaMetadata.extras?.getString("song_relations_v1")?.takeIf { it.length <= 64 * 1024 }
             ?.let { JSONObject(it).readSongRelations(mediaId) } ?: SongRelations()
     } catch (_: Exception) { SongRelations() }
-    return Song(mediaId, mediaMetadata.title?.toString() ?: mediaId,
-        mediaMetadata.artist?.toString() ?: "", mediaMetadata.albumTitle?.toString() ?: "",
-        mediaMetadata.extras?.getDouble("duration_seconds") ?: 0.0,
-        mediaMetadata.extras?.getString("audio_url") ?: "", mediaMetadata.artworkUri?.toString(),
-        mediaMetadata.extras?.getString("language"), links.source, links.artists, links.artistId, links.albumId)
+    val extras = mediaMetadata.extras
+    val rawTitle = if (extras?.containsKey(EXTRA_ORIGINAL_TITLE) == true) {
+        extras.getString(EXTRA_ORIGINAL_TITLE)?.takeIf { it.isNotEmpty() } ?: mediaMetadata.title?.toString() ?: mediaId
+    } else {
+        mediaMetadata.title?.toString() ?: mediaId
+    }
+    val rawArtist = if (extras?.containsKey(EXTRA_ORIGINAL_ARTIST) == true) {
+        extras.getString(EXTRA_ORIGINAL_ARTIST) ?: ""
+    } else {
+        mediaMetadata.artist?.toString() ?: ""
+    }
+    return Song(mediaId, rawTitle,
+        rawArtist, mediaMetadata.albumTitle?.toString() ?: "",
+        extras?.getDouble("duration_seconds") ?: 0.0,
+        extras?.getString("audio_url") ?: "", mediaMetadata.artworkUri?.toString(),
+        extras?.getString("language"), links.source, links.artists, links.artistId, links.albumId)
 }

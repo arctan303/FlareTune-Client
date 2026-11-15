@@ -114,6 +114,8 @@ internal fun Song.toSingleNextBundle(): Bundle = Bundle().apply {
     putString("id", id)
     putString("title", title)
     putString("artist", artist)
+    putString(EXTRA_ORIGINAL_TITLE, title)
+    putString(EXTRA_ORIGINAL_ARTIST, artist)
     putString("album", album)
     putDouble("duration_seconds", durationSeconds)
     putString("audio_url", audioUrl)
@@ -131,10 +133,20 @@ internal fun Bundle.toSingleNextSong(): Song? {
     } catch (_: Exception) {
         SongRelations()
     }
+    val rawTitle = if (containsKey(EXTRA_ORIGINAL_TITLE)) {
+        getString(EXTRA_ORIGINAL_TITLE)?.takeIf { it.isNotEmpty() } ?: getString("title") ?: id
+    } else {
+        getString("title") ?: id
+    }
+    val rawArtist = if (containsKey(EXTRA_ORIGINAL_ARTIST)) {
+        getString(EXTRA_ORIGINAL_ARTIST) ?: ""
+    } else {
+        getString("artist") ?: ""
+    }
     return Song(
         id = id,
-        title = getString("title") ?: id,
-        artist = getString("artist") ?: "",
+        title = rawTitle,
+        artist = rawArtist,
         album = getString("album") ?: "",
         durationSeconds = getDouble("duration_seconds", 0.0),
         audioUrl = audioUrl,

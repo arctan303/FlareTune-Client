@@ -4,6 +4,8 @@ import android.content.Context
 
 enum class AppThemeMode { SYSTEM, LIGHT, DARK }
 
+enum class BluetoothLyricsMode { OFF, BLUETOOTH_AUDIO, ALWAYS }
+
 /** Device display and player gain preferences. Never changes server AI or system output volume. */
 interface TranslationPreferences {
     fun read(): Boolean
@@ -12,6 +14,8 @@ interface TranslationPreferences {
     fun writeKeepScreenOn(enabled: Boolean) {}
     fun readThemeMode(): AppThemeMode = AppThemeMode.SYSTEM
     fun writeThemeMode(mode: AppThemeMode) {}
+    fun readBluetoothLyricsMode(): BluetoothLyricsMode = BluetoothLyricsMode.OFF
+    fun writeBluetoothLyricsMode(mode: BluetoothLyricsMode) {}
     fun readVolume(): Float = 1f
     fun writeVolume(volume: Float) {}
 }
@@ -48,6 +52,25 @@ class AndroidTranslationPreferences(context: Context) : TranslationPreferences {
         }
         try {
             if (!preferences.edit().putString("theme_mode", raw).commit()) throw ApiFailure(Failure.STORAGE)
+        } catch (_: Exception) { throw ApiFailure(Failure.STORAGE) }
+    }
+
+    override fun readBluetoothLyricsMode(): BluetoothLyricsMode = try {
+        when (preferences.getString("bluetooth_lyrics_mode", "off")) {
+            "bluetooth_audio" -> BluetoothLyricsMode.BLUETOOTH_AUDIO
+            "always" -> BluetoothLyricsMode.ALWAYS
+            else -> BluetoothLyricsMode.OFF
+        }
+    } catch (_: Exception) { throw ApiFailure(Failure.STORAGE) }
+
+    override fun writeBluetoothLyricsMode(mode: BluetoothLyricsMode) {
+        val raw = when (mode) {
+            BluetoothLyricsMode.OFF -> "off"
+            BluetoothLyricsMode.BLUETOOTH_AUDIO -> "bluetooth_audio"
+            BluetoothLyricsMode.ALWAYS -> "always"
+        }
+        try {
+            if (!preferences.edit().putString("bluetooth_lyrics_mode", raw).commit()) throw ApiFailure(Failure.STORAGE)
         } catch (_: Exception) { throw ApiFailure(Failure.STORAGE) }
     }
 
