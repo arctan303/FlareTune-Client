@@ -9,7 +9,6 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandHorizontally
@@ -4140,16 +4139,11 @@ private fun ShellMiniPlayer(
             Modifier.fillMaxSize().padding(start = 8.dp, end = if (wideStyle) 8.dp else 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Only the inner song card scrolls horizontally between tracks; outer dock and controls stay anchored.
-            val cardCornerDp = if (wideStyle) 14.dp else 11.dp
-            val cardShape = RoundedCornerShape(cardCornerDp)
-            val cardBg = if (dark) Color(0xFF24262D) else Color(0xFFFFFFFF)
-            val cardBorder = if (dark) Color.White.copy(alpha = 0.09f) else Color.Black.copy(alpha = 0.08f)
+            // Only the inner song slot scrolls horizontally between tracks; outer dock and controls stay anchored without an extra card frame.
             val cardArtSize = if (wideStyle) 48.dp else 42.dp
             val cardFontOverflowScale = if (density.fontScale > 1.3f) ((density.fontScale - 1f).coerceAtMost(1f)) else 0f
             val cardOuterVerticalPad = lerp(if (wideStyle) 6f else 4f, if (wideStyle) 3f else 2f, cardFontOverflowScale).dp
             val cardInnerVerticalPad = lerp(if (wideStyle) 5f else 4f, if (wideStyle) 2.5f else 2f, cardFontOverflowScale).dp
-            val cardMoving = trackCarousel.isDragging || trackCarousel.activeSlide != null
             TrackCarouselViewport(
                 controller = trackCarousel,
                 songId = song.id,
@@ -4163,35 +4157,13 @@ private fun ShellMiniPlayer(
                 clipVerticalAllowance = 3.dp,
                 clipWhenIdle = true,
                 contentAlignment = Alignment.CenterStart,
-            ) { slot, isActiveSlot, isPreviewSlot ->
+            ) { slot, isActiveSlot, _ ->
                 key(slot.song.id) {
-                    val showCardChrome = isPreviewSlot || cardMoving
-                    val cardChromeAlpha by animateFloatAsState(
-                        targetValue = if (showCardChrome) 1f else 0f,
-                        animationSpec = tween(durationMillis = if (showCardChrome) 90 else 180),
-                        label = "mini_player_card_chrome",
-                    )
-                    val chromeModifier = if (cardChromeAlpha > 0.01f) {
-                        Modifier
-                            .shadow(
-                                elevation = (3f * cardChromeAlpha).dp,
-                                shape = cardShape,
-                                clip = false,
-                                ambientColor = Color.Black.copy(alpha = (if (dark) 0.45f else 0.14f) * cardChromeAlpha),
-                                spotColor = Color.Black.copy(alpha = (if (dark) 0.50f else 0.16f) * cardChromeAlpha),
-                            )
-                            .clip(cardShape)
-                            .background(cardBg.copy(alpha = cardChromeAlpha))
-                            .border(0.75.dp, cardBorder.copy(alpha = cardBorder.alpha * cardChromeAlpha), cardShape)
-                    } else {
-                        Modifier
-                    }
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = cardOuterVerticalPad)
                             .testTag(if (isActiveSlot) "mini_player_card_current" else "mini_player_card_preview_${slot.song.id}")
-                            .then(chromeModifier)
                             .padding(
                                 horizontal = if (wideStyle) 10.dp else 8.dp,
                                 vertical = cardInnerVerticalPad,
