@@ -1461,6 +1461,87 @@ class ClientUiTest {
             SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "Playing"),
         )
     }
+
+    @Test
+    @Config(qualifiers = "zh-rCN-w390dp-h844dp-mdpi")
+    fun compactDragDownClosesPlayerWithoutBlockingBackgroundOrBlankingMiniPlayer() {
+        render(fixture(MainDestination.HOME))
+        rule.onNodeWithTag("mini_player").assertIsDisplayed()
+        // Open from mini player after prewarmed composition (sheetVisible was false initially).
+        rule.onNodeWithTag("mini_player").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("player_mode").assertIsDisplayed()
+
+        // Drag down anywhere on the player body (sheetNestedScroll) to close.
+        rule.onNodeWithTag("player_scroll").performTouchInput {
+            swipeDown(startY = centerY, endY = bottom - 12f)
+        }
+        rule.waitForIdle()
+
+        // Sheet should be fully closed: player_mode unmounted, mini player info & controls visible, background clickable.
+        rule.onNodeWithTag("player_mode").assertDoesNotExist()
+        rule.onNodeWithTag("mini_player").assertIsDisplayed()
+        rule.onAllNodesWithText(songs[0].title).onFirst().assertIsDisplayed()
+        rule.onNodeWithTag("mini_play").performClick()
+        rule.runOnIdle { assertEquals(1, actions.toggles) }
+        rule.onNodeWithTag("nav_discover").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("discover_page").assertIsDisplayed()
+
+        // Reopen and drag down via ClassicDragHandleHeader (player_close) as well.
+        rule.onNodeWithTag("mini_player").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("player_mode").assertIsDisplayed()
+        rule.onNodeWithTag("player_close", useUnmergedTree = true).performTouchInput {
+            swipeDown(startY = centerY, endY = centerY + 520f)
+        }
+        rule.waitForIdle()
+        rule.onNodeWithTag("player_mode").assertDoesNotExist()
+        rule.onNodeWithTag("mini_play").performClick()
+        rule.runOnIdle { assertEquals(2, actions.toggles) }
+        rule.onNodeWithTag("nav_home").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("home_page").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "zh-rCN-w390dp-h844dp-mdpi")
+    fun prewarmedTransitionStripAppearsWhenSheetBecomesVisibleAtZeroProgress() {
+        val snap = fixture()
+        var sheetVisible by mutableStateOf(false)
+        val progress = mutableFloatStateOf(0f)
+        val registry = PlayerTransitionRegistry().apply {
+            miniBarBounds = androidx.compose.ui.geometry.Rect(0f, 1800f, 1080f, 1992f)
+            miniArtworkBounds = androidx.compose.ui.geometry.Rect(36f, 1830f, 168f, 1962f)
+            miniBarSurfaceColor = androidx.compose.ui.graphics.Color(0xFFF3F4F7)
+        }
+        rule.setContent {
+            FlareTuneTheme {
+                NowPlayingScreen(
+                    state = snap.playback,
+                    lyricState = snap.lyricState,
+                    translationEnabled = false,
+                    actions = actions,
+                    imageLoader = null,
+                    onClose = {},
+                    onQueue = {},
+                    expandProgress = { progress.floatValue },
+                    isWideTransition = false,
+                    onCollapseDragStart = {},
+                    onCollapseDragDelta = { 0f },
+                    onCollapseDragEnd = {},
+                    transitionRegistry = registry,
+                    sheetVisible = sheetVisible,
+                )
+            }
+        }
+        rule.waitForIdle()
+        rule.onNodeWithTag("player_mini_transition_strip").assertDoesNotExist()
+
+        sheetVisible = true
+        rule.waitForIdle()
+        rule.onNodeWithTag("player_mini_transition_strip").assertExists()
+    }
 }
 
 private class RecordingActions : ClientActions {

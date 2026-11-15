@@ -436,19 +436,30 @@ internal fun NowPlayingScreen(
         }
     }
 
+    val latestExpandProgress by rememberUpdatedState(expandProgress)
+    val latestCollapseDragStart by rememberUpdatedState(onCollapseDragStart)
+    val latestCollapseDragDelta by rememberUpdatedState(onCollapseDragDelta)
+    val latestSettleSheet by rememberUpdatedState(settleSheet)
+    LaunchedEffect(sheetVisible) {
+        if (!sheetVisible && latestExpandProgress() <= 0.001f) {
+            draggingDismiss = false
+            nestedCollapseActive = false
+        }
+    }
+
     // Page-level vertical drag-to-dismiss hook (unified with single sheet expand progress when provided).
     val sheetNestedScroll = remember(unifiedMode) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 if (source != NestedScrollSource.UserInput || (!unifiedMode && closingSheet)) return Offset.Zero
                 if (unifiedMode) {
-                    if (nestedCollapseActive || expandProgress() < 0.999f) {
+                    if (nestedCollapseActive || latestExpandProgress() < 0.999f) {
                         if (!nestedCollapseActive) {
                             nestedCollapseActive = true
                             draggingDismiss = true
-                            onCollapseDragStart?.invoke()
+                            latestCollapseDragStart?.invoke()
                         }
-                        val consumedY = onCollapseDragDelta.invoke(available.y)
+                        val consumedY = latestCollapseDragDelta?.invoke(available.y) ?: 0f
                         return Offset(0f, consumedY)
                     }
                     return Offset.Zero
@@ -472,9 +483,9 @@ internal fun NowPlayingScreen(
                         if (!nestedCollapseActive) {
                             nestedCollapseActive = true
                             draggingDismiss = true
-                            onCollapseDragStart?.invoke()
+                            latestCollapseDragStart?.invoke()
                         }
-                        val consumedY = onCollapseDragDelta.invoke(available.y)
+                        val consumedY = latestCollapseDragDelta?.invoke(available.y) ?: 0f
                         return Offset(0f, consumedY)
                     }
                     draggingDismiss = true
@@ -488,14 +499,14 @@ internal fun NowPlayingScreen(
 
             override suspend fun onPreFling(available: Velocity): Velocity {
                 if (unifiedMode) {
-                    if (nestedCollapseActive || expandProgress() < 0.999f) {
-                        settleSheet(available.y)
+                    if (nestedCollapseActive || latestExpandProgress() < 0.999f) {
+                        latestSettleSheet(available.y)
                         return available
                     }
                     return Velocity.Zero
                 }
                 if (!closingSheet && dismissDragY.value > 0f) {
-                    settleSheet(available.y)
+                    latestSettleSheet(available.y)
                     return available
                 }
                 return Velocity.Zero
@@ -505,13 +516,13 @@ internal fun NowPlayingScreen(
                 val collapseFlingVelocityPx = with(density) { 520.dp.toPx() }
                 if (unifiedMode) {
                     if (scrollState.value == 0 && (nestedCollapseActive || available.y >= collapseFlingVelocityPx)) {
-                        settleSheet(available.y)
+                        latestSettleSheet(available.y)
                         return available
                     }
                     return Velocity.Zero
                 }
                 if (!closingSheet && scrollState.value == 0 && available.y > 220f) {
-                    settleSheet(available.y)
+                    latestSettleSheet(available.y)
                     return available
                 }
                 return Velocity.Zero
@@ -546,7 +557,9 @@ internal fun NowPlayingScreen(
                     }
                     .background(startSurface),
             )
-            val peekVisible by remember { derivedStateOf { isMotionActive && expandProgress() < 0.32f } }
+            val peekVisible by remember(unifiedMode, sheetVisible, expandProgress) {
+                derivedStateOf { isMotionActive && expandProgress() < 0.32f }
+            }
             if (peekVisible) {
                 MiniPlayerTransitionStrip(
                     song = song,
@@ -960,6 +973,9 @@ private fun ClassicDragHandleHeader(
 ) {
     val closeDescription = stringResource(R.string.ft_close)
     val velocityTracker = remember { VelocityTracker() }
+    val latestOnDragStart by rememberUpdatedState(onDragStart)
+    val latestOnDragDelta by rememberUpdatedState(onDragDelta)
+    val latestOnDragEnd by rememberUpdatedState(onDragEnd)
     Box(
         modifier.fillMaxWidth()
             .height(ClassicDragHeaderHeight)
@@ -969,19 +985,19 @@ private fun ClassicDragHandleHeader(
                     onDragStart = {
                         trackedY = 0f
                         velocityTracker.resetTracking()
-                        onDragStart()
+                        latestOnDragStart()
                     },
                     onVerticalDrag = { change, dragAmount ->
                         change.consume()
                         trackedY += dragAmount
                         velocityTracker.addPosition(change.uptimeMillis, Offset(0f, trackedY))
-                        onDragDelta(dragAmount)
+                        latestOnDragDelta(dragAmount)
                     },
                     onDragEnd = {
                         val velocityY = velocityTracker.calculateVelocity().y
-                        onDragEnd(velocityY)
+                        latestOnDragEnd(velocityY)
                     },
-                    onDragCancel = { onDragEnd(0f) },
+                    onDragCancel = { latestOnDragEnd(0f) },
                 )
             },
         contentAlignment = Alignment.Center,

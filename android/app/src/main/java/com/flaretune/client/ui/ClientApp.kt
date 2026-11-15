@@ -282,19 +282,24 @@ private fun ClientAppContent(
         val rootH = playerRegistry.rootSize.height.toFloat()
         return computeMiniBarTopPx().coerceAtLeast(maxOf(rootH * 0.45f, minTravelPx))
     }
-    fun startSettleAnimation(target: Float, initialVelocity: Float) {
-        activeSettleJob[0]?.cancel()
-        activeSettleJob[0] = coroutineScope.launch(start = CoroutineStart.UNDISPATCHED) {
-            val remaining = abs(playerExpandProgress.value - target)
-            if (remaining > 0.001f) {
-                if (isWideMode) {
-                    playerExpandProgress.animateTo(target, WidePlayerSlideSpring, initialVelocity = initialVelocity)
+    val latestOverlayVisible by rememberUpdatedState(playerOverlayVisible)
+    val latestWideMode by rememberUpdatedState(isWideMode)
+    val startSettleAnimation = remember(playerExpandProgress, coroutineScope) {
+        { target: Float, initialVelocity: Float ->
+            activeSettleJob[0]?.cancel()
+            activeSettleJob[0] = coroutineScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                val remaining = abs(playerExpandProgress.value - target)
+                if (remaining > 0.001f) {
+                    if (latestWideMode) {
+                        playerExpandProgress.animateTo(target, WidePlayerSlideSpring, initialVelocity = initialVelocity)
+                    } else {
+                        playerExpandProgress.animateTo(target, CompactPlayerSettleSpring, initialVelocity = initialVelocity)
+                    }
                 } else {
-                    playerExpandProgress.animateTo(target, CompactPlayerSettleSpring, initialVelocity = initialVelocity)
+                    playerExpandProgress.snapTo(target)
                 }
-            } else {
-                playerExpandProgress.snapTo(target)
             }
+            Unit
         }
     }
     LaunchedEffect(playerOverlayVisible, state.screen, state.playback.current?.id) {
@@ -315,44 +320,52 @@ private fun ClientAppContent(
         dragDrivenTarget[0] = Float.NaN
         startSettleAnimation(target, 0f)
     }
-    val onExpandDragStart: () -> Unit = {
-        playerDragging = true
-        dragDrivenTarget[0] = Float.NaN
-        activeSettleJob[0]?.cancel()
-        activeSettleJob[0] = null
-        coroutineScope.launch(start = CoroutineStart.UNDISPATCHED) {
-            playerExpandProgress.stop()
+    val onExpandDragStart: () -> Unit = remember(playerExpandProgress, coroutineScope) {
+        {
+            playerDragging = true
+            dragDrivenTarget[0] = Float.NaN
+            activeSettleJob[0]?.cancel()
+            activeSettleJob[0] = null
+            coroutineScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                playerExpandProgress.stop()
+            }
+            Unit
         }
     }
-    val onExpandDragDelta: (Float) -> Float = { deltaY ->
-        val travel = computeTravelDistancePx()
-        val current = playerExpandProgress.value
-        val next = (current - deltaY / travel).coerceIn(0f, 1f)
-        val consumedDeltaY = -(next - current) * travel
-        coroutineScope.launch(start = CoroutineStart.UNDISPATCHED) {
-            playerExpandProgress.snapTo(next)
+    val onExpandDragDelta: (Float) -> Float = remember(playerExpandProgress, coroutineScope, playerRegistry, density) {
+        { deltaY ->
+            val travel = computeTravelDistancePx()
+            val current = playerExpandProgress.value
+            val next = (current - deltaY / travel).coerceIn(0f, 1f)
+            val consumedDeltaY = -(next - current) * travel
+            coroutineScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                playerExpandProgress.snapTo(next)
+            }
+            consumedDeltaY
         }
-        consumedDeltaY
     }
-    val onExpandDragEnd: (Float) -> Unit = { velocityY ->
-        playerDragging = false
-        val travel = computeTravelDistancePx()
-        val p = playerExpandProgress.value
-        val expandFlingVelocityPx = with(density) { 220.dp.toPx() }
-        val collapseFlingVelocityPx = with(density) { 220.dp.toPx() }
-        val threshold = 0.5f
-        val shouldExpand = when {
-            velocityY <= -expandFlingVelocityPx -> true
-            velocityY >= collapseFlingVelocityPx -> false
-            else -> p >= threshold
-        }
-        val initialVelProgress = (-velocityY / travel).coerceIn(-6f, 6f)
-        val target = if (shouldExpand) 1f else 0f
-        dragDrivenTarget[0] = if (shouldExpand != playerOverlayVisible) target else Float.NaN
-        startSettleAnimation(target, initialVelProgress)
-        if (shouldExpand != playerOverlayVisible) {
-            panel = if (shouldExpand) PlayerPanel.PLAYER else PlayerPanel.NONE
-            if (shouldExpand) queueReturnPanel = PlayerPanel.NONE
+    val onExpandDragEnd: (Float) -> Unit = remember(playerExpandProgress, playerRegistry, density, startSettleAnimation) {
+        { velocityY ->
+            playerDragging = false
+            val travel = computeTravelDistancePx()
+            val p = playerExpandProgress.value
+            val expandFlingVelocityPx = with(density) { 220.dp.toPx() }
+            val collapseFlingVelocityPx = with(density) { 220.dp.toPx() }
+            val threshold = 0.5f
+            val shouldExpand = when {
+                velocityY <= -expandFlingVelocityPx -> true
+                velocityY >= collapseFlingVelocityPx -> false
+                else -> p >= threshold
+            }
+            val initialVelProgress = (-velocityY / travel).coerceIn(-6f, 6f)
+            val wasOverlayVisible = latestOverlayVisible
+            val target = if (shouldExpand) 1f else 0f
+            dragDrivenTarget[0] = if (shouldExpand != wasOverlayVisible) target else Float.NaN
+            startSettleAnimation(target, initialVelProgress)
+            if (shouldExpand != wasOverlayVisible) {
+                panel = if (shouldExpand) PlayerPanel.PLAYER else PlayerPanel.NONE
+                queueReturnPanel = PlayerPanel.NONE
+            }
         }
     }
 
@@ -479,7 +492,9 @@ private fun ClientAppContent(
 
             if (sheetPrewarmed) {
                 BackHandler(enabled = panel == PlayerPanel.PLAYER) {
+                    playerDragging = false
                     panel = PlayerPanel.NONE
+                    queueReturnPanel = PlayerPanel.NONE
                 }
                 if (sheetActive) {
                     Box(
@@ -550,7 +565,9 @@ private fun ClientAppContent(
                             panel = PlayerPanel.QUEUE
                         },
                         onClose = {
+                            playerDragging = false
                             panel = PlayerPanel.NONE
+                            queueReturnPanel = PlayerPanel.NONE
                         },
                         expandProgress = expandProgressLambda,
                         sheetTranslationY = sheetTranslationYLambda,
