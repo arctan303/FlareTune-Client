@@ -614,48 +614,85 @@ internal class LyricsSpringLayoutController {
     }
 }
 
-/**
- * Hermite smoothstep easing over `[edge0, edge1]` for continuous edge fade transitions.
- */
-internal fun smoothStepEdge(edge0: Float, edge1: Float, x: Float): Float {
-    if (edge1 <= edge0) return if (x >= edge1) 1f else 0f
-    val t = ((x - edge0) / (edge1 - edge0)).coerceIn(0f, 1f)
-    return t * t * (3f - 2f * t)
-}
+internal const val LYRICS_EDGE_FADE_MAX_FRACTION = 0.14f
 
 /**
- * Computes per-row edge opacity multiplier so lyrics rows fade smoothly to zero before reaching
- * the viewport clip boundaries without using offscreen layers or blur filters.
+ * Returns `true` strictly when a visible row intersects either the top or bottom viewport edge
+ * fade band (without masking a giant focused active row on ultra-compact split windows).
  */
-internal fun computeLyricsViewportEdgeAlpha(
-    rowTop: Float,
-    rowHeight: Float,
+internal fun shouldLyricsRowApplyEdgeFade(
+    viewTop: Float,
+    scaledHeight: Float,
     containerHeight: Float,
     topFadePx: Float,
     bottomFadePx: Float,
     isFocusedActiveLine: Boolean = false,
-): Float {
-    if (containerHeight <= 0f) return 1f
-    val safeHeight = rowHeight.coerceAtLeast(1f)
-    val rowBottom = rowTop + safeHeight
-    val effectiveTopFade = kotlin.math.min(topFadePx, containerHeight * 0.18f).coerceAtLeast(0f)
-    val effectiveBottomFade = kotlin.math.min(bottomFadePx, containerHeight * 0.20f).coerceAtLeast(0f)
+): Boolean {
+    if (containerHeight <= 0f || scaledHeight <= 0f) return false
+    val viewBottom = viewTop + scaledHeight
+    if (viewBottom <= 0f || viewTop >= containerHeight) return false
+    val effTop = kotlin.math.min(topFadePx, containerHeight * LYRICS_EDGE_FADE_MAX_FRACTION).coerceAtLeast(0f)
+    val effBottom = kotlin.math.min(bottomFadePx, containerHeight * LYRICS_EDGE_FADE_MAX_FRACTION).coerceAtLeast(0f)
+    if (isFocusedActiveLine && viewTop < effTop && viewBottom > containerHeight - effBottom) {
+        return false
+    }
+    return (effTop > 0f && viewTop < effTop) || (effBottom > 0f && viewBottom > containerHeight - effBottom)
+}
 
-    val topAlpha = if (effectiveTopFade > 0f) {
-        if (rowTop <= 0f) 0f else smoothStepEdge(0f, effectiveTopFade, rowTop)
-    } else {
-        1f
+/**
+ * Computes piecewise-linear local `[fraction -> alpha]` vertical stops (`0f..1f` along the row)
+ * so only pixels inside the thin top/bottom viewport edge bands feather softly to zero, keeping
+ * all inner lyrics rows at full brightness and zero offscreen overhead.
+ */
+internal fun computeLyricsRowEdgeFadeStops(
+    viewTop: Float,
+    scaledHeight: Float,
+    containerHeight: Float,
+    topFadePx: Float,
+    bottomFadePx: Float,
+    isFocusedActiveLine: Boolean = false,
+): List<Pair<Float, Float>>? {
+    if (!shouldLyricsRowApplyEdgeFade(viewTop, scaledHeight, containerHeight, topFadePx, bottomFadePx, isFocusedActiveLine)) {
+        return null
+    }
+    val effTop = kotlin.math.min(topFadePx, containerHeight * LYRICS_EDGE_FADE_MAX_FRACTION).coerceAtLeast(0f)
+    val effBottom = kotlin.math.min(bottomFadePx, containerHeight * LYRICS_EDGE_FADE_MAX_FRACTION).coerceAtLeast(0f)
+
+    fun linearAlphaAt(viewY: Float): Float {
+        val topA = if (effTop > 0f) (viewY / effTop).coerceIn(0f, 1f) else 1f
+        val botA = if (effBottom > 0f) ((containerHeight - viewY) / effBottom).coerceIn(0f, 1f) else 1f
+        return (topA * botA).coerceIn(0f, 1f)
     }
 
-    val bottomAlpha = if (effectiveBottomFade > 0f) {
-        if (rowBottom >= containerHeight) 0f else smoothStepEdge(0f, effectiveBottomFade, containerHeight - rowBottom)
-    } else {
-        1f
+    val rawKnots = ArrayList<Float>(6).apply {
+        add(0f)
+        if (effTop > 0f) {
+            val f0 = (0f - viewTop) / scaledHeight
+            val f1 = (effTop - viewTop) / scaledHeight
+            if (f0 > 0.002f && f0 < 0.998f) add(f0)
+            if (f1 > 0.002f && f1 < 0.998f) add(f1)
+        }
+        if (effBottom > 0f) {
+            val f2 = (containerHeight - effBottom - viewTop) / scaledHeight
+            val f3 = (containerHeight - viewTop) / scaledHeight
+            if (f2 > 0.002f && f2 < 0.998f) add(f2)
+            if (f3 > 0.002f && f3 < 0.998f) add(f3)
+        }
+        add(1f)
     }
-
-    val combined = (topAlpha * bottomAlpha).coerceIn(0f, 1f)
-    if (isFocusedActiveLine && rowTop < effectiveTopFade && rowBottom > containerHeight - effectiveBottomFade) {
-        return kotlin.math.max(combined, 0.85f)
+    rawKnots.sort()
+    val stops = ArrayList<Pair<Float, Float>>(rawKnots.size)
+    for (f in rawKnots) {
+        val clampedF = f.coerceIn(0f, 1f)
+        if (stops.isEmpty()) {
+            stops.add(clampedF to linearAlphaAt(viewTop + clampedF * scaledHeight))
+        } else if (clampedF == 1f || clampedF - stops.last().first >= 0.002f) {
+            if (clampedF <= stops.last().first) {
+                stops[stops.lastIndex] = clampedF to linearAlphaAt(viewTop + clampedF * scaledHeight)
+            } else {
+                stops.add(clampedF to linearAlphaAt(viewTop + clampedF * scaledHeight))
+            }
+        }
     }
-    return combined
+    return if (stops.size >= 2) stops else null
 }

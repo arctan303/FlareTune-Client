@@ -1721,11 +1721,12 @@ private fun ClassicLyricsSceneContent(
                         presentations.map { with(density) { it.blurRadius.toPx() } }
                     }
                     val topEdgeFadePx = remember(density, lyricScale) {
-                        with(density) { (72.dp * lyricScale).toPx() }
+                        with(density) { (24.dp * lyricScale).toPx() }
                     }
                     val bottomEdgeFadePx = remember(density, lyricScale) {
-                        with(density) { (80.dp * lyricScale).toPx() }
+                        with(density) { (24.dp * lyricScale).toPx() }
                     }
+                    val containerHeightState = remember(scene.trackKey) { mutableFloatStateOf(0f) }
 
                     SubcomposeLayout(
                         modifier = Modifier
@@ -1747,6 +1748,9 @@ private fun ClassicLyricsSceneContent(
                         val viewportWidth = constraints.maxWidth
                         val viewportHeight = constraints.maxHeight
                         val containerHeight = viewportHeight.toFloat()
+                        if (containerHeightState.floatValue != containerHeight) {
+                            containerHeightState.floatValue = containerHeight
+                        }
 
                         if (
                             sceneTracker.widthPx != 0 &&
@@ -1891,6 +1895,59 @@ private fun ClassicLyricsSceneContent(
 
                                 Box(
                                     Modifier.fillMaxWidth()
+                                        .graphicsLayer {
+                                            val liveState = controller.visualStateFor(key)
+                                            val viewH = containerHeightState.floatValue
+                                            val rawH = size.height
+                                            val touchesEdge = if (liveState != null && viewH > 0f && rawH > 0f) {
+                                                val liveY = liveState.displayY + liveState.displayPushYPx
+                                                val scale = liveState.displayScale.coerceAtLeast(0.01f)
+                                                val scaledH = rawH * scale
+                                                val viewTop = liveY + (rawH - scaledH) * 0.5f
+                                                shouldLyricsRowApplyEdgeFade(
+                                                    viewTop = viewTop,
+                                                    scaledHeight = scaledH,
+                                                    containerHeight = viewH,
+                                                    topFadePx = topEdgeFadePx,
+                                                    bottomFadePx = bottomEdgeFadePx,
+                                                    isFocusedActiveLine = isActive && !userScrolling,
+                                                )
+                                            } else {
+                                                false
+                                            }
+                                            compositingStrategy = if (touchesEdge) {
+                                                CompositingStrategy.Offscreen
+                                            } else {
+                                                CompositingStrategy.Auto
+                                            }
+                                        }
+                                        .drawWithContent {
+                                            drawContent()
+                                            val liveState = controller.visualStateFor(key) ?: return@drawWithContent
+                                            val viewH = containerHeightState.floatValue
+                                            val rawH = size.height
+                                            if (viewH <= 0f || rawH <= 0f || size.width <= 1f) return@drawWithContent
+                                            val liveY = liveState.displayY + liveState.displayPushYPx
+                                            val scale = liveState.displayScale.coerceAtLeast(0.01f)
+                                            val scaledH = rawH * scale
+                                            val viewTop = liveY + (rawH - scaledH) * 0.5f
+                                            val stops = computeLyricsRowEdgeFadeStops(
+                                                viewTop = viewTop,
+                                                scaledHeight = scaledH,
+                                                containerHeight = viewH,
+                                                topFadePx = topEdgeFadePx,
+                                                bottomFadePx = bottomEdgeFadePx,
+                                                isFocusedActiveLine = isActive && !userScrolling,
+                                            ) ?: return@drawWithContent
+                                            drawRect(
+                                                brush = Brush.verticalGradient(
+                                                    colorStops = Array(stops.size) { idx ->
+                                                        stops[idx].first to Color.Black.copy(alpha = stops[idx].second)
+                                                    },
+                                                ),
+                                                blendMode = BlendMode.DstIn,
+                                            )
+                                        }
                                         .padding(start = 4.dp, end = 8.dp)
                                         .then(if (isPrimaryScene) Modifier.testTag("player_lyric_$lineIndex") else Modifier)
                                         .semantics { selected = isActive || (lineIndex == 0 && activeIdx < 0 && isInterlude) }
@@ -2122,35 +2179,15 @@ private fun ClassicLyricsSceneContent(
                                 val subPixelY = targetY - yInt
                                 placeable.placeRelativeWithLayer(0, yInt) {
                                     val liveState = controller.visualStateFor(key)
-                                    val rawH = placeable.height.toFloat()
-                                    val isFocusedActive = slotIndex == activeIdx && !userScrolling
                                     if (liveState != null) {
                                         val liveY = liveState.displayY + liveState.displayPushYPx
-                                        val scaledH = rawH * liveState.displayScale
-                                        val scaledTop = liveY + (rawH - scaledH) * 0.5f
-                                        val edgeAlpha = computeLyricsViewportEdgeAlpha(
-                                            rowTop = scaledTop,
-                                            rowHeight = scaledH,
-                                            containerHeight = containerHeight,
-                                            topFadePx = topEdgeFadePx,
-                                            bottomFadePx = bottomEdgeFadePx,
-                                            isFocusedActiveLine = isFocusedActive,
-                                        )
                                         translationY = liveY - yInt
                                         scaleX = liveState.displayScale
                                         scaleY = liveState.displayScale
-                                        alpha = liveState.displayOpacity * edgeAlpha
+                                        alpha = liveState.displayOpacity
                                         transformOrigin = TransformOrigin(0f, 0.5f)
                                     } else {
                                         translationY = subPixelY
-                                        alpha = computeLyricsViewportEdgeAlpha(
-                                            rowTop = targetY,
-                                            rowHeight = rawH,
-                                            containerHeight = containerHeight,
-                                            topFadePx = topEdgeFadePx,
-                                            bottomFadePx = bottomEdgeFadePx,
-                                            isFocusedActiveLine = isFocusedActive,
-                                        )
                                     }
                                 }
                             }

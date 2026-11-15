@@ -640,33 +640,60 @@ class PlayerLyricsMotionTest {
         settle(200)
         rule.onNodeWithText("1:00").assertExists()
     }
-    @Test fun lyricsViewportEdgeAlphaFadesEdgesWithoutClippingFocusedLine() {
+    @Test fun lyricsRowEdgeFadeAppliesOnlyToThinBorderIntersections() {
         val h = 600f
-        val topFade = 90f
-        val bottomFade = 100f
-        assertEquals(0f, computeLyricsViewportEdgeAlpha(-5f, 60f, h, topFade, bottomFade), 0.001f)
-        assertEquals(0f, computeLyricsViewportEdgeAlpha(0f, 60f, h, topFade, bottomFade), 0.001f)
-        assertEquals(0f, computeLyricsViewportEdgeAlpha(540f, 60f, h, topFade, bottomFade), 0.001f)
-        assertEquals(0f, computeLyricsViewportEdgeAlpha(560f, 60f, h, topFade, bottomFade), 0.001f)
-        assertEquals(1f, computeLyricsViewportEdgeAlpha(200f, 60f, h, topFade, bottomFade), 0.001f)
+        val fadeBand = 24f
 
-        val topNearZero = computeLyricsViewportEdgeAlpha(12f, 60f, h, topFade, bottomFade)
-        val topMid = computeLyricsViewportEdgeAlpha(45f, 60f, h, topFade, bottomFade)
-        assertTrue("Top edge alpha must smoothly increase inward ($topNearZero < $topMid < 1)", topNearZero in 0.01f..topMid && topMid < 1f)
+        // Inner visible rows keep null stops -> zero offscreen layer overhead & full brightness.
+        assertNull(computeLyricsRowEdgeFadeStops(viewTop = 30f, scaledHeight = 80f, containerHeight = h, topFadePx = fadeBand, bottomFadePx = fadeBand))
+        assertNull(computeLyricsRowEdgeFadeStops(viewTop = 250f, scaledHeight = 80f, containerHeight = h, topFadePx = fadeBand, bottomFadePx = fadeBand))
+        assertNull(computeLyricsRowEdgeFadeStops(viewTop = 490f, scaledHeight = 80f, containerHeight = h, topFadePx = fadeBand, bottomFadePx = fadeBand))
 
-        val bottomNearEnd = computeLyricsViewportEdgeAlpha(525f, 60f, h, topFade, bottomFade)
-        val bottomMid = computeLyricsViewportEdgeAlpha(490f, 60f, h, topFade, bottomFade)
-        assertTrue("Bottom edge alpha must smoothly increase inward ($bottomNearEnd < $bottomMid < 1)", bottomNearEnd in 0.01f..bottomMid && bottomMid < 1f)
+        // Completely offscreen rows keep null stops as well.
+        assertNull(computeLyricsRowEdgeFadeStops(viewTop = -90f, scaledHeight = 80f, containerHeight = h, topFadePx = fadeBand, bottomFadePx = fadeBand))
+        assertNull(computeLyricsRowEdgeFadeStops(viewTop = 605f, scaledHeight = 80f, containerHeight = h, topFadePx = fadeBand, bottomFadePx = fadeBand))
 
-        val oversizedActive = computeLyricsViewportEdgeAlpha(
-            rowTop = 10f,
-            rowHeight = 580f,
+        // Top-crossing row: pixels above 0 stay 0f, top rim feathers across [0..24], remainder stays 1f!
+        val topStops = computeLyricsRowEdgeFadeStops(
+            viewTop = -12f,
+            scaledHeight = 80f,
             containerHeight = h,
-            topFadePx = topFade,
-            bottomFadePx = bottomFade,
-            isFocusedActiveLine = true,
+            topFadePx = fadeBand,
+            bottomFadePx = fadeBand,
+        )!!
+        assertEquals(0f, topStops.first().second, 0.001f)
+        assertEquals(1f, topStops.last().second, 0.001f)
+        assertEquals(0.15f, topStops[1].first, 0.01f) // viewY=0 -> f=(0 - (-12))/80 = 0.15
+        assertEquals(0f, topStops[1].second, 0.001f)
+        assertEquals(0.45f, topStops[2].first, 0.01f) // viewY=24 -> f=(24 - (-12))/80 = 0.45
+        assertEquals(1f, topStops[2].second, 0.001f)
+
+        // Bottom-crossing row: inner pixels stay 1f, bottom rim [576..600] feathers smoothly to 0f.
+        val botStops = computeLyricsRowEdgeFadeStops(
+            viewTop = 552f,
+            scaledHeight = 80f,
+            containerHeight = h,
+            topFadePx = fadeBand,
+            bottomFadePx = fadeBand,
+        )!!
+        assertEquals(1f, botStops.first().second, 0.001f)
+        assertEquals(0f, botStops.last().second, 0.001f)
+        assertEquals(0.30f, botStops[1].first, 0.01f) // viewY=576 -> f=24/80 = 0.30
+        assertEquals(1f, botStops[1].second, 0.001f)
+        assertEquals(0.60f, botStops[2].first, 0.01f) // viewY=600 -> f=48/80 = 0.60
+        assertEquals(0f, botStops[2].second, 0.001f)
+
+        // Focused tall active line spanning tight viewport stays unmasked.
+        assertNull(
+            computeLyricsRowEdgeFadeStops(
+                viewTop = 10f,
+                scaledHeight = 580f,
+                containerHeight = h,
+                topFadePx = fadeBand,
+                bottomFadePx = fadeBand,
+                isFocusedActiveLine = true,
+            ),
         )
-        assertTrue("Focused active line spanning viewport must remain legible (>= 0.85f), was $oversizedActive", oversizedActive >= 0.85f)
     }
     @Test fun marqueeEdgeFadeStrengthsKeepRestingStartSharpAndFadeScrollingEdges() {
         val (restLeft, restRight) = computeMarqueeEdgeFadeStrengths(
