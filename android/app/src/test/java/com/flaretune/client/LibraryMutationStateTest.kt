@@ -525,7 +525,10 @@ private class LibraryApi : AccountApi {
     override fun artist(name: String, offset: Int) = ArtistDetail(Artist(name), listOf(librarySong("artist-$offset")), offset + 50, offset == 0)
     override fun song(id: String) = librarySong(id)
     override fun resolveSongs(ids: List<String>) = ids.map(::librarySong)
-    override fun imageSlot(purpose: String, targetId: String): ImageSlot { coverCalls += "slot"; return ImageSlot(revision = 44) }
+    override fun imageSlot(purpose: String, targetId: String): ImageSlot {
+        if (purpose == "playlist") coverCalls += "slot"
+        return ImageSlot(revision = 44)
+    }
     override fun uploadPlaylistCover(bytes: ByteArray): UserImage { coverCalls += "upload"; onUpload?.invoke(); return UserImage("draft", "https://music.example/api/account/images/draft", 1024, 1024, bytes.size) }
     override fun setPlaylistCover(id: String, imageId: String?, revision: Long): ImageSlot {
         coverCalls += "apply:$revision"

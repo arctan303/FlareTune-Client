@@ -15,6 +15,21 @@ class PlaybackRuntime(
     val queueRepository: PlaybackQueueRepository? = null,
     val playEvents: com.flaretune.client.data.PlayEventRepository? = null,
 ) {
+    val sleepTimer = PlaybackSleepTimer()
+    // Coil 2.x ImageLoader.shutdown does not close DiskCache. Keep one journal owner per directory.
+    private val imageDiskCaches = mutableMapOf<String, DiskCache>()
+
+    internal fun diskCacheFor(identity: HistoryIdentity): DiskCache {
+        val key = imageCacheIdentity(identity)
+        return synchronized(imageDiskCaches) {
+            imageDiskCaches.getOrPut(key) {
+                DiskCache.Builder()
+                    .directory(context.cacheDir.resolve("coil_image_cache_v2").resolve(key))
+                    .maxSizeBytes(64L * 1024 * 1024)
+                    .build()
+            }
+        }
+    }
     @Volatile var connection: ActiveConnection? = null
         private set
     var imageLoader: ImageLoader? = null
@@ -30,25 +45,35 @@ class PlaybackRuntime(
         playEvents?.bind(identity, next) { connection?.network === next.network && next.network.isActive }
         imageLoader = ImageLoader.Builder(context)
             .okHttpClient(next.network.mediaClient)
-            .diskCache {
-                DiskCache.Builder()
-                    .directory(context.cacheDir.resolve("coil_image_cache"))
-                    .maxSizeBytes(64L * 1024 * 1024)
-                    .build()
-            }
+            .diskCache { diskCacheFor(identity) }
+            .respectCacheHeaders(false)
             .crossfade(false)
             .build()
     }
 
+    fun detachLocalData() {
+        history?.detach()
+        queueRepository?.detach()
+    }
+
     fun clear() {
+        sleepTimer.cancel()
         // Remove authority before either repository changes or the old Service tears down.
         connection = null
         playEvents?.clear()
-        history?.clear()
-        queueRepository?.clear()
+        detachLocalData()
         imageLoader?.memoryCache?.clear()
         imageLoader?.shutdown()
         imageLoader = null
         context.stopService(Intent(context, PlaybackService::class.java))
     }
+}
+
+
+/** The same private artwork URL may return different bytes for two accounts. */
+internal fun imageCacheIdentity(identity: HistoryIdentity): String {
+    val normalized = identity.normalized()
+    return java.security.MessageDigest.getInstance("SHA-256")
+        .digest((normalized.origin + "\u0000" + normalized.accountId).toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it) }
 }

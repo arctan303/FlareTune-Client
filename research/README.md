@@ -2,7 +2,8 @@
 
 面向 **FlareTune Client（纯消费型音乐播放器，首个目标平台 Android/APK）** 的设计参考研究。
 
-研究对象为三个已发布 APK：**音流（Musiver / StreamMusic）**、**Spotify**、**Apple Music**。
+研究对象为四个已发布 APK：**音流（Musiver / StreamMusic）**、**Spotify**、**Apple Music**、
+**YouTube Music**。
 所有结论都标注了来源：`APK` = 从安装包静态提取，`截图` = 官方商店/官网截图目视与像素测量，
 `推断` = 基于上述证据的判断。未验证的内容明确标为未知。
 
@@ -53,6 +54,11 @@
 | **[gemini-brief-musiver-lyrics-line-advance.txt](gemini-brief-musiver-lyrics-line-advance.txt)** | **音流 2.0 歌词换行「弹」：双 spring 规格 / 逐行错峰 / 四档呈现表 / 逐字脉冲（纯事实，可直接转交）** |
 | **[gemini-brief-musiver.txt](gemini-brief-musiver.txt)** | **音流 2.0 全屏播放页「顶部拖动关闭条」逆向手册：手势链路 / 双条件阈值 / spring 落定（纯事实，可直接转交外部 AI）** |
 | **[gemini-brief-am-instrumental-dots.txt](gemini-brief-am-instrumental-dots.txt)** | **Apple Music 歌词间奏指示器（三个圆点）：10dp/6dp 规格 / 三格进度填充 / 4 秒呼吸 / 1.75s 退场（纯事实，可直接转交外部 AI）** |
+| **[gemini-brief-ytmusic-player-transition.txt](gemini-brief-ytmusic-player-transition.txt)** | **YouTube Music 全屏播放器打开/关闭 + 封面连贯动画：BottomSheet 结构 / 12 态状态机 / 单一 0..1 进度双驱动（尺寸+矩阵）/ 自动裁边（纯事实，可直接转交外部 AI）** |
+| **[gemini-brief-ytmusic-home-grid.txt](gemini-brief-ytmusic-home-grid.txt)** | **YouTube Music 首页「一键点歌」卡片排版：四档尺寸分类（sw600dp + 朝向）/ 列数查表 / 卡片宽 = 可用宽 ÷ 列数 / 1.75:1 比例 / 边距 16·32·48（纯事实，可直接转交外部 AI）** |
+| **[gemini-brief-ytmusic-player-drag-motion.txt](gemini-brief-ytmusic-player-drag-motion.txt)** | **YouTube Music 播放器开关「跟手 / 有来有去」链路：三段式（拖动无缓动 → Material settle → ValueAnimator 300ms）/ 201 点插值表 = cubic-bezier(.4,0,.2,1) / CardView 五元组几何插值 / 逐元素 alpha 常量（纯事实，可直接转交外部 AI）** |
+| **[gemini-brief-ytmusic-pivotbar-motion.txt](gemini-brief-ytmusic-pivotbar-motion.txt)** | **YouTube Music 底部导航栏在播放器开关过程中的动效：没有独立动画，`translationY = 导航栏高 × slideOffset` 1:1 跟随 / 全屏落定一次性 GONE / 顶部 slim 条同公式 / 状态栏 `slideOffset>0` 即全透明（纯事实，可直接转交外部 AI）** |
+| **[yt-player-motion/index.html](yt-player-motion/index.html)** | **可交互复刻：拖动跟手、松手吸附、往返可逆，含底部导航栏随动。无依赖直接打开** |
 | **[gemini-brief.txt](gemini-brief.txt)** | **给外部 AI 的「设计任务书」：喂全套逆向数据 + 要求产出播放页设计规格** |
 | [gemini-prompt.txt](gemini-prompt.txt) | 给外部 AI 的「评审版」提问稿（问该不该跟，非设计任务） |
 | **[docs/00-cheatsheet.md](docs/00-cheatsheet.md)** | **一页速查：实现时要查的数与坑（开发常开）** |
@@ -81,6 +87,7 @@
 | 音流 / Musiver | `cn.musiver.android` | 2.0.1-beta.15 (15) | 真机 `adb pull`（Kotlin + Jetpack Compose 重写版） | 48.1 MB | — |
 | Spotify | `com.spotify.music` | 9.2.0.2053 (148387875) | APKPure 分发包（base + config splits） | 153.5 MB | `1b58e6a1aa278a5c` |
 | Apple Music | `com.apple.android.music` | 7.0.0 (1614) | APKPure 分发包（base + arm64 + mdpi） | 113.7 MB | `e8cc2650cac97881` |
+| YouTube Music | `com.google.android.apps.youtube.music` | 9.45.51 (94551240) | 真机 `adb pull`（base 单包，另有 xxhdpi / zh 两个 split） | 85.6 MB | `3ceca86c5d9f82bf` |
 
 APK 原始文件不入库（体积与授权原因），保留在本地 `.research/raw/`（已 gitignore）。
 重新获取方式与校验值见 [docs/01-method.md](docs/01-method.md)。

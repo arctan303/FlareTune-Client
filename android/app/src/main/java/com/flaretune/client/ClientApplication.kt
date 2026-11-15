@@ -38,5 +38,7 @@ class ClientApplication : Application() {
     val searchHistoryStore by lazy { com.flaretune.client.data.SearchHistoryStore(listeningLocalStorage) }
     val discoveryCache by lazy { com.flaretune.client.data.DiscoveryCache(listeningLocalStorage) }
     val playEvents by lazy { com.flaretune.client.data.PlayEventRepository(com.flaretune.client.data.JsonPlayEventStore(listeningLocalStorage), scope) }
+    val playlistPreferences by lazy { com.flaretune.client.data.JsonPlaylistPreferencesStore(listeningLocalStorage) }
+    val historyExtras by lazy { com.flaretune.client.data.ListeningHistoryExtrasRepository(com.flaretune.client.data.JsonListeningHistoryExtrasStore(listeningLocalStorage), scope) }
     val playbackRuntime by lazy { PlaybackRuntime(this, history, queueRepository, playEvents) }
 }

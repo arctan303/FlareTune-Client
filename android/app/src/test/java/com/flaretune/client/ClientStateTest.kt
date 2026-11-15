@@ -301,7 +301,7 @@ class ClientStateTest {
         } finally { model.viewModelScope.cancel(); Dispatchers.resetMain() }
     }
 
-    @Test fun playHistorySongBuildsQueueFromHistoryEntriesStartingAtClickedTrack() = runTest {
+    @Test fun playHistorySongInsertsSingleTrackAsNextWithoutReplacingActiveQueue() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         Dispatchers.setMain(dispatcher)
         val song2 = Song("two", "Second song", audioUrl = "https://music.example/media/two.mp3")
@@ -324,10 +324,11 @@ class ClientStateTest {
             advanceUntilIdle()
             val historyOrder = model.state.value.playHistory.map { it.id }
             assertEquals(listOf("three", "two", "one"), historyOrder)
+            player.play(listOf(song, song3), 0)
             val clicked = model.state.value.playHistory[1]
             model.playHistorySong(clicked); advanceUntilIdle()
             assertEquals("two", player.state.value.current?.id)
-            assertEquals(listOf("three", "two", "one"), player.state.value.queue.map { it.id })
+            assertEquals(listOf("one", "two", "three"), player.state.value.queue.map { it.id })
             assertEquals(1, player.state.value.currentIndex)
         } finally { model.viewModelScope.cancel(); historyScope.cancel(); Dispatchers.resetMain() }
     }
@@ -659,11 +660,166 @@ class ClientStateTest {
         } finally { model.viewModelScope.cancel(); Dispatchers.resetMain() }
     }
 
+    @Test fun homeLibraryMixLoadsProportionallyWithUntaggedIsolationAndLegacyFallback() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val zh = (1..8).map { song.copy(id = "zh-$it", language = "zh") }
+        val en = (1..4).map { song.copy(id = "en-$it", language = "en") }
+        val untagged = (1..4).map { song.copy(id = "u-$it", language = "") }
+        val api = object : FakeAccountApi(zh + en + untagged) {
+            var failUntagged = false
+            override fun languageCounts(includeUntagged: Boolean): Map<String, Int> =
+                if (failUntagged) mapOf("zh" to 8, "en" to 4) else mapOf("zh" to 8, "en" to 4, "untagged" to 4)
+            override fun songs(query: String, offset: Int, language: String, sort: String): SongPage {
+                if (language == "untagged" && failUntagged) throw ApiFailure(Failure.REQUEST)
+                val filtered = when (language) {
+                    "all" -> zh + en + untagged
+                    "untagged" -> untagged
+                    "zh" -> zh
+                    "en" -> en
+                    else -> emptyList()
+                }
+                val slice = filtered.drop(offset).take(50)
+                return SongPage(slice, offset + slice.size, offset + slice.size < filtered.size)
+            }
+        }
+        val model = ClientViewModel(FakeConnections(active(api)), FakePlayback(), dispatcher)
+        try {
+            advanceUntilIdle()
+            val homeIds = model.state.value.homeLibrarySongs.map { it.id }
+            assertEquals(16, homeIds.size)
+            assertTrue(homeIds.any { it.startsWith("u-") })
+            assertTrue(homeIds.any { it.startsWith("zh-") })
+            assertTrue(homeIds.any { it.startsWith("en-") })
+
+            // Changing Discover/All-Songs filter must NOT mutate or wipe homeLibrarySongs.
+            model.selectSongLanguage("en")
+            advanceUntilIdle()
+            assertEquals(en.map { it.id }, model.state.value.songs.map { it.id })
+            assertEquals(homeIds, model.state.value.homeLibrarySongs.map { it.id })
+
+            // Legacy server rejecting language=untagged still produces non-empty fallback mix cleanly.
+            api.failUntagged = true
+            model.refresh()
+            advanceUntilIdle()
+            assertTrue(model.state.value.homeLibrarySongs.isNotEmpty())
+        } finally { model.viewModelScope.cancel(); Dispatchers.resetMain() }
+    }
+
+    @Test fun playlistSortPreferencePersistsPerAccountAndBatchFavoritesRequireRealSuccess() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val storage = ContinueSearchStorage()
+        val prefs = JsonPlaylistPreferencesStore(storage)
+        val fav = PlaylistSummary("fav-id", "Favorites", "favorite", songCount = 1, revision = 1, updatedAt = 100)
+        val p1 = PlaylistSummary("p1", "Zebra", "regular", songCount = 10, revision = 1, updatedAt = 300)
+        val p2 = PlaylistSummary("p2", "Alpha", "regular", songCount = 2, revision = 1, updatedAt = 200)
+        val failAdd = mutableListOf(true)
+        val api = object : FakeAccountApi(listOf(song, song.copy(id = "two"))) {
+            init { favoritePlaylistSongs = listOf(song) }
+            override fun playlists() = listOf(fav, p1, p2)
+            override fun playlistShelf() = PlaylistShelf(1, items = listOf(ShelfItem("fav-id"), ShelfItem("p1"), ShelfItem("p2")))
+            override fun addPlaylistSongs(targets: List<PlaylistTarget>, songIds: List<String>): PlaylistAddResult {
+                if (failAdd.first()) throw ApiFailure(Failure.NETWORK)
+                return PlaylistAddResult(
+                    outcome = "applied",
+                    results = targets.map { PlaylistTargetResult(it.playlistId, "applied", addedSongIds = songIds, revision = 2) },
+                    affectedPlaylistIds = targets.map { it.playlistId },
+                )
+            }
+        }
+        val model = ClientViewModel(
+            FakeConnections(active(api)),
+            FakePlayback(),
+            dispatcher,
+            playlistPreferences = prefs,
+        )
+        try {
+            advanceUntilIdle()
+            model.selectPlaylistSort(PlaylistSortMode.NAME)
+            advanceUntilIdle()
+            assertEquals(PlaylistSortMode.NAME, model.state.value.playlistSortMode)
+            assertEquals(
+                listOf("p2", "fav-id", "p1"),
+                sortPlaylists(model.state.value.playlists, model.state.value.playlistSortMode, model.state.value.playlistShelf).map { it.id },
+            )
+            assertEquals(PlaylistSortMode.NAME, prefs.readSortMode(HistoryIdentity("https://music.example", "account-one")))
+
+            model.selectPlaylistSongSort(PlaylistSongSortMode.DURATION)
+            assertEquals(PlaylistSongSortMode.DURATION, model.state.value.playlistSongSort)
+
+            val versionBefore = model.state.value.libraryMutationVersion
+            model.addFavorites(listOf(song.copy(id = "two")))
+            advanceUntilIdle()
+            assertEquals(versionBefore, model.state.value.libraryMutationVersion)
+            assertNotNull(model.state.value.libraryMutationNotice)
+            assertNull(model.state.value.playbackFeedback)
+
+            failAdd[0] = false
+            model.addFavorites(listOf(song.copy(id = "two")))
+            advanceUntilIdle()
+            assertEquals(versionBefore + 1, model.state.value.libraryMutationVersion)
+            assertEquals(PlaybackFeedbackKind.FAVORITED_BATCH, model.state.value.playbackFeedback?.kind)
+        } finally { model.viewModelScope.cancel(); Dispatchers.resetMain() }
+    }
+
+    @Test fun coldRestoreToSearchDetailThenNavigateHomeLoadsHomeLibrarySongs() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val enSong = song.copy(id = "en-1", title = "English Song", language = "en")
+        val zhSong = song.copy(id = "zh-1", title = "Chinese Song", language = "zh")
+        val album = Album("alb-restore", "Night", "Artist")
+        val api = object : FakeAccountApi(listOf(enSong, zhSong)) {
+            override fun languageCounts(includeUntagged: Boolean): Map<String, Int> = mapOf("en" to 1, "zh" to 1)
+            override fun songs(query: String, offset: Int, language: String, sort: String): SongPage {
+                val filtered = when (language) {
+                    "en" -> listOf(enSong)
+                    "zh" -> listOf(zhSong)
+                    else -> listOf(enSong, zhSong)
+                }
+                return SongPage(filtered, filtered.size, false)
+            }
+            override fun album(id: String) = AlbumDetail(album, listOf(enSong))
+        }
+        val handle = SavedStateHandle()
+        val first = ClientViewModel(FakeConnections(active(api)), FakePlayback(), dispatcher, savedStateHandle = handle)
+        var second: ClientViewModel? = null
+        try {
+            advanceUntilIdle()
+            first.navigate(MainDestination.SEARCH)
+            first.openAlbum(album)
+            advanceUntilIdle()
+            first.saveNavigationState()
+            val saved = ArrayList(handle.get<ArrayList<String>>(ClientNavigationState.KEY)!!)
+            first.viewModelScope.cancel()
+
+            second = ClientViewModel(
+                FakeConnections(active(api)),
+                FakePlayback(),
+                dispatcher,
+                savedStateHandle = SavedStateHandle(mapOf(ClientNavigationState.KEY to saved)),
+            )
+            advanceUntilIdle()
+            assertEquals(MainDestination.SEARCH, second.state.value.destination)
+            assertEquals("alb-restore", second.state.value.selectedAlbum?.id)
+            assertTrue(second.state.value.homeLibrarySongs.isEmpty())
+
+            second.navigate(MainDestination.HOME)
+            advanceUntilIdle()
+            assertEquals(MainDestination.HOME, second.state.value.destination)
+            assertEquals(setOf("en-1", "zh-1"), second.state.value.homeLibrarySongs.map { it.id }.toSet())
+        } finally {
+            first.viewModelScope.cancel()
+            second?.viewModelScope?.cancel()
+            Dispatchers.resetMain()
+        }
+    }
+
     private fun active(api: AccountApi) = ActiveConnection(
         SessionNetwork(InstanceAddress.parse("https://music.example")), api, auth)
 }
 
-private class FakeAccountApi(private val songs: List<Song>) : AccountApi {
+private open class FakeAccountApi(private val songs: List<Song>) : AccountApi {
     var requests = 0
     var fail = false
     var failResolveSongs = false
@@ -769,6 +925,17 @@ private class FakePlayback : PlaybackGateway {
     var connected = 0
     override suspend fun connect(connection: ActiveConnection) { connected++ }
     override fun play(songs: List<Song>, index: Int) { state.value = PlaybackSnapshot(current = songs[index], queue = songs, currentIndex = index, playing = true) }
+    override fun playSingleAsNext(song: Song): Boolean {
+        val snap = state.value
+        if (snap.queue.isEmpty() || snap.currentIndex !in snap.queue.indices) {
+            play(listOf(song), 0)
+            return true
+        }
+        val insertIndex = snap.currentIndex + 1
+        val nextQueue = snap.queue.toMutableList().apply { add(insertIndex, song) }
+        state.value = snap.copy(current = song, queue = nextQueue, currentIndex = insertIndex, playing = true)
+        return true
+    }
     override fun stopAndClear() { state.value = PlaybackSnapshot() }
     override fun setVolume(volume: Float) { state.value = state.value.copy(volume = volume) }
     override fun togglePlay() {}

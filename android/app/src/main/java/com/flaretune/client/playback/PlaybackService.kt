@@ -2,6 +2,8 @@ package com.flaretune.client.playback
 
 import android.app.PendingIntent
 import android.content.Intent
+import android.os.PowerManager
+import android.os.SystemClock
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -12,10 +14,12 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.CacheBitmapLoader
+import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.flaretune.client.ClientApplication
 import com.flaretune.client.MainActivity
+import com.flaretune.client.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -31,6 +35,7 @@ class PlaybackService : MediaSessionService() {
     private var playerListener: Player.Listener? = null
     private var qualifiedListening: QualifiedListeningTracker? = null
     private var systemControls: SystemMediaControls? = null
+    private var sleepTimer: PlaybackSleepTimer? = null
     private val persistenceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     // A newly created empty Player must not erase the queue being loaded from disk.
     private var seenNonEmptyQueue = false
@@ -46,6 +51,11 @@ class PlaybackService : MediaSessionService() {
             return
         }
         network = connection.network
+        setMediaNotificationProvider(
+            DefaultMediaNotificationProvider.Builder(this).build().apply {
+                setSmallIcon(R.drawable.ic_notification)
+            },
+        )
         val dataSource = OkHttpDataSource.Factory(connection.network.mediaClient)
         val engine = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(this).setDataSourceFactory(dataSource))
@@ -56,6 +66,21 @@ class PlaybackService : MediaSessionService() {
                 setHandleAudioBecomingNoisy(true)
             }
         val player = PersistentTransportPlayer(engine)
+        val timerWakeLock = getSystemService(PowerManager::class.java)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "FlareTune:SleepTimer").apply { setReferenceCounted(false) }
+        sleepTimer = runtime.sleepTimer.also { timer ->
+            timer.attach(this, persistenceScope, object : PlaybackSleepTimer.Target {
+                override var volume: Float
+                    get() = engine.volume
+                    set(value) { engine.volume = value }
+                override var pauseAtEndOfTrack: Boolean
+                    get() = engine.pauseAtEndOfMediaItems
+                    set(value) { engine.setPauseAtEndOfMediaItems(value) }
+                override fun pause() { engine.pause() }
+            }, SystemClock::elapsedRealtime,
+                acquireWakeLock = { timeoutMs -> timerWakeLock.acquire(timeoutMs) },
+                releaseWakeLock = { if (timerWakeLock.isHeld) timerWakeLock.release() })
+        }
         systemControls = SystemMediaControls(this, connection, persistenceScope, app.systemMediaFavorites) {
             runtime.connection?.network === connection.network
         }
@@ -68,13 +93,25 @@ class PlaybackService : MediaSessionService() {
         }
         playerListener = object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                if (sleepTimer?.state?.value?.mode == SleepTimerMode.END_OF_TRACK &&
+                    reason in setOf(Player.MEDIA_ITEM_TRANSITION_REASON_SEEK, Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED)) {
+                    sleepTimer?.cancel()
+                }
                 historyTracker.onMediaItemTransition()
                 qualifiedListening?.onMediaItemTransition()
             }
             override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
                 qualifiedListening?.onPositionDiscontinuity()
             }
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                if (!playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM)
+                    sleepTimer?.onTrackEnded(this@PlaybackService)
+            }
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_ENDED) sleepTimer?.onTrackEnded(this@PlaybackService)
+            }
             override fun onEvents(player: Player, events: Player.Events) {
+                if (sleepTimer?.isFading == true && events.size() == 1 && events.contains(Player.EVENT_VOLUME_CHANGED)) return
                 historyTracker.observe(player.currentMediaItem?.song(), player.isPlaying)
                 saveQueue(player)
                 observeListening(player)
@@ -106,6 +143,8 @@ class PlaybackService : MediaSessionService() {
         val captured = network ?: return
         val runtime = (application as ClientApplication).playbackRuntime
         if (runtime.connection?.network !== captured || !captured.isActive) return
+        sleepTimer?.observeTrack(this, player.currentPosition.coerceAtLeast(0),
+            player.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0, player.isPlaying)
         // Progress sampling does not rebuild the full queue every half-second.
         qualifiedListening?.observe(com.flaretune.client.ui.PlaybackSnapshot(
             current = player.currentMediaItem?.song(), playing = player.isPlaying,
@@ -133,6 +172,8 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        sleepTimer?.detach(this)
+        sleepTimer = null
         mediaSession?.player?.let { observeListening(it); saveQueue(it) }
         systemControls?.close()
         systemControls = null

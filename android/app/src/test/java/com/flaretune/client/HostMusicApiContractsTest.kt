@@ -253,5 +253,29 @@ class HostMusicApiContractsTest {
         assertEquals(1024, result.photos.single().width)
         assertEquals("Singer", take().requestUrl!!.queryParameter("name"))
     }
+    @Test fun languageCountsSupportIncludeUntaggedOptInAndUntaggedSongFilter() {
+        enqueue(catalog(JSONObject().put("zh", 5).put("en", 4).put("untagged", 3)))
+        val withUntagged = api.languageCounts(includeUntagged = true)
+        assertEquals(mapOf("zh" to 5, "en" to 4, "untagged" to 3), withUntagged)
+        val firstUrl = take().requestUrl!!
+        assertEquals("/api/songs", firstUrl.encodedPath)
+        assertEquals("language", firstUrl.queryParameter("counts"))
+        assertEquals("1", firstUrl.queryParameter("includeUntagged"))
+
+        enqueue(catalog(JSONObject().put("zh", 5).put("en", 4)))
+        val defaultCounts = api.languageCounts(includeUntagged = false)
+        assertEquals(mapOf("zh" to 5, "en" to 4), defaultCounts)
+        val secondUrl = take().requestUrl!!
+        assertEquals("language", secondUrl.queryParameter("counts"))
+        assertNull(secondUrl.queryParameter("includeUntagged"))
+
+        enqueue(catalog(JSONObject().put("songs", JSONArray().put(song("u-1").put("language", JSONObject.NULL))).put("hasMore", false)))
+        val untaggedPage = api.songs(query = "", offset = 0, language = "untagged", sort = "desc")
+        assertEquals(listOf("u-1"), untaggedPage.songs.map { it.id })
+        val songUrl = take().requestUrl!!
+        assertEquals("untagged", songUrl.queryParameter("language"))
+        assertEquals("desc", songUrl.queryParameter("sort"))
+    }
+
     private fun JSONArray.strings() = (0 until length()).map(::getString)
 }

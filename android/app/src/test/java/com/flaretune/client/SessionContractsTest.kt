@@ -285,6 +285,404 @@ class SessionContractsTest {
         assertNotNull(store.saved)
     }
 
+    private fun secondLoginResponses() {
+        server.enqueue(response("""{"state":"ready"}"""))
+        server.enqueue(response(sessionBody.replace("account-one", "account-two").replace("listener", "second"))
+            .setHeader("Set-Cookie", "$SESSION_COOKIE_NAME=${"B".repeat(43)}; Path=/; HttpOnly; Secure; Max-Age=3600"))
+    }
+    private fun restoreResponses(body: String = sessionBody) {
+        server.enqueue(response("""{"state":"ready"}"""))
+        server.enqueue(response(body))
+    }
+
+    @Test fun addingSameOriginAccountKeepsBothAndCancelRevalidatesOriginal() = runBlocking<Unit> {
+        val store = MemorySessions()
+        val manager = manager(store)
+        loginResponses()
+        val first = manager.login(server.url("/").toString(), "listener", "temporary")
+        val firstKey = manager.activeAccountKey!!
+        manager.beginAddAccount()
+        manager.beginAddAccount()
+        assertFalse(first.network.isActive)
+        assertNull(manager.current)
+        assertEquals(1, manager.savedAccounts.size)
+        restoreResponses()
+        assertEquals("account-one", manager.cancelAddAccount()!!.auth.account.id)
+        assertEquals(firstKey, manager.activeAccountKey)
+        manager.beginAddAccount()
+        secondLoginResponses()
+        manager.login(server.url("/").toString(), "second", "another-password")
+        assertEquals(2, manager.savedAccounts.size)
+        assertEquals(setOf("account-one", "account-two"), manager.savedAccounts.map { it.accountId }.toSet())
+        assertEquals(1, manager.savedAccounts.count { it.active })
+        restoreResponses()
+        val selected = manager.switchAccount(firstKey)!!
+        assertEquals("account-one", selected.auth.account.id)
+        assertEquals(2, manager.savedAccounts.size)
+        assertEquals(firstKey, store.readAccounts().activeAccountKey)
+    }
+
+    @Test fun expiredTargetLosesOnlyItsCookieAndRetainsReauthSummary() = runBlocking<Unit> {
+        val store = MemorySessions()
+        val manager = manager(store)
+        loginResponses(); manager.login(server.url("/").toString(), "listener", "temporary")
+        val firstKey = manager.activeAccountKey!!
+        secondLoginResponses(); manager.login(server.url("/").toString(), "second", "another-password")
+        val secondKey = manager.activeAccountKey!!
+        server.enqueue(response("""{"state":"ready"}"""))
+        server.enqueue(MockResponse().setResponseCode(401).setBody("{}"))
+        assertNull(manager.switchAccount(firstKey))
+        assertNull(manager.current)
+        assertTrue(manager.savedAccounts.single { it.accountKey == firstKey }.needsReauth)
+        assertNull(store.readAccounts().accounts.single { it.accountKey == firstKey }.cookie)
+        assertFalse(manager.savedAccounts.single { it.accountKey == secondKey }.needsReauth)
+        assertNotNull(store.readAccounts().accounts.single { it.accountKey == secondKey }.cookie)
+        val before = server.requestCount
+        assertNull(manager.switchAccount(firstKey))
+        assertEquals(before, server.requestCount)
+    }
+
+    @Test fun validCookieCannotSilentlySwitchTheStoredAccountIdentity() = runBlocking<Unit> {
+        val store = MemorySessions()
+        val manager = manager(store)
+        loginResponses(); manager.login(server.url("/").toString(), "listener", "temporary")
+        val firstKey = manager.activeAccountKey!!
+        restoreResponses(sessionBody.replace("account-one", "different-account"))
+        assertNull(manager.switchAccount(firstKey))
+        assertTrue(manager.savedAccounts.single().needsReauth)
+        assertEquals("account-one", manager.savedAccounts.single().accountId)
+    }
+
+    @Test fun overlappingSwitchCannotCommitOlderAccountOrEraseNewerCookie() = runBlocking<Unit> {
+        supervisorScope {
+            val store = MemorySessions()
+            val manager = manager(store)
+            loginResponses(); manager.login(server.url("/").toString(), "listener", "temporary")
+            val firstKey = manager.activeAccountKey!!
+            secondLoginResponses(); manager.login(server.url("/").toString(), "second", "another-password")
+            val secondKey = manager.activeAccountKey!!
+            repeat(4) { server.takeRequest(5, TimeUnit.SECONDS) }
+            server.enqueue(response("""{"state":"ready"}"""))
+            server.enqueue(response(sessionBody).setBodyDelay(350, TimeUnit.MILLISECONDS))
+            val older = async(Dispatchers.IO) { manager.switchAccount(firstKey) }
+            assertNotNull(server.takeRequest(5, TimeUnit.SECONDS))
+            assertEquals("/api/auth/session", server.takeRequest(5, TimeUnit.SECONDS)!!.path)
+            restoreResponses(sessionBody.replace("account-one", "account-two").replace("listener", "second"))
+            val newer = manager.switchAccount(secondKey)!!
+            try { older.await(); fail("Older switch was accepted") }
+            catch (error: ApiFailure) { assertEquals(Failure.RETIRED, error.failure) }
+            assertSame(newer, manager.current)
+            assertEquals(secondKey, store.readAccounts().activeAccountKey)
+            assertEquals(2, store.readAccounts().accounts.size)
+        }
+    }
+
+    @Test fun logoutAndExplicitRemovalLeaveOtherSavedCredentialsIntact() = runBlocking<Unit> {
+        val store = MemorySessions()
+        val manager = manager(store)
+        loginResponses(); manager.login(server.url("/").toString(), "listener", "temporary")
+        val firstKey = manager.activeAccountKey!!
+        secondLoginResponses(); manager.login(server.url("/").toString(), "second", "another-password")
+        val second = manager.current!!
+        server.enqueue(response("""{"ok":true}"""))
+        manager.logout()
+        assertFalse(second.network.isActive)
+        assertNull(manager.restore()) // Explicit logout returns to account selection, not automatic login.
+        assertEquals(listOf(firstKey), manager.savedAccounts.map { it.accountKey })
+        assertNotNull(store.readAccounts().accounts.single().cookie)
+        manager.removeSavedAccount(firstKey)
+        assertTrue(store.readAccounts().accounts.isEmpty())
+    }
+
+    @Test fun accountsFromDifferentOriginsUseOnlyTheirOwnCookie() = runBlocking<Unit> {
+        val other = MockWebServer().apply { useHttps(tlsServer.sslSocketFactory(), false); start() }
+        try {
+            val store = MemorySessions()
+            val manager = manager(store)
+            loginResponses(); manager.login(server.url("/").toString(), "listener", "temporary")
+            val firstKey = manager.activeAccountKey!!
+            other.enqueue(response("""{"state":"ready"}"""))
+            other.enqueue(response(sessionBody).setHeader("Set-Cookie",
+                "$SESSION_COOKIE_NAME=${"B".repeat(43)}; Path=/; HttpOnly; Secure; Max-Age=3600"))
+            manager.login(other.url("/").toString(), "listener", "temporary")
+            assertEquals(2, manager.savedAccounts.size)
+            repeat(2) { server.takeRequest(5, TimeUnit.SECONDS) }
+            restoreResponses()
+            manager.switchAccount(firstKey)
+            server.takeRequest(5, TimeUnit.SECONDS)
+            assertEquals("$SESSION_COOKIE_NAME=$token", server.takeRequest(5, TimeUnit.SECONDS)!!.getHeader("Cookie"))
+            assertEquals(2, other.requestCount)
+        } finally { other.shutdown() }
+    }
+
+    @Test fun activeInvalidationMarksOnlyTheActiveAccountAndNeverErasesOtherCookies() = runBlocking<Unit> {
+        val store = MemorySessions()
+        val manager = manager(store)
+        loginResponses(); manager.login(server.url("/").toString(), "listener", "temporary")
+        val firstKey = manager.activeAccountKey!!
+        secondLoginResponses(); val second = manager.login(server.url("/").toString(), "second", "temporary")
+        val secondKey = manager.activeAccountKey!!
+        server.enqueue(MockResponse().setResponseCode(401).setBody("{}"))
+        assertThrows(ApiFailure::class.java) { second.api.favorites() }
+        assertNull(manager.current)
+        assertFalse(second.network.isActive)
+        assertTrue(manager.savedAccounts.single { it.accountKey == secondKey }.needsReauth)
+        assertNull(store.readAccounts().accounts.single { it.accountKey == secondKey }.cookie)
+        assertNotNull(store.readAccounts().accounts.single { it.accountKey == firstKey }.cookie)
+    }
+
+    @Test fun failedCredentialDeletionFailsClosedAndCannotResumeTheOldCookieInProcess() = runBlocking<Unit> {
+        val memory = MemorySessions()
+        var failWrites = false
+        val failing = object : SessionStore by memory {
+            override fun writeAccounts(snapshot: SavedAccountsSnapshot) {
+                if (failWrites) throw ApiFailure(Failure.STORAGE)
+                memory.writeAccounts(snapshot)
+            }
+        }
+        val manager = ConnectionManager(failing, base)
+        loginResponses(); val old = manager.login(server.url("/").toString(), "listener", "temporary")
+        val firstKey = manager.activeAccountKey!!
+        failWrites = true
+        server.enqueue(response("""{"ok":true}"""))
+        try { manager.logout(); fail("Storage failure was hidden") }
+        catch (error: ApiFailure) { assertEquals(Failure.STORAGE, error.failure) }
+        assertFalse(old.network.isActive)
+        assertNull(manager.current)
+        assertNull(manager.restore())
+        assertTrue(manager.savedAccounts.single().needsReauth)
+        failWrites = false
+        val before = server.requestCount
+        assertNull(manager.switchAccount(firstKey))
+        assertEquals(before, server.requestCount)
+        assertNull(memory.readAccounts().accounts.single().cookie)
+    }
+
+    @Test fun migratedLegacyAccountGetsCanonicalIdentityAndExpiredReauthLeavesNoPlaceholder() = runBlocking<Unit> {
+        val store = MemorySessions()
+        store.saved = SavedConnection(InstanceAddress.parse(server.url("/").toString()).origin,
+            "$SESSION_COOKIE_NAME=$token; Path=/; HttpOnly; Secure; Max-Age=3600")
+        val manager = manager(store)
+        val legacyKey = store.readAccounts().activeAccountKey!!
+        server.enqueue(response("""{"state":"ready"}"""))
+        server.enqueue(MockResponse().setResponseCode(401).setBody("{}"))
+        assertNull(manager.restore())
+        assertTrue(manager.savedAccounts.single().needsReauth)
+        loginResponses()
+        val active = manager.login(server.url("/").toString(), "listener", "temporary")
+        assertEquals("account-one", active.auth.account.id)
+        assertEquals(1, manager.savedAccounts.size)
+        assertNotEquals(legacyKey, manager.activeAccountKey)
+        assertEquals("account-one", store.readAccounts().accounts.single().accountId)
+    }
+
+    @Test fun removingSavedAccountDuringUnfinishedLoginCannotRecreateItsCredential() = runBlocking<Unit> {
+        supervisorScope {
+            val store = MemorySessions()
+            val manager = manager(store)
+            loginResponses(); manager.login(server.url("/").toString(), "listener", "temporary")
+            val firstKey = manager.activeAccountKey!!
+            repeat(2) { server.takeRequest(5, TimeUnit.SECONDS) }
+            manager.beginAddAccount()
+            server.enqueue(response("""{"state":"ready"}"""))
+            server.enqueue(response(sessionBody).setHeader("Set-Cookie",
+                "$SESSION_COOKIE_NAME=$token; Path=/; Secure; HttpOnly; Max-Age=3600").setBodyDelay(350, TimeUnit.MILLISECONDS))
+            val pending = async(Dispatchers.IO) { manager.login(server.url("/").toString(), "listener", "temporary") }
+            repeat(2) { assertNotNull(server.takeRequest(5, TimeUnit.SECONDS)) }
+            manager.removeSavedAccount(firstKey)
+            try { pending.await(); fail("Removed credential was recreated by an old login") }
+            catch (error: ApiFailure) { assertEquals(Failure.RETIRED, error.failure) }
+            assertNull(manager.current)
+            assertTrue(store.readAccounts().accounts.isEmpty())
+        }
+    }
+
+    private class QueuedIoDispatcher : CoroutineDispatcher() {
+        private val queued = java.util.ArrayDeque<Runnable>()
+        override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) { queued.addLast(block) }
+        fun runNext() { queued.removeFirst().run() }
+        fun runLast() { queued.removeLast().run() }
+    }
+
+    private suspend fun assertRetired(pending: Deferred<*>) {
+        try { pending.await(); fail("An earlier queued account intent was accepted") }
+        catch (error: ApiFailure) { assertEquals(Failure.RETIRED, error.failure) }
+    }
+
+    private fun seedSavedAccount(store: MemorySessions): String {
+        val origin = InstanceAddress.parse(server.url("/").toString()).origin
+        val key = SavedAccount.key(origin, "account-one")
+        store.writeAccounts(SavedAccountsSnapshot(listOf(SavedAccount(key, origin, "account-one", "listener", "Listener",
+            "$SESSION_COOKIE_NAME=$token; Path=/; HttpOnly; Secure; Max-Age=3600")), key))
+        return key
+    }
+
+    @Test fun queuedLoginCannotClaimNewIdentityAfterALaterLogoutBeforeItsIoRuns() = runBlocking<Unit> {
+        supervisorScope {
+            val io = QueuedIoDispatcher()
+            val store = MemorySessions()
+            val manager = ConnectionManager(store, base, io)
+            val earlier = async(start = CoroutineStart.UNDISPATCHED) {
+                manager.login(server.url("/").toString(), "listener", "temporary")
+            }
+            val later = async(start = CoroutineStart.UNDISPATCHED) { manager.logout() }
+            io.runLast(); later.await()
+            val expected = store.readAccounts()
+            val expectedOrigin = store.lastOrigin
+            io.runNext(); assertRetired(earlier)
+            assertNull(manager.current)
+            assertNull(manager.selectedAccountKey)
+            assertEquals(expected, store.readAccounts())
+            assertEquals(expectedOrigin, store.lastOrigin)
+            assertEquals(0, server.requestCount)
+        }
+    }
+
+    @Test fun queuedOlderLoginCannotOverwriteANewerLoginAccountOrOrigin() = runBlocking<Unit> {
+        supervisorScope {
+            val io = QueuedIoDispatcher()
+            val store = MemorySessions()
+            val manager = ConnectionManager(store, base, io)
+            val earlier = async(start = CoroutineStart.UNDISPATCHED) {
+                manager.login(server.url("/").toString(), "listener", "temporary")
+            }
+            val newerOrigin = server.url("/").newBuilder().host("127.0.0.1").build().toString()
+            secondLoginResponses()
+            val later = async(start = CoroutineStart.UNDISPATCHED) { manager.login(newerOrigin, "second", "temporary") }
+            io.runLast(); val newer = later.await()
+            val expected = store.readAccounts()
+            val expectedOrigin = store.lastOrigin
+            io.runNext(); assertRetired(earlier)
+            assertSame(newer, manager.current)
+            assertEquals("account-two", newer.auth.account.id)
+            assertEquals(InstanceAddress.parse(newerOrigin).origin, expectedOrigin)
+            assertEquals(expectedOrigin, store.lastOrigin)
+            assertEquals(expected, store.readAccounts())
+            assertEquals(2, server.requestCount)
+        }
+    }
+
+    @Test fun queuedSwitchCannotUndoALaterBeginAddAccount() = runBlocking<Unit> {
+        supervisorScope {
+            val io = QueuedIoDispatcher()
+            val store = MemorySessions()
+            val firstKey = seedSavedAccount(store)
+            val manager = ConnectionManager(store, base, io)
+            val earlier = async(start = CoroutineStart.UNDISPATCHED) { manager.switchAccount(firstKey) }
+            manager.beginAddAccount()
+            val expected = store.readAccounts()
+            val expectedOrigin = store.lastOrigin
+            io.runNext(); assertRetired(earlier)
+            assertNull(manager.current)
+            assertNull(manager.selectedAccountKey)
+            assertEquals(expected, store.readAccounts())
+            assertEquals(expectedOrigin, store.lastOrigin)
+            assertEquals(0, server.requestCount)
+        }
+    }
+
+    @Test fun queuedOlderSwitchCannotOverwriteANewerSwitchWhenIoExecutionReverses() = runBlocking<Unit> {
+        supervisorScope {
+            val io = QueuedIoDispatcher()
+            val store = MemorySessions()
+            val firstKey = seedSavedAccount(store)
+            val first = store.readAccounts().accounts.single()
+            val secondKey = SavedAccount.key(first.origin, "account-two")
+            val second = first.copy(accountKey = secondKey, accountId = "account-two", username = "second",
+                cookie = "$SESSION_COOKIE_NAME=${"B".repeat(43)}; Path=/; HttpOnly; Secure; Max-Age=3600")
+            store.writeAccounts(SavedAccountsSnapshot(listOf(first, second), firstKey))
+            val manager = ConnectionManager(store, base, io)
+            val earlier = async(start = CoroutineStart.UNDISPATCHED) { manager.switchAccount(firstKey) }
+            restoreResponses(sessionBody.replace("account-one", "account-two").replace("listener", "second"))
+            val later = async(start = CoroutineStart.UNDISPATCHED) { manager.switchAccount(secondKey) }
+            io.runLast(); val newer = later.await()!!
+            val expected = store.readAccounts()
+            io.runNext(); assertRetired(earlier)
+            assertSame(newer, manager.current)
+            assertEquals(secondKey, manager.selectedAccountKey)
+            assertEquals(secondKey, manager.activeAccountKey)
+            assertEquals(expected, store.readAccounts())
+            assertEquals(2, server.requestCount)
+        }
+    }
+
+    @Test fun queuedLogoutCannotDeleteOrRevokeANewerLogin() = runBlocking<Unit> {
+        supervisorScope {
+            val io = QueuedIoDispatcher()
+            val store = MemorySessions()
+            val manager = ConnectionManager(store, base, io)
+            loginResponses()
+            val initial = async(start = CoroutineStart.UNDISPATCHED) { manager.login(server.url("/").toString(), "listener", "temporary") }
+            io.runNext(); val old = initial.await()
+            val earlier = async(start = CoroutineStart.UNDISPATCHED) { manager.logout() }
+            assertFalse(old.network.isActive)
+            assertTrue(store.readAccounts().accounts.isEmpty())
+            secondLoginResponses()
+            val later = async(start = CoroutineStart.UNDISPATCHED) { manager.login(server.url("/").toString(), "second", "temporary") }
+            io.runLast(); val newer = later.await()
+            val expected = store.readAccounts()
+            io.runNext(); assertRetired(earlier)
+            assertSame(newer, manager.current)
+            assertEquals(expected, store.readAccounts())
+            assertEquals("account-two", store.readAccounts().accounts.single().accountId)
+            assertEquals(4, server.requestCount) // Two logins; no stale logout request.
+        }
+    }
+
+    @Test fun queuedRestoreAndCancelDoNotReclaimGenerationAfterALaterLogout() = runBlocking<Unit> {
+        supervisorScope {
+            for (cancelAdd in listOf(false, true)) {
+                val io = QueuedIoDispatcher()
+                val store = MemorySessions()
+                seedSavedAccount(store)
+                val manager = ConnectionManager(store, base, io)
+                if (cancelAdd) manager.beginAddAccount()
+                val earlier = async(start = CoroutineStart.UNDISPATCHED) {
+                    if (cancelAdd) manager.cancelAddAccount() else manager.restore()
+                }
+                val later = async(start = CoroutineStart.UNDISPATCHED) { manager.logout() }
+                io.runLast(); later.await()
+                io.runNext(); assertRetired(earlier)
+                assertNull(manager.current)
+                assertTrue(store.readAccounts().accounts.isEmpty())
+            }
+            assertEquals(0, server.requestCount)
+        }
+    }
+
+    @Test fun queuedPasswordChangeRemainsBoundToCapturedAccountBeforeItsIoRuns() = runBlocking<Unit> {
+        supervisorScope {
+            val io = QueuedIoDispatcher()
+            val store = MemorySessions()
+            val manager = ConnectionManager(store, base, io)
+            loginResponses()
+            val initial = async(start = CoroutineStart.UNDISPATCHED) { manager.login(server.url("/").toString(), "listener", "temporary") }
+            io.runNext(); initial.await()
+            val earlier = async(start = CoroutineStart.UNDISPATCHED) { manager.changePassword("temporary", "replacement") }
+            manager.beginAddAccount()
+            io.runNext(); assertRetired(earlier)
+            assertNull(manager.current)
+            assertEquals(1, store.readAccounts().accounts.size)
+            assertFalse(store.readAccounts().accounts.single().needsReauth)
+            assertEquals(2, server.requestCount) // Only the initial login.
+        }
+    }
+
+    @Test fun localRemovalCancelsAQueuedUnknownIdentityLoginBeforeItsIoRuns() = runBlocking<Unit> {
+        supervisorScope {
+            val io = QueuedIoDispatcher()
+            val store = MemorySessions()
+            val firstKey = seedSavedAccount(store)
+            val manager = ConnectionManager(store, base, io)
+            val earlier = async(start = CoroutineStart.UNDISPATCHED) { manager.login(server.url("/").toString(), "listener", "temporary") }
+            manager.removeSavedAccount(firstKey)
+            io.runNext(); assertRetired(earlier)
+            assertNull(manager.current)
+            assertTrue(store.readAccounts().accounts.isEmpty())
+            assertEquals(0, server.requestCount)
+        }
+    }
+
     @Test fun encryptionIsRandomizedAndRejectsTamperingOrAnotherKey() {
         val cipher = SessionCipher { SecretKeySpec(ByteArray(32) { 7 }, "AES") }
         val bytes = "sensitive-session-fixture".toByteArray()
@@ -299,9 +697,19 @@ class SessionContractsTest {
 }
 
 class MemorySessions : SessionStore {
-    @Volatile var saved: SavedConnection? = null
+    private var snapshot = SavedAccountsSnapshot()
+    var saved: SavedConnection?
+        @Synchronized get() = read()
+        @Synchronized set(value) {
+            snapshot = value?.let { SavedAccount.legacy(it) }?.let { SavedAccountsSnapshot(listOf(it), it.accountKey) }
+                ?: SavedAccountsSnapshot()
+        }
     override var lastOrigin: String = ""
-    override fun read() = saved
+    @Synchronized override fun read(): SavedConnection? = snapshot.accounts.find {
+        it.accountKey == snapshot.activeAccountKey && !it.needsReauth
+    }?.let { row -> row.cookie?.let { SavedConnection(row.origin, it) } }
     override fun write(connection: SavedConnection) { saved = connection }
-    override fun clear() { saved = null }
+    @Synchronized override fun clear() { snapshot = SavedAccountsSnapshot() }
+    @Synchronized override fun readAccounts() = snapshot
+    @Synchronized override fun writeAccounts(snapshot: SavedAccountsSnapshot) { this.snapshot = snapshot }
 }

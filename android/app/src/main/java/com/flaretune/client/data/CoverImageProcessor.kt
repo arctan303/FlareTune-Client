@@ -14,10 +14,17 @@ import java.io.File
 fun interface CoverImageProcessor {
     /** Transient picker URI in, metadata-free 1024 square WebP out. Never persists the URI. */
     fun prepare(sourceUri: String): ByteArray
+
+    /** Transient picker URI in, metadata-free 512 square WebP out for account avatars. */
+    fun prepareAvatar(sourceUri: String): ByteArray = prepare(sourceUri)
 }
 
 class AndroidCoverImageProcessor(private val context: Context) : CoverImageProcessor {
-    override fun prepare(sourceUri: String): ByteArray {
+    override fun prepare(sourceUri: String): ByteArray = prepareSquareWebp(sourceUri, 1024)
+
+    override fun prepareAvatar(sourceUri: String): ByteArray = prepareSquareWebp(sourceUri, 512)
+
+    private fun prepareSquareWebp(sourceUri: String, targetSize: Int): ByteArray {
         try {
             val uri = Uri.parse(sourceUri)
             if (uri.scheme != "content" || uri.authority.isNullOrBlank()) throw ApiFailure(Failure.REQUEST)
@@ -32,13 +39,14 @@ class AndroidCoverImageProcessor(private val context: Context) : CoverImageProce
                 }
                 output.toByteArray()
             } ?: throw ApiFailure(Failure.REQUEST)
-            return encode(bytes)
+            return encode(bytes, targetSize)
         } catch (error: ApiFailure) { throw error }
         catch (_: Exception) { throw ApiFailure(Failure.REQUEST) }
     }
 
-    internal fun encode(bytes: ByteArray): ByteArray {
+    internal fun encode(bytes: ByteArray, targetSize: Int = 1024): ByteArray {
         if (bytes.isEmpty() || bytes.size > MAX_SOURCE_BYTES) throw ApiFailure(Failure.REQUEST)
+        val decodeCap = (targetSize * 2).coerceAtLeast(1024)
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         if (bounds.outWidth !in 1..32768 || bounds.outHeight !in 1..32768) throw ApiFailure(Failure.REQUEST)
@@ -47,13 +55,13 @@ class AndroidCoverImageProcessor(private val context: Context) : CoverImageProce
             var decoded = if (Build.VERSION.SDK_INT >= 28) {
                 ImageDecoder.decodeBitmap(ImageDecoder.createSource(java.nio.ByteBuffer.wrap(bytes))) { decoder, info, _ ->
                     decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
-                    val scale = (2048.0 / maxOf(info.size.width, info.size.height)).coerceAtMost(1.0)
+                    val scale = (decodeCap.toDouble() / maxOf(info.size.width, info.size.height)).coerceAtMost(1.0)
                     decoder.setTargetSize((info.size.width * scale).toInt().coerceAtLeast(1),
                         (info.size.height * scale).toInt().coerceAtLeast(1))
                 }
             } else {
                 val options = BitmapFactory.Options().apply { inSampleSize = 1 }
-                while (maxOf(bounds.outWidth, bounds.outHeight) / (options.inSampleSize * 2) >= 2048)
+                while (maxOf(bounds.outWidth, bounds.outHeight) / (options.inSampleSize * 2) >= decodeCap)
                     options.inSampleSize *= 2
                 val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
                     ?: throw ApiFailure(Failure.REQUEST)
@@ -64,7 +72,7 @@ class AndroidCoverImageProcessor(private val context: Context) : CoverImageProce
             val size = minOf(decoded.width, decoded.height)
             val square = Bitmap.createBitmap(decoded, (decoded.width - size) / 2, (decoded.height - size) / 2, size, size)
             bitmaps += square
-            decoded = Bitmap.createScaledBitmap(square, 1024, 1024, true)
+            decoded = Bitmap.createScaledBitmap(square, targetSize, targetSize, true)
             bitmaps += decoded
             val output = ByteArrayOutputStream()
             @Suppress("DEPRECATION")

@@ -7,7 +7,6 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearOutSlowInEasing
@@ -19,12 +18,15 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -45,8 +47,12 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -56,21 +62,27 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -85,14 +97,25 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import coil.ImageLoader
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import androidx.core.view.WindowCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.flaretune.client.R
+import com.flaretune.client.data.InstanceAddress
 import com.flaretune.client.model.ClientNotice
 import com.flaretune.client.model.Song
+import com.flaretune.client.playback.SleepTimerState
+import com.flaretune.client.ui.theme.FlareTokens
+import com.flaretune.client.ui.theme.isFlareDarkTheme
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
@@ -111,12 +134,18 @@ fun ClientApp(
     actions: ClientActions,
     imageLoader: ImageLoader? = null,
     positionMsFlow: StateFlow<Long>? = null,
+    sleepTimerFlow: StateFlow<SleepTimerState>? = null,
+    playColdOpenSplash: Boolean = false,
 ) {
-    CompositionLocalProvider(LocalPlaybackPositionMs provides positionMsFlow) {
+    CompositionLocalProvider(
+        LocalPlaybackPositionMs provides positionMsFlow,
+        LocalSleepTimer provides sleepTimerFlow,
+    ) {
         ClientAppContent(
             state = state,
             actions = actions,
             imageLoader = imageLoader,
+            playColdOpenSplash = playColdOpenSplash,
         )
     }
 }
@@ -126,10 +155,63 @@ private fun ClientAppContent(
     state: ClientUiState,
     actions: ClientActions,
     imageLoader: ImageLoader?,
+    playColdOpenSplash: Boolean,
 ) {
+    val avatarRegistry = rememberAvatarAnchorRegistry()
+    val playerRegistry = rememberPlayerTransitionRegistry()
+    val coroutineScope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    var splashNonceShown by rememberSaveable { mutableIntStateOf(state.splashNonce) }
+    var splashDone by rememberSaveable { mutableStateOf(!playColdOpenSplash) }
+    val splashVisible = !splashDone || state.splashNonce != splashNonceShown
+    var lastObservedScreen by remember { mutableStateOf(state.screen) }
+    var activeRelayBounds by remember { mutableStateOf<Rect?>(null) }
+    var activeRelayInitial by remember { mutableStateOf("") }
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, focusManager, keyboardController) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                focusManager.clearFocus(force = true)
+                keyboardController?.hide()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(state.splashNonce) {
+        if (state.splashNonce != splashNonceShown) {
+            splashDone = false
+            activeRelayBounds = null
+        }
+    }
+    LaunchedEffect(state.screen, state.accountName, state.username) {
+        val prev = lastObservedScreen
+        lastObservedScreen = state.screen
+        if (prev == ClientScreen.CONNECT && state.screen == ClientScreen.LIBRARY) {
+            val fromBounds = avatarRegistry.lastLoginAvatarBounds
+            if (fromBounds != null && !splashVisible) {
+                val resolvedInitial = state.accountName
+                    .ifBlank { state.username.ifBlank { avatarRegistry.lastLoginInitial } }
+                    .trim().take(1).uppercase(Locale.ROOT)
+                activeRelayInitial = resolvedInitial
+                activeRelayBounds = fromBounds
+            }
+        } else if (state.screen != ClientScreen.LIBRARY) {
+            activeRelayBounds = null
+        }
+    }
     var panel by rememberSaveable { mutableStateOf(PlayerPanel.NONE) }
     var queueReturnPanel by rememberSaveable { mutableStateOf(PlayerPanel.NONE) }
     var panelIdentity by rememberSaveable { mutableStateOf<String?>(null) }
+    var playerMobileLyricsMode by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(panel, state.screen) {
+        if (panel != PlayerPanel.NONE || state.screen == ClientScreen.RESTORING) {
+            focusManager.clearFocus(force = true)
+            keyboardController?.hide()
+        }
+    }
     var feedbackMessage by remember { mutableStateOf<String?>(null) }
     var feedbackNonce by remember { mutableIntStateOf(0) }
     LaunchedEffect(feedbackNonce) {
@@ -144,8 +226,140 @@ private fun ClientAppContent(
             feedbackNonce++
         }
     }
-    val systemDark = isSystemInDarkTheme()
-    val useLightBarIcons = systemDark || (state.screen == ClientScreen.LIBRARY && panel != PlayerPanel.NONE)
+    var lastHandledFeedbackId by rememberSaveable { mutableLongStateOf(0L) }
+    val pendingPlaybackFeedback = state.playbackFeedback
+    val pendingFeedbackMessage = pendingPlaybackFeedback?.let { event ->
+        when (event.kind) {
+            PlaybackFeedbackKind.PLAYED_SINGLE_NEXT ->
+                stringResource(R.string.ft_feedback_play_single_next)
+            PlaybackFeedbackKind.PLAYED_BATCH_NEXT ->
+                stringResource(R.string.ft_feedback_play_batch_next)
+            PlaybackFeedbackKind.ENQUEUED_BATCH ->
+                stringResource(R.string.ft_feedback_enqueued_batch)
+            PlaybackFeedbackKind.FAVORITED_BATCH ->
+                stringResource(R.string.ft_feedback_favorited_batch)
+            PlaybackFeedbackKind.QUEUE_RESTORED ->
+                stringResource(R.string.ft_history_queue_restored)
+            PlaybackFeedbackKind.QUEUE_RESTORED_PARTIAL ->
+                stringResource(R.string.ft_history_queue_restored_partial, event.omittedCount)
+            PlaybackFeedbackKind.TRACK_UNAVAILABLE ->
+                stringResource(R.string.ft_feedback_track_unavailable)
+            PlaybackFeedbackKind.QUEUE_RESTORE_UNAVAILABLE ->
+                stringResource(R.string.ft_feedback_queue_restore_unavailable)
+        }
+    }
+    LaunchedEffect(pendingPlaybackFeedback?.id) {
+        val event = pendingPlaybackFeedback ?: return@LaunchedEffect
+        if (event.id == lastHandledFeedbackId) return@LaunchedEffect
+        lastHandledFeedbackId = event.id
+        pendingFeedbackMessage?.let(showFeedback)
+        actions.dismissPlaybackFeedback(event.id)
+    }
+    val playerOverlayVisible = state.screen == ClientScreen.LIBRARY &&
+        state.playback.current != null &&
+        (panel == PlayerPanel.PLAYER || (panel == PlayerPanel.QUEUE && queueReturnPanel == PlayerPanel.PLAYER))
+    val prewarmContext = LocalContext.current
+    val prewarmCoverUrl = if (state.screen == ClientScreen.LIBRARY) state.playback.current?.coverUrl else null
+    LaunchedEffect(prewarmCoverUrl, imageLoader) {
+        prewarmClassicPlayerBackdrop(prewarmContext, prewarmCoverUrl, imageLoader)
+    }
+    val initialConfigWidthDp = LocalConfiguration.current.screenWidthDp.dp
+    var rootWidthDp by remember { mutableStateOf(initialConfigWidthDp) }
+    val isWideMode = rootWidthDp >= 840.dp
+    val playerExpandProgress = remember { Animatable(if (playerOverlayVisible) 1f else 0f) }
+    val expandProgressLambda = remember(playerExpandProgress) { { playerExpandProgress.value } }
+    var playerDragging by remember { mutableStateOf(false) }
+    val activeSettleJob = remember { arrayOfNulls<Job>(1) }
+    val dragDrivenTarget = remember { floatArrayOf(Float.NaN) }
+    val minTravelPx = with(density) { 260.dp.toPx() }
+    fun computeMiniBarTopPx(): Float {
+        val rootH = playerRegistry.rootSize.height.toFloat()
+        return (playerRegistry.miniBarBounds?.top
+            ?: (rootH - with(density) { FlareTokens.CompactMiniPlayerHeight.toPx() }))
+            .coerceAtLeast(1f)
+    }
+    fun computeTravelDistancePx(): Float {
+        val rootH = playerRegistry.rootSize.height.toFloat()
+        return computeMiniBarTopPx().coerceAtLeast(maxOf(rootH * 0.45f, minTravelPx))
+    }
+    fun startSettleAnimation(target: Float, initialVelocity: Float) {
+        activeSettleJob[0]?.cancel()
+        activeSettleJob[0] = coroutineScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            val remaining = abs(playerExpandProgress.value - target)
+            if (remaining > 0.001f) {
+                if (isWideMode) {
+                    playerExpandProgress.animateTo(target, WidePlayerSlideSpring, initialVelocity = initialVelocity)
+                } else {
+                    playerExpandProgress.animateTo(target, CompactPlayerSettleSpring, initialVelocity = initialVelocity)
+                }
+            } else {
+                playerExpandProgress.snapTo(target)
+            }
+        }
+    }
+    LaunchedEffect(playerOverlayVisible, state.screen, state.playback.current?.id) {
+        if (state.screen != ClientScreen.LIBRARY || state.playback.current == null) {
+            playerDragging = false
+            activeSettleJob[0]?.cancel()
+            activeSettleJob[0] = null
+            dragDrivenTarget[0] = Float.NaN
+            playerExpandProgress.snapTo(0f)
+            return@LaunchedEffect
+        }
+        if (playerDragging) return@LaunchedEffect
+        val target = if (playerOverlayVisible) 1f else 0f
+        if (!dragDrivenTarget[0].isNaN() && abs(dragDrivenTarget[0] - target) < 0.01f) {
+            dragDrivenTarget[0] = Float.NaN
+            return@LaunchedEffect
+        }
+        dragDrivenTarget[0] = Float.NaN
+        startSettleAnimation(target, 0f)
+    }
+    val onExpandDragStart: () -> Unit = {
+        playerDragging = true
+        dragDrivenTarget[0] = Float.NaN
+        activeSettleJob[0]?.cancel()
+        activeSettleJob[0] = null
+        coroutineScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            playerExpandProgress.stop()
+        }
+    }
+    val onExpandDragDelta: (Float) -> Float = { deltaY ->
+        val travel = computeTravelDistancePx()
+        val current = playerExpandProgress.value
+        val next = (current - deltaY / travel).coerceIn(0f, 1f)
+        val consumedDeltaY = -(next - current) * travel
+        coroutineScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            playerExpandProgress.snapTo(next)
+        }
+        consumedDeltaY
+    }
+    val onExpandDragEnd: (Float) -> Unit = { velocityY ->
+        playerDragging = false
+        val travel = computeTravelDistancePx()
+        val p = playerExpandProgress.value
+        val expandFlingVelocityPx = with(density) { 220.dp.toPx() }
+        val collapseFlingVelocityPx = with(density) { 220.dp.toPx() }
+        val threshold = 0.5f
+        val shouldExpand = when {
+            velocityY <= -expandFlingVelocityPx -> true
+            velocityY >= collapseFlingVelocityPx -> false
+            else -> p >= threshold
+        }
+        val initialVelProgress = (-velocityY / travel).coerceIn(-6f, 6f)
+        val target = if (shouldExpand) 1f else 0f
+        dragDrivenTarget[0] = if (shouldExpand != playerOverlayVisible) target else Float.NaN
+        startSettleAnimation(target, initialVelProgress)
+        if (shouldExpand != playerOverlayVisible) {
+            panel = if (shouldExpand) PlayerPanel.PLAYER else PlayerPanel.NONE
+            if (shouldExpand) queueReturnPanel = PlayerPanel.NONE
+        }
+    }
+
+    val systemDark = isFlareDarkTheme()
+    val useLightBarIcons = systemDark ||
+        playerOverlayVisible ||
+        (state.screen == ClientScreen.LIBRARY && panel == PlayerPanel.QUEUE && queueReturnPanel == PlayerPanel.PLAYER)
     val hostView = LocalView.current
     LaunchedEffect(useLightBarIcons, hostView) {
         val activity = hostView.context as? ComponentActivity ?: return@LaunchedEffect
@@ -156,6 +370,10 @@ private fun ClientAppContent(
         }
         activity.enableEdgeToEdge(statusBarStyle = barStyle, navigationBarStyle = barStyle)
         val window = activity.window
+        WindowCompat.getInsetsController(window, hostView).apply {
+            isAppearanceLightStatusBars = !useLightBarIcons
+            isAppearanceLightNavigationBars = !useLightBarIcons
+        }
         if (Build.VERSION.SDK_INT >= 29) {
             window.isNavigationBarContrastEnforced = false
         }
@@ -193,35 +411,35 @@ private fun ClientAppContent(
         onNavigateToContent = { panel = PlayerPanel.NONE },
         onFeedback = showFeedback,
     ) {
-    val playerOverlayVisible = state.screen == ClientScreen.LIBRARY &&
-        state.playback.current != null &&
-        (panel == PlayerPanel.PLAYER || (panel == PlayerPanel.QUEUE && queueReturnPanel == PlayerPanel.PLAYER))
-    val shellDepthProgress by animateFloatAsState(
-        targetValue = if (playerOverlayVisible) 1f else 0f,
-        animationSpec = spring(dampingRatio = 0.88f, stiffness = 360f),
-        label = "shell_depth_progress",
-    )
+    ProvideAvatarAnchorRegistry(avatarRegistry) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        Box(Modifier.fillMaxSize()) {
+        Box(
+            Modifier.fillMaxSize().onGloballyPositioned {
+                val origin = it.positionInRoot()
+                avatarRegistry.rootOrigin = origin
+                playerRegistry.updateRootLayout(origin, it.size)
+                val measuredWidthDp = with(density) { it.size.width.toDp() }
+                if (abs(measuredWidthDp.value - rootWidthDp.value) > 0.5f) {
+                    rootWidthDp = measuredWidthDp
+                }
+            },
+        ) {
             when (state.screen) {
                 ClientScreen.RESTORING -> RestoringScreen()
                 ClientScreen.CONNECT -> ConnectionScreen(state, actions)
                 ClientScreen.CHANGE_PASSWORD -> PasswordScreen(state, actions)
                 ClientScreen.LIBRARY -> Box(
                     Modifier.fillMaxSize()
-                        .graphicsLayer {
-                            val depth = shellDepthProgress
-                            if (depth > 0.001f) {
-                                val scale = 1f - 0.036f * depth
-                                scaleX = scale
-                                scaleY = scale
-                                alpha = 1f - 0.14f * depth
-                            }
-                        }
+                        .focusProperties { canFocus = panel == PlayerPanel.NONE && !splashVisible }
                         .then(
                             if (panel != PlayerPanel.NONE) Modifier.clearAndSetSemantics {} else Modifier,
                         ),
                 ) {
+                    val miniPlayerActive by remember(panel, playerDragging) {
+                        derivedStateOf {
+                            panel == PlayerPanel.NONE && !playerDragging && playerExpandProgress.value <= 0.001f
+                        }
+                    }
                     BackHandler(enabled = panel == PlayerPanel.NONE && state.selectedArtist == null && state.selectedAlbum == null && state.selectedPlaylist == null && state.destination != MainDestination.HOME) { actions.navigate(MainDestination.HOME) }
                     BackHandler(enabled = panel == PlayerPanel.NONE && state.selectedPlaylist != null) { actions.closePlaylist() }
                     BackHandler(enabled = panel == PlayerPanel.NONE && state.selectedAlbum != null) { actions.closeAlbum() }
@@ -235,33 +453,96 @@ private fun ClientAppContent(
                             queueReturnPanel = PlayerPanel.NONE
                             panel = PlayerPanel.QUEUE
                         },
-                        miniPlayerActive = panel == PlayerPanel.NONE,
+                        miniPlayerActive = miniPlayerActive,
+                        playerTransitionRegistry = playerRegistry,
+                        playerExpandProgress = expandProgressLambda,
+                        playerSheetMounted = {
+                            state.screen == ClientScreen.LIBRARY &&
+                                state.playback.current != null &&
+                                (playerOverlayVisible || playerDragging || playerExpandProgress.value > 0.001f)
+                        },
+                        onExpandDragStart = onExpandDragStart,
+                        onExpandDragDelta = onExpandDragDelta,
+                        onExpandDragEnd = onExpandDragEnd,
                     ) }
                 }
             }
-            if (state.screen == ClientScreen.LIBRARY && state.playback.current != null) {
-                var skipPlayerExitAnim by remember { mutableStateOf(false) }
-                LaunchedEffect(panel) {
-                    if (panel != PlayerPanel.NONE) skipPlayerExitAnim = false
+            val activeSong = state.playback.current
+            val sheetPrewarmed = state.screen == ClientScreen.LIBRARY && activeSong != null
+            val sheetActive by remember(state.screen, activeSong != null, playerOverlayVisible, playerDragging) {
+                derivedStateOf {
+                    state.screen == ClientScreen.LIBRARY &&
+                        activeSong != null &&
+                        (playerOverlayVisible || playerDragging || playerExpandProgress.value > 0.001f)
                 }
+            }
+
+            if (sheetPrewarmed) {
                 BackHandler(enabled = panel == PlayerPanel.PLAYER) {
-                    skipPlayerExitAnim = false
                     panel = PlayerPanel.NONE
                 }
-                AnimatedVisibility(
-                    visible = panel == PlayerPanel.PLAYER || (panel == PlayerPanel.QUEUE && queueReturnPanel == PlayerPanel.PLAYER),
-                    enter = slideInVertically(spring(dampingRatio = 0.88f, stiffness = 360f)) { it } + fadeIn(tween(180)),
-                    exit = if (skipPlayerExitAnim) {
-                        ExitTransition.None
-                    } else {
-                        slideOutVertically(spring(dampingRatio = 0.92f, stiffness = 380f)) { it } + fadeOut(tween(160))
-                    },
+                if (sheetActive) {
+                    Box(
+                        Modifier.fillMaxSize()
+                            .pointerInput(playerOverlayVisible) {
+                                awaitPointerEventScope {
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        if (playerOverlayVisible || playerExpandProgress.value > 0.05f) {
+                                            event.changes.forEach { it.consume() }
+                                        }
+                                    }
+                                }
+                            }
+                            .graphicsLayer {
+                                val p = playerExpandProgress.value.coerceIn(0f, 1f)
+                                alpha = (if (isWideMode) 0.36f else 0.44f) * p
+                            }
+                            .background(Color.Black),
+                    )
+                }
+                val slideStartY = computeMiniBarTopPx()
+                val rootHeightPx = playerRegistry.rootSize.height.toFloat().coerceAtLeast(1f)
+                val compactSheetShape = remember(playerRegistry, expandProgressLambda, slideStartY) {
+                    CompactMorphingSheetShape(playerRegistry, expandProgressLambda) { slideStartY }
+                }
+                val sheetTranslationYLambda = remember(isWideMode, slideStartY, rootHeightPx, playerExpandProgress) {
+                    {
+                        val p = playerExpandProgress.value.coerceIn(0f, 1f)
+                        (1f - p) * (if (isWideMode) rootHeightPx else slideStartY)
+                    }
+                }
+                Box(
+                    Modifier.fillMaxSize()
+                        .layout { measurable, constraints ->
+                            val placeable = measurable.measure(constraints)
+                            layout(constraints.maxWidth, constraints.maxHeight) {
+                                if (sheetActive) {
+                                    placeable.placeRelative(0, 0)
+                                }
+                            }
+                        }
+                        .focusProperties { canFocus = sheetActive }
+                        .then(if (!sheetActive) Modifier.clearAndSetSemantics {} else Modifier)
+                        .graphicsLayer {
+                            val p = playerExpandProgress.value.coerceIn(0f, 1f)
+                            val isRest = p >= 0.999f
+                            if (isWideMode) {
+                                translationY = (1f - p) * size.height
+                                clip = false
+                            } else {
+                                translationY = (1f - p) * slideStartY
+                                shape = if (isRest) RectangleShape else compactSheetShape
+                                clip = !isRest
+                            }
+                        },
                 ) {
                     NowPlayingScreen(
                         state = state.playback,
                         lyricState = state.lyricState,
                         translationEnabled = state.translationEnabled,
                         translationNotice = state.translationNotice,
+                        keepScreenOnEnabled = state.keepScreenOnEnabled,
                         actions = actions,
                         imageLoader = imageLoader,
                         onQueue = {
@@ -269,9 +550,27 @@ private fun ClientAppContent(
                             panel = PlayerPanel.QUEUE
                         },
                         onClose = {
-                            skipPlayerExitAnim = true
                             panel = PlayerPanel.NONE
                         },
+                        expandProgress = expandProgressLambda,
+                        sheetTranslationY = sheetTranslationYLambda,
+                        isWideTransition = isWideMode,
+                        onCollapseDragStart = onExpandDragStart,
+                        onCollapseDragDelta = onExpandDragDelta,
+                        onCollapseDragEnd = onExpandDragEnd,
+                        transitionRegistry = playerRegistry,
+                        mobileLyricsMode = playerMobileLyricsMode,
+                        onMobileLyricsModeChange = { playerMobileLyricsMode = it },
+                        sheetVisible = playerOverlayVisible,
+                    )
+                }
+                if (!isWideMode && sheetActive) {
+                    FlyingArtworkOverlay(
+                        song = activeSong,
+                        imageLoader = imageLoader,
+                        progress = expandProgressLambda,
+                        registry = playerRegistry,
+                        isWideMode = false,
                     )
                 }
             }
@@ -288,7 +587,6 @@ private fun ClientAppContent(
                         onMove = actions::moveQueueItem,
                     ) { index ->
                         actions.selectQueueItem(index)
-                        closeQueue()
                     }
                 }
             }
@@ -322,7 +620,33 @@ private fun ClientAppContent(
                     }
                 }
             }
+            val relayFrom = activeRelayBounds
+            if (relayFrom != null && !splashVisible && state.screen == ClientScreen.LIBRARY) {
+                Box(Modifier.fillMaxSize().zIndex(30f)) {
+                    AvatarRelayOverlay(
+                        fromRect = relayFrom,
+                        initial = activeRelayInitial,
+                        registry = avatarRegistry,
+                        onFinished = { activeRelayBounds = null },
+                    )
+                }
+            }
+            if (splashVisible) {
+                Box(Modifier.fillMaxSize().zIndex(40f)) {
+                    key(state.splashNonce) {
+                        ColdOpenSplashOverlay(
+                            state = state,
+                            registry = avatarRegistry,
+                            onFinished = {
+                                splashNonceShown = state.splashNonce
+                                splashDone = true
+                            },
+                        )
+                    }
+                }
+            }
         }
+    }
     }
     }
 }
@@ -334,8 +658,6 @@ private fun RestoringScreen() {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineLarge)
-        Spacer(Modifier.height(24.dp))
         CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
         Spacer(Modifier.height(16.dp))
         Text(stringResource(R.string.ft_restoring), style = MaterialTheme.typography.bodyMedium)
@@ -344,62 +666,404 @@ private fun RestoringScreen() {
 
 @Composable
 private fun ConnectionScreen(state: ClientUiState, actions: ClientActions) {
-    var url by rememberSaveable(state.instanceUrl) { mutableStateOf(state.instanceUrl) }
-    var username by rememberSaveable(state.username) { mutableStateOf(state.username) }
-    var password by remember { mutableStateOf("") }
-    var showPassword by remember { mutableStateOf(false) }
+    var url by rememberSaveable(state.instanceUrl, state.username, state.addingAccount) {
+        mutableStateOf(state.instanceUrl)
+    }
+    var username by rememberSaveable(state.instanceUrl, state.username, state.addingAccount) {
+        mutableStateOf(state.username)
+    }
+    var password by remember(state.instanceUrl, state.username, state.addingAccount) { mutableStateOf("") }
+    var showPassword by remember(state.instanceUrl, state.username, state.addingAccount) { mutableStateOf(false) }
     val keyboard = LocalSoftwareKeyboardController.current
-    val canSubmit = url.isNotBlank() && username.isNotBlank() && password.isNotEmpty() && !state.busy
+    val focusManager = LocalFocusManager.current
+    BackHandler(enabled = state.addingAccount && !state.busy) {
+        actions.cancelAddAccount()
+    }
+    val retrySavedAccount = remember(state.savedAccounts, state.addingAccount, url, username) {
+        if (state.addingAccount) null
+        else {
+            val normalizedOrigin = runCatching { InstanceAddress.parse(url).origin }
+                .getOrElse { url.trim().trimEnd('/') }
+            val trimmedUsername = username.trim()
+            state.savedAccounts.firstOrNull { acc ->
+                !acc.needsReauth &&
+                    acc.origin.equals(normalizedOrigin, ignoreCase = true) &&
+                    acc.username == trimmedUsername
+            }
+        }
+    }
+    val canSubmit = url.isNotBlank() && username.isNotBlank() &&
+        (password.isNotEmpty() || retrySavedAccount != null) && !state.busy
     val submit = {
         if (canSubmit) {
+            focusManager.clearFocus(force = true)
             keyboard?.hide()
             val submitted = password
             password = ""
-            actions.login(url.trim(), username.trim(), submitted)
+            if (submitted.isEmpty() && retrySavedAccount != null) {
+                actions.switchAccount(retrySavedAccount.accountKey)
+            } else {
+                actions.login(url.trim(), username.trim(), submitted)
+            }
         }
     }
-    FormPage {
-        Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineLarge)
-        Spacer(Modifier.height(12.dp))
-        Text(stringResource(R.string.ft_connect_title), style = MaterialTheme.typography.headlineMedium)
-        Text(
-            stringResource(R.string.ft_connect_subtitle),
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
-        )
-        OutlinedTextField(
-            value = url, onValueChange = { url = it }, enabled = !state.busy,
-            label = { Text(stringResource(R.string.ft_instance_address)) },
-            placeholder = { Text("https://music.example.com") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
-            singleLine = true, modifier = Modifier.fillMaxWidth().testTag("connect_url"),
-        )
-        Spacer(Modifier.height(12.dp))
-        OutlinedTextField(
-            value = username, onValueChange = { username = it }, enabled = !state.busy,
-            label = { Text(stringResource(R.string.ft_username)) },
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-            singleLine = true, modifier = Modifier.fillMaxWidth().testTag("connect_username"),
-        )
-        Spacer(Modifier.height(12.dp))
-        SecretField(
-            value = password, onChange = { password = it }, label = stringResource(R.string.ft_password),
-            enabled = !state.busy, shown = showPassword, toggle = { showPassword = !showPassword },
-            modifier = Modifier.testTag("connect_password"),
-            imeAction = ImeAction.Go, keyboardActions = KeyboardActions(onGo = { submit() }),
-        )
-        state.notice?.let { Notice(it, Modifier.padding(top = 16.dp)) }
-        Spacer(Modifier.height(24.dp))
-        Button(
-            onClick = submit, enabled = canSubmit,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("connect_submit"),
-        ) {
-            if (state.busy) {
-                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
-                Spacer(Modifier.width(12.dp))
+    val titleRes = if (state.addingAccount) R.string.ft_add_account else R.string.ft_connect_title
+    val subtitleRes = if (state.addingAccount) R.string.ft_add_account_subtitle else R.string.ft_connect_subtitle
+
+    val density = LocalDensity.current
+    BoxWithConstraints(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
+    ) {
+        val imeBottomDp = with(density) { WindowInsets.ime.getBottom(density).toDp() }
+        val isTabletWide = maxWidth >= 720.dp && (maxHeight + imeBottomDp) >= 440.dp
+        if (isTabletWide) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .safeDrawingPadding()
+                    .imePadding()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 36.dp, vertical = 28.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Row(
+                    modifier = Modifier.widthIn(max = 1000.dp).fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(48.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ConnectionBrandHeroPane(
+                        username = username,
+                        titleRes = titleRes,
+                        subtitleRes = subtitleRes,
+                        addingAccount = state.addingAccount,
+                        busy = state.busy,
+                        onCancelAddAccount = actions::cancelAddAccount,
+                        modifier = Modifier.weight(1f),
+                    )
+                    ConnectionFormCard(
+                        url = url,
+                        onUrlChange = { url = it },
+                        username = username,
+                        onUsernameChange = { username = it },
+                        password = password,
+                        onPasswordChange = { password = it },
+                        showPassword = showPassword,
+                        onTogglePassword = { showPassword = !showPassword },
+                        state = state,
+                        canSubmit = canSubmit,
+                        onSubmit = submit,
+                        actions = actions,
+                        contentPadding = 24.dp,
+                        modifier = Modifier.widthIn(min = 360.dp, max = 440.dp).weight(1f, fill = false),
+                    )
+                }
             }
-            Text(stringResource(if (state.busy) R.string.ft_connecting else R.string.ft_connect_action))
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .safeDrawingPadding()
+                    .imePadding(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(
+                    modifier = Modifier
+                        .widthIn(max = 460.dp)
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 20.dp, vertical = 20.dp),
+                ) {
+                    if (state.addingAccount) {
+                        ConnectionCancelRow(busy = state.busy, onCancel = actions::cancelAddAccount)
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        LoginAvatarBadge(
+                            username = username,
+                            busy = state.busy,
+                            size = 56.dp,
+                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                stringResource(R.string.app_name),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                stringResource(titleRes),
+                                style = MaterialTheme.typography.headlineMedium,
+                            )
+                        }
+                    }
+                    Text(
+                        stringResource(subtitleRes),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 12.dp, bottom = 20.dp),
+                    )
+                    ConnectionFormCard(
+                        url = url,
+                        onUrlChange = { url = it },
+                        username = username,
+                        onUsernameChange = { username = it },
+                        password = password,
+                        onPasswordChange = { password = it },
+                        showPassword = showPassword,
+                        onTogglePassword = { showPassword = !showPassword },
+                        state = state,
+                        canSubmit = canSubmit,
+                        onSubmit = submit,
+                        actions = actions,
+                        contentPadding = 20.dp,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConnectionCancelRow(busy: Boolean, onCancel: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TextButton(
+            onClick = onCancel,
+            enabled = !busy,
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+            modifier = Modifier.heightIn(min = 48.dp).testTag("connect_cancel"),
+        ) {
+            Icon(ClientIcons.ChevronLeft, null, Modifier.size(18.dp))
+            Spacer(Modifier.width(4.dp))
+            Text(stringResource(R.string.ft_cancel))
+        }
+    }
+}
+
+@Composable
+private fun ConnectionBrandHeroPane(
+    username: String,
+    titleRes: Int,
+    subtitleRes: Int,
+    addingAccount: Boolean,
+    busy: Boolean,
+    onCancelAddAccount: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val primary = MaterialTheme.colorScheme.primary
+    Box(modifier = modifier) {
+        Canvas(modifier = Modifier.size(260.dp).align(Alignment.TopStart).offset(x = (-32).dp, y = (-28).dp)) {
+            val center = Offset(size.width * 0.38f, size.height * 0.36f)
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(FlareBrandTeal.copy(alpha = 0.14f), FlareBrandIndigo.copy(alpha = 0.04f), Color.Transparent),
+                    center = center,
+                    radius = size.minDimension * 0.62f,
+                ),
+                radius = size.minDimension * 0.62f,
+                center = center,
+            )
+            drawCircle(
+                color = primary.copy(alpha = 0.10f),
+                radius = size.minDimension * 0.38f,
+                center = center,
+                style = Stroke(width = 1.5.dp.toPx()),
+            )
+            drawCircle(
+                color = FlareBrandBlue.copy(alpha = 0.08f),
+                radius = size.minDimension * 0.50f,
+                center = center,
+                style = Stroke(width = 1.dp.toPx()),
+            )
+        }
+        Column(modifier = Modifier.fillMaxWidth()) {
+            if (addingAccount) {
+                ConnectionCancelRow(busy = busy, onCancel = onCancelAddAccount)
+            }
+            LoginAvatarBadge(
+                username = username,
+                busy = busy,
+                size = 76.dp,
+            )
+            Spacer(Modifier.height(22.dp))
+            Text(
+                stringResource(R.string.app_name),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                stringResource(titleRes),
+                style = MaterialTheme.typography.headlineLarge,
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                stringResource(subtitleRes),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.widthIn(max = 380.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ConnectionFormCard(
+    url: String,
+    onUrlChange: (String) -> Unit,
+    username: String,
+    onUsernameChange: (String) -> Unit,
+    password: String,
+    onPasswordChange: (String) -> Unit,
+    showPassword: Boolean,
+    onTogglePassword: () -> Unit,
+    state: ClientUiState,
+    canSubmit: Boolean,
+    onSubmit: () -> Unit,
+    actions: ClientActions,
+    contentPadding: Dp,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        tonalElevation = 1.dp,
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(contentPadding)) {
+            OutlinedTextField(
+                value = url,
+                onValueChange = onUrlChange,
+                enabled = !state.busy,
+                label = { Text(stringResource(R.string.ft_instance_address)) },
+                placeholder = { Text("https://music.example.com") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth().testTag("connect_url"),
+            )
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(
+                value = username,
+                onValueChange = onUsernameChange,
+                enabled = !state.busy,
+                label = { Text(stringResource(R.string.ft_username)) },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth().testTag("connect_username"),
+            )
+            Spacer(Modifier.height(12.dp))
+            SecretField(
+                value = password,
+                onChange = onPasswordChange,
+                label = stringResource(R.string.ft_password),
+                enabled = !state.busy,
+                shown = showPassword,
+                toggle = onTogglePassword,
+                modifier = Modifier.testTag("connect_password"),
+                imeAction = ImeAction.Go,
+                keyboardActions = KeyboardActions(onGo = { onSubmit() }),
+            )
+            state.notice?.let { Notice(it, Modifier.padding(top = 14.dp)) }
+            Spacer(Modifier.height(20.dp))
+            Button(
+                onClick = onSubmit,
+                enabled = canSubmit,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("connect_submit"),
+            ) {
+                if (state.busy) {
+                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                    Spacer(Modifier.width(12.dp))
+                }
+                Text(stringResource(if (state.busy) R.string.ft_connecting else R.string.ft_connect_action))
+            }
+            val switchableAccounts = remember(state.savedAccounts) {
+                state.savedAccounts.filter { !it.needsReauth || !it.active }
+            }
+            if (!state.addingAccount && switchableAccounts.isNotEmpty()) {
+                Spacer(Modifier.height(22.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    stringResource(R.string.ft_saved_accounts),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+                Column(
+                    Modifier.fillMaxWidth().testTag("connect_saved_accounts"),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    switchableAccounts.forEach { acc ->
+                        val name = acc.displayName.ifBlank { acc.username }
+                        Surface(
+                            onClick = { if (!state.busy) actions.switchAccount(acc.accountKey) },
+                            enabled = !state.busy,
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainer,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("connect_saved_${acc.accountKey}"),
+                        ) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Box(
+                                    Modifier.size(34.dp).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f), CircleShape),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        name.take(1).uppercase(Locale.ROOT),
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+                                Spacer(Modifier.width(12.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        name,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        "${acc.username} · ${formatAccountOriginHost(acc.origin)}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                if (acc.needsReauth) {
+                                    Text(
+                                        stringResource(R.string.ft_account_reauth_required),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
+                                } else {
+                                    Text(
+                                        stringResource(R.string.ft_switch_account),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -492,6 +1156,7 @@ private fun SecretField(
         visualTransformation = if (shown) VisualTransformation.None else PasswordVisualTransformation(),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = imeAction),
         keyboardActions = keyboardActions,
+        shape = RoundedCornerShape(14.dp),
         trailingIcon = {
             TextButton(colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant), onClick = toggle, enabled = enabled, modifier = Modifier.heightIn(min = 48.dp)) {
                 Text(stringResource(if (shown) R.string.ft_hide_password else R.string.ft_show_password), style = MaterialTheme.typography.labelMedium)
@@ -501,6 +1166,7 @@ private fun SecretField(
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun SongRow(
     song: Song,
@@ -511,20 +1177,61 @@ internal fun SongRow(
     modifier: Modifier = Modifier,
     clickEnabled: Boolean = true,
     horizontalPadding: Dp = 16.dp,
+    selectionActive: Boolean = false,
+    selected: Boolean = false,
+    onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val interaction = LocalListeningInteractions.current
     val status = stringResource(if (buffering) R.string.ft_buffering else if (playing) R.string.ft_playing else R.string.ft_paused)
+    val longPressOnlyInteraction = remember { MutableInteractionSource() }
+    val rowClickable = if (onLongClick != null) {
+        if (!clickEnabled && !selectionActive) {
+            Modifier
+                .combinedClickable(
+                    interactionSource = longPressOnlyInteraction,
+                    indication = null,
+                    enabled = true,
+                    onClick = {},
+                    onLongClick = onLongClick,
+                )
+                .semantics { disabled() }
+        } else {
+            Modifier.combinedClickable(
+                enabled = clickEnabled || selectionActive,
+                onClick = onClick,
+                onLongClick = if (!selectionActive) onLongClick else null,
+            )
+        }
+    } else {
+        Modifier.clickable(enabled = clickEnabled || selectionActive, onClick = onClick)
+    }
     Row(
         modifier.fillMaxWidth().heightIn(min = 78.dp)
-            .flarePressScale(enabled = clickEnabled, pressedScale = 0.985f)
-            .then(if (current) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)) else Modifier)
-            .clickable(enabled = clickEnabled, onClick = onClick)
-            .then(if (current) Modifier.semantics { stateDescription = status } else Modifier)
+            .flarePressScale(enabled = clickEnabled || selectionActive, pressedScale = 0.985f)
+            .then(
+                when {
+                    selectionActive && selected -> Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
+                    current -> Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
+                    else -> Modifier
+                },
+            )
+            .then(rowClickable)
+            .semantics {
+                if (current) stateDescription = status
+                if (selectionActive) this.selected = selected
+            }
             .padding(horizontal = horizontalPadding, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        if (selectionActive) {
+            Checkbox(
+                checked = selected,
+                onCheckedChange = { onClick() },
+                modifier = Modifier.size(FlareTokens.TouchTargetMin).testTag("song_check_" + song.id),
+            )
+        }
         Artwork(song, imageLoader, Modifier.size(56.dp), radius = 10.dp, placeholderSize = 26.dp, decodeSize = 56.dp)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
@@ -544,11 +1251,6 @@ internal fun SongRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (current) Text(
-                status,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary,
-            )
         }
         if (song.durationSeconds > 0) {
             Text(
@@ -557,7 +1259,7 @@ internal fun SongRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (interaction != null) ActionIcon(ClientIcons.More, stringResource(R.string.ft_listening_song_actions),
+        if (!selectionActive && interaction != null) ActionIcon(ClientIcons.More, stringResource(R.string.ft_listening_song_actions),
             { interaction.song(song) }, modifier = Modifier.testTag("song_more_" + song.id))
     }
 }
@@ -578,19 +1280,21 @@ internal fun Artwork(
         contentAlignment = Alignment.Center,
     ) {
         Icon(ClientIcons.Music, null, Modifier.size(placeholderSize), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (loader != null && !song.coverUrl.isNullOrBlank()) {
-            val targetPx = if (decodeSize.isSpecified) {
+        val coverUrl = song.coverUrl
+        if (loader != null && !coverUrl.isNullOrBlank()) {
+            val rawPx = if (decodeSize.isSpecified) {
                 with(density) { decodeSize.roundToPx().coerceAtLeast(1) }
             } else {
                 0
             }
-            val request = remember(context, song.coverUrl, targetPx) {
-                ImageRequest.Builder(context)
-                    .data(song.coverUrl)
-                    .apply {
-                        if (targetPx > 0) size(targetPx, targetPx)
-                    }
-                    .build()
+            val targetPx = quantizeArtworkDecodePx(rawPx)
+            val request = remember(context, coverUrl, targetPx, loader) {
+                buildCoverImageRequest(
+                    context = context,
+                    coverUrl = coverUrl,
+                    targetPx = targetPx,
+                    imageLoader = loader,
+                )
             }
             AsyncImage(
                 model = request, imageLoader = loader, contentDescription = null,
@@ -600,14 +1304,84 @@ internal fun Artwork(
     }
 }
 
-private data class QueueEntry(val key: String, val song: Song, val sourceIndex: Int)
+internal data class UiQueueEntry(val key: String, val song: Song)
 
-private fun buildKeyedQueueEntries(queue: List<Song>): List<QueueEntry> {
-    val counts = mutableMapOf<String, Int>()
-    return queue.mapIndexed { idx, song ->
-        val occ = counts.getOrElse(song.id) { 0 }
-        counts[song.id] = occ + 1
-        QueueEntry("${song.id}#$occ", song, idx)
+internal class UiQueueEntryKeyGenerator {
+    private var nextInstanceId = 0L
+
+    fun nextKey(song: Song): String {
+        val instanceId = nextInstanceId++
+        return "q-$instanceId-${song.id}"
+    }
+
+    fun build(queue: List<Song>): List<UiQueueEntry> =
+        queue.map { song -> UiQueueEntry(nextKey(song), song) }
+}
+
+internal fun reconcileUiQueueEntries(
+    currentEntries: List<UiQueueEntry>,
+    incomingQueue: List<Song>,
+    keyGenerator: UiQueueEntryKeyGenerator,
+): List<UiQueueEntry> {
+    if (incomingQueue.isEmpty()) return emptyList()
+    val reusableBySongId = LinkedHashMap<String, ArrayDeque<UiQueueEntry>>()
+    currentEntries.forEach { entry ->
+        reusableBySongId.getOrPut(entry.song.id) { ArrayDeque() }.addLast(entry)
+    }
+    return incomingQueue.map { song ->
+        val pool = reusableBySongId[song.id]
+        val existing = if (pool != null && pool.isNotEmpty()) pool.removeFirst() else null
+        if (existing != null) {
+            if (existing.song == song) existing else existing.copy(song = song)
+        } else {
+            UiQueueEntry(keyGenerator.nextKey(song), song)
+        }
+    }
+}
+
+internal fun computeQueueCenterScrollOffsetPx(viewportHeightPx: Int, itemHeightPx: Int): Int {
+    if (viewportHeightPx <= 0 || itemHeightPx <= 0) return 0
+    return ((viewportHeightPx - itemHeightPx) / 2).coerceAtLeast(0)
+}
+
+private data class OptimisticQueueState(
+    val expectedIds: List<String>,
+    val expectedCurrentIndex: Int,
+    val baselineRevision: Long,
+)
+
+private fun applyQueueEntryUpdatesInPlace(
+    entries: MutableList<UiQueueEntry>,
+    target: List<UiQueueEntry>,
+) {
+    if (entries.size == target.size &&
+        entries.indices.all { idx ->
+            entries[idx].key == target[idx].key && entries[idx].song == target[idx].song
+        }
+    ) {
+        return
+    }
+    val targetKeys = target.mapTo(HashSet(target.size)) { it.key }
+    for (idx in entries.lastIndex downTo 0) {
+        if (entries[idx].key !in targetKeys) {
+            entries.removeAt(idx)
+        }
+    }
+    target.forEachIndexed { targetIdx, targetEntry ->
+        val existingIdx = entries.indexOfFirst { it.key == targetEntry.key }
+        when {
+            existingIdx < 0 -> entries.add(targetIdx, targetEntry)
+            existingIdx == targetIdx -> {
+                if (entries[targetIdx].song != targetEntry.song) {
+                    entries[targetIdx] = targetEntry
+                }
+            }
+            else -> {
+                val moved = entries.removeAt(existingIdx)
+                val updated = if (moved.song == targetEntry.song) moved else targetEntry
+                entries.add(targetIdx, updated)
+            }
+        }
     }
 }
 
@@ -628,41 +1402,84 @@ internal fun QueuePanel(
         androidx.compose.ui.platform.LocalWindowInfo.current.containerSize.height.toDp()
     }
     val sheetHeight = (windowHeight * 0.74f).coerceAtLeast(320.dp)
+    val keyGenerator = remember { UiQueueEntryKeyGenerator() }
     val entries = remember {
-        mutableStateListOf<QueueEntry>().apply {
-            addAll(buildKeyedQueueEntries(state.queue))
+        mutableStateListOf<UiQueueEntry>().apply {
+            addAll(keyGenerator.build(state.queue))
         }
     }
     val listState = rememberLazyListState()
     val absorbBottomOverscroll = rememberAbsorbBottomOverscroll()
+    val haptic = LocalHapticFeedback.current
 
     var draggedKey by remember { mutableStateOf<String?>(null) }
-    var optimisticIds by remember { mutableStateOf<List<String>?>(null) }
+    var optimisticState by remember { mutableStateOf<OptimisticQueueState?>(null) }
+    var pinnedCurrentKey by remember { mutableStateOf<String?>(null) }
+    var snapshotRevision by remember { mutableLongStateOf(0L) }
+    var lastObservedSnapshot by remember {
+        mutableStateOf(state.queue.map { it.id } to state.currentIndex)
+    }
     var dragStartIndex by remember { mutableIntStateOf(-1) }
+    var dragOriginInList by remember { mutableFloatStateOf(0f) }
     var dragPointerInList by remember { mutableFloatStateOf(0f) }
+    var dragRawPointerInList by remember { mutableFloatStateOf(0f) }
     var dragFingerOffsetFromCenter by remember { mutableFloatStateOf(0f) }
     var listTopInWindow by remember { mutableFloatStateOf(0f) }
     var listHeightPx by remember { mutableFloatStateOf(0f) }
+    var didInitialCenterScroll by remember { mutableStateOf(false) }
 
-    // Optimistic sync: preserve dragged/reordered order in-place without recreating LazyColumn items or images.
-    LaunchedEffect(state.queue, draggedKey, optimisticIds) {
+    val observedSnapshotNow = state.queue.map { it.id } to state.currentIndex
+    SideEffect {
+        if (observedSnapshotNow != lastObservedSnapshot) {
+            lastObservedSnapshot = observedSnapshotNow
+            snapshotRevision += 1L
+        }
+    }
+
+    // Optimistic sync: preserve dragged/reordered instance keys in-place without recreating LazyColumn items or images.
+    LaunchedEffect(state.queue, state.currentIndex, draggedKey, optimisticState, snapshotRevision) {
         if (draggedKey != null) return@LaunchedEffect
-        val expectedIds = optimisticIds
+        val pending = optimisticState
         val incomingIds = state.queue.map { it.id }
-        if (expectedIds != null) {
-            if (incomingIds == expectedIds) {
-                optimisticIds = null
-                return@LaunchedEffect
+        if (pending != null) {
+            val snapshotUpdatedSinceCommit = snapshotRevision > pending.baselineRevision
+            val orderMatched = incomingIds == pending.expectedIds
+            val currentMatched = pending.expectedCurrentIndex < 0 ||
+                state.currentIndex == pending.expectedCurrentIndex
+            if (snapshotUpdatedSinceCommit && orderMatched && currentMatched) {
+                optimisticState = null
+                pinnedCurrentKey = null
+            } else {
+                // Wait briefly for MediaController async commit before reconciling rejected or external updates.
+                delay(650L)
+                optimisticState = null
+                pinnedCurrentKey = null
             }
-            // Wait briefly for ViewModel / player store commit before reconciling a rejected/external update.
-            delay(650L)
-            optimisticIds = null
         }
-        val currentIds = entries.map { it.song.id }
-        if (currentIds != incomingIds) {
-            entries.clear()
-            entries.addAll(buildKeyedQueueEntries(state.queue))
+        val reconciled = reconcileUiQueueEntries(
+            currentEntries = entries.toList(),
+            incomingQueue = state.queue,
+            keyGenerator = keyGenerator,
+        )
+        applyQueueEntryUpdatesInPlace(entries, reconciled)
+    }
+
+    // Center the active queue track once when the sheet opens and viewport metrics are measured.
+    LaunchedEffect(entries.isNotEmpty(), listHeightPx > 0f) {
+        if (didInitialCenterScroll || entries.isEmpty() || listHeightPx <= 0f) return@LaunchedEffect
+        val targetIndex = state.currentIndex
+        if (targetIndex !in entries.indices) {
+            didInitialCenterScroll = true
+            return@LaunchedEffect
         }
+        val fallbackItemPx = with(density) { 64.dp.roundToPx() }
+        val measuredItemPx = listState.layoutInfo.visibleItemsInfo.firstOrNull()?.size ?: fallbackItemPx
+        val centerOffsetPx = computeQueueCenterScrollOffsetPx(
+            viewportHeightPx = listHeightPx.roundToInt(),
+            itemHeightPx = measuredItemPx,
+        )
+        listState.scrollToItem(targetIndex, -centerOffsetPx)
+        didInitialCenterScroll = true
     }
 
     fun reorderDraggedTowardPointer(key: String, pointerY: Float) {
@@ -673,25 +1490,28 @@ internal fun QueuePanel(
         if (currentIdx < entries.lastIndex) {
             val nextEntry = entries[currentIdx + 1]
             val nextInfo = visible.firstOrNull { it.key == nextEntry.key }
-            if (nextInfo != null && draggedCenter >= nextInfo.offset + nextInfo.size * 0.35f) {
+            if (nextInfo != null && draggedCenter >= nextInfo.offset + nextInfo.size * 0.55f) {
                 entries.add(currentIdx + 1, entries.removeAt(currentIdx))
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                 return
             }
         }
         if (currentIdx > 0) {
             val prevEntry = entries[currentIdx - 1]
             val prevInfo = visible.firstOrNull { it.key == prevEntry.key }
-            if (prevInfo != null && draggedCenter <= prevInfo.offset + prevInfo.size * 0.65f) {
+            if (prevInfo != null && draggedCenter <= prevInfo.offset + prevInfo.size * 0.45f) {
                 entries.add(currentIdx - 1, entries.removeAt(currentIdx))
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
             }
         }
     }
 
-    // Smooth auto-scroll when holding dragged queue item near top or bottom edge.
+    // Controlled auto-scroll only after deliberate movement toward top or bottom edge.
     LaunchedEffect(draggedKey) {
         val key = draggedKey ?: return@LaunchedEffect
-        val edgeZonePx = with(density) { 56.dp.toPx() }
-        val maxStepPx = with(density) { 14.dp.toPx() }
+        val edgeZonePx = with(density) { 42.dp.toPx() }
+        val maxStepPx = with(density) { 5.dp.toPx() }
+        val minTravelPx = with(density) { 12.dp.toPx() }
         var lastFrameNanos = withFrameNanos { it }
         while (isActive && draggedKey == key) {
             val nowNanos = withFrameNanos { it }
@@ -700,13 +1520,17 @@ internal fun QueuePanel(
             val height = listHeightPx
             if (height > edgeZonePx * 2f) {
                 val delta = when {
-                    dragPointerInList < edgeZonePx -> {
+                    dragPointerInList < edgeZonePx &&
+                        dragRawPointerInList < dragOriginInList - minTravelPx &&
+                        listState.canScrollBackward -> {
                         val factor = ((edgeZonePx - dragPointerInList) / edgeZonePx).coerceIn(0f, 1f)
-                        -maxStepPx * factor * frameScale
+                        -maxStepPx * factor * factor * frameScale
                     }
-                    dragPointerInList > height - edgeZonePx -> {
+                    dragPointerInList > height - edgeZonePx &&
+                        dragRawPointerInList > dragOriginInList + minTravelPx &&
+                        listState.canScrollForward -> {
                         val factor = ((dragPointerInList - (height - edgeZonePx)) / edgeZonePx).coerceIn(0f, 1f)
-                        maxStepPx * factor * frameScale
+                        maxStepPx * factor * factor * frameScale
                     }
                     else -> 0f
                 }
@@ -784,15 +1608,21 @@ internal fun QueuePanel(
                         } else 0f
                     } else 0f
 
-                    val itemModifier = if (isDragging) {
-                        Modifier.zIndex(10f).graphicsLayer {
+                    val itemModifier = Modifier
+                        .animateItem(
+                            fadeInSpec = null,
+                            fadeOutSpec = null,
+                            placementSpec = if (isDragging) null else spring(stiffness = Spring.StiffnessMediumLow),
+                        )
+                        .zIndex(if (isDragging) 10f else 0f)
+                        .graphicsLayer {
                             translationY = dragTranslationY
-                            scaleX = 1.015f
-                            scaleY = 1.015f
+                            scaleX = if (isDragging) 1.015f else 1f
+                            scaleY = if (isDragging) 1.015f else 1f
                         }
-                    } else {
-                        Modifier.animateItem().zIndex(0f)
-                    }
+
+                    val activeCurrentKey = pinnedCurrentKey ?: entries.getOrNull(state.currentIndex)?.key
+                    val isCurrent = entry.key == activeCurrentKey
 
                     SwipeToRemoveQueueRow(
                         entryKey = entry.key,
@@ -801,16 +1631,32 @@ internal fun QueuePanel(
                         onRemove = {
                             val currentIdx = entries.indexOfFirst { it.key == entry.key }
                             if (currentIdx >= 0) {
+                                val currentKeyBeforeRemove = pinnedCurrentKey ?: entries.getOrNull(state.currentIndex)?.key
+                                val removedCurrent = currentKeyBeforeRemove == entry.key
                                 entries.removeAt(currentIdx)
-                                optimisticIds = entries.map { it.song.id }
+                                val nextExpectedCurrentKey = when {
+                                    entries.isEmpty() -> null
+                                    removedCurrent -> entries[currentIdx.coerceAtMost(entries.lastIndex)].key
+                                    else -> currentKeyBeforeRemove
+                                }
+                                pinnedCurrentKey = nextExpectedCurrentKey
+                                val expectedCurrentIdx = nextExpectedCurrentKey?.let { key ->
+                                    entries.indexOfFirst { it.key == key }
+                                } ?: -1
+                                optimisticState = OptimisticQueueState(
+                                    expectedIds = entries.map { it.song.id },
+                                    expectedCurrentIndex = expectedCurrentIdx,
+                                    baselineRevision = snapshotRevision,
+                                )
                                 onRemove?.invoke(currentIdx)
                             }
                         },
                     ) {
                         QueueTrackRow(
                             song = entry.song,
+                            entryKey = entry.key,
                             loader = loader,
-                            current = index == state.currentIndex,
+                            current = isCurrent,
                             playing = state.playing,
                             buffering = state.buffering,
                             dragging = isDragging,
@@ -821,15 +1667,22 @@ internal fun QueuePanel(
                                 val fingerY = startWindowY - listTopInWindow
                                 val startIdx = entries.indexOfFirst { it.key == entry.key }
                                 val slotInfo = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == entry.key }
+                                if (pinnedCurrentKey == null) {
+                                    pinnedCurrentKey = entries.getOrNull(state.currentIndex)?.key
+                                }
                                 draggedKey = entry.key
                                 dragStartIndex = startIdx
-                                dragPointerInList = fingerY
+                                dragOriginInList = fingerY
+                                dragRawPointerInList = fingerY
+                                dragPointerInList = fingerY.coerceIn(0f, listHeightPx.coerceAtLeast(1f))
                                 dragFingerOffsetFromCenter = if (slotInfo != null) {
                                     fingerY - (slotInfo.offset + slotInfo.size / 2f)
                                 } else 0f
                             },
                             onVerticalDrag = { pointerWindowY ->
-                                val fingerY = (pointerWindowY - listTopInWindow).coerceIn(0f, listHeightPx.coerceAtLeast(1f))
+                                val rawFingerY = pointerWindowY - listTopInWindow
+                                val fingerY = rawFingerY.coerceIn(0f, listHeightPx.coerceAtLeast(1f))
+                                dragRawPointerInList = rawFingerY
                                 dragPointerInList = fingerY
                                 reorderDraggedTowardPointer(entry.key, fingerY)
                             },
@@ -840,8 +1693,17 @@ internal fun QueuePanel(
                                 dragStartIndex = -1
                                 dragFingerOffsetFromCenter = 0f
                                 if (startIndex >= 0 && finalIndex >= 0 && startIndex != finalIndex) {
-                                    optimisticIds = entries.map { it.song.id }
+                                    val expectedCurrentIdx = pinnedCurrentKey?.let { key ->
+                                        entries.indexOfFirst { it.key == key }
+                                    } ?: state.currentIndex
+                                    optimisticState = OptimisticQueueState(
+                                        expectedIds = entries.map { it.song.id },
+                                        expectedCurrentIndex = expectedCurrentIdx,
+                                        baselineRevision = snapshotRevision,
+                                    )
                                     onMove?.invoke(startIndex, finalIndex)
+                                } else if (optimisticState == null) {
+                                    pinnedCurrentKey = null
                                 }
                             },
                         )
@@ -977,6 +1839,7 @@ private fun SwipeToRemoveQueueRow(
 @Composable
 private fun QueueTrackRow(
     song: Song,
+    entryKey: String = song.id,
     loader: ImageLoader?,
     current: Boolean,
     playing: Boolean,
@@ -990,8 +1853,16 @@ private fun QueueTrackRow(
     onVerticalDragEnd: () -> Unit,
 ) {
     val status = stringResource(if (buffering) R.string.ft_buffering else if (playing) R.string.ft_playing else R.string.ft_paused)
-    val rowBg = if (dragging) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.surface
+    val highlightSurface = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f).compositeOver(MaterialTheme.colorScheme.surface)
+    val rowBg = when {
+        dragging -> MaterialTheme.colorScheme.surfaceContainerHighest
+        current -> highlightSurface
+        else -> MaterialTheme.colorScheme.surface
+    }
     var handleCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    val density = LocalDensity.current
+    val haptic = LocalHapticFeedback.current
+    val pickupThresholdPx = with(density) { 8.dp.toPx() }
     val latestOnStart by rememberUpdatedState(onVerticalDragStart)
     val latestOnDrag by rememberUpdatedState(onVerticalDrag)
     val latestOnEnd by rememberUpdatedState(onVerticalDragEnd)
@@ -1011,7 +1882,9 @@ private fun QueueTrackRow(
         Column(Modifier.weight(1f)) {
             Text(
                 song.title,
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontWeight = if (current) FontWeight.SemiBold else FontWeight.Medium,
+                ),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 color = if (current) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
@@ -1030,28 +1903,46 @@ private fun QueueTrackRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (current) {
-                Text(status, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-            }
         }
         Box(
             Modifier.width(56.dp).height(52.dp)
                 .testTag(dragTag)
                 .onGloballyPositioned { handleCoords = it }
-                .pointerInput(song.id) {
+                .pointerInput(entryKey, pickupThresholdPx) {
+                    var startWindowY = 0f
                     var trackedWindowY = 0f
+                    var pendingDeltaY = 0f
+                    var dragActivated = false
                     detectVerticalDragGestures(
                         onDragStart = { startOffset ->
-                            trackedWindowY = handleCoords?.localToWindow(startOffset)?.y ?: return@detectVerticalDragGestures
-                            latestOnStart(trackedWindowY)
+                            startWindowY = handleCoords?.localToWindow(startOffset)?.y ?: return@detectVerticalDragGestures
+                            trackedWindowY = startWindowY
+                            pendingDeltaY = 0f
+                            dragActivated = false
                         },
                         onVerticalDrag = { change, dragAmount ->
                             change.consume()
-                            trackedWindowY += dragAmount
-                            latestOnDrag(trackedWindowY)
+                            if (!dragActivated) {
+                                pendingDeltaY += dragAmount
+                                if (abs(pendingDeltaY) < pickupThresholdPx) return@detectVerticalDragGestures
+                                dragActivated = true
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                latestOnStart(startWindowY)
+                                trackedWindowY = startWindowY + pendingDeltaY
+                                latestOnDrag(trackedWindowY)
+                            } else {
+                                trackedWindowY += dragAmount
+                                latestOnDrag(trackedWindowY)
+                            }
                         },
-                        onDragEnd = { latestOnEnd() },
-                        onDragCancel = { latestOnEnd() },
+                        onDragEnd = {
+                            if (dragActivated) latestOnEnd()
+                            dragActivated = false
+                        },
+                        onDragCancel = {
+                            if (dragActivated) latestOnEnd()
+                            dragActivated = false
+                        },
                     )
                 }
                 .semantics { contentDescription = "" },
@@ -1088,28 +1979,30 @@ internal fun ActionIcon(
     }
 }
 
+internal fun clientNoticeMessageRes(notice: ClientNotice): Int = when (notice) {
+    ClientNotice.INVALID_URL -> R.string.ft_notice_invalid_url
+    ClientNotice.NOT_READY -> R.string.ft_notice_not_ready
+    ClientNotice.NETWORK -> R.string.ft_notice_network
+    ClientNotice.INVALID_LOGIN -> R.string.ft_notice_invalid_login
+    ClientNotice.SESSION_EXPIRED -> R.string.ft_notice_session_expired
+    ClientNotice.PASSWORD_CHANGED -> R.string.ft_notice_password_changed
+    ClientNotice.REQUEST_FAILED -> R.string.ft_notice_request_failed
+    ClientNotice.RATE_LIMITED -> R.string.ft_notice_rate_limited
+    ClientNotice.INVALID_RESPONSE -> R.string.ft_notice_invalid_response
+    ClientNotice.STORAGE_FAILED -> R.string.ft_notice_storage_failed
+    ClientNotice.PAGE_LIMIT -> R.string.ft_notice_page_limit
+    ClientNotice.PLAYBACK_FAILED -> R.string.ft_playback_error
+    ClientNotice.SOME_SOURCES_UNAVAILABLE -> R.string.ft_notice_partial_sources
+    ClientNotice.FORBIDDEN -> R.string.ft_notice_forbidden
+    ClientNotice.PLAYLIST_LIMIT -> R.string.ft_listening_playlist_limit
+    ClientNotice.PLAYLIST_SONG_LIMIT -> R.string.ft_listening_playlist_song_limit
+    ClientNotice.IMAGE_UPLOAD_LIMIT -> R.string.ft_listening_image_upload_limit
+    ClientNotice.IMAGE_TOO_LARGE -> R.string.ft_listening_image_too_large
+}
+
 @Composable
 internal fun Notice(notice: ClientNotice, modifier: Modifier = Modifier) {
-    val resource = when (notice) {
-        ClientNotice.INVALID_URL -> R.string.ft_notice_invalid_url
-        ClientNotice.NOT_READY -> R.string.ft_notice_not_ready
-        ClientNotice.NETWORK -> R.string.ft_notice_network
-        ClientNotice.INVALID_LOGIN -> R.string.ft_notice_invalid_login
-        ClientNotice.SESSION_EXPIRED -> R.string.ft_notice_session_expired
-        ClientNotice.PASSWORD_CHANGED -> R.string.ft_notice_password_changed
-        ClientNotice.REQUEST_FAILED -> R.string.ft_notice_request_failed
-        ClientNotice.RATE_LIMITED -> R.string.ft_notice_rate_limited
-        ClientNotice.INVALID_RESPONSE -> R.string.ft_notice_invalid_response
-        ClientNotice.STORAGE_FAILED -> R.string.ft_notice_storage_failed
-        ClientNotice.PAGE_LIMIT -> R.string.ft_notice_page_limit
-        ClientNotice.PLAYBACK_FAILED -> R.string.ft_playback_error
-        ClientNotice.SOME_SOURCES_UNAVAILABLE -> R.string.ft_notice_partial_sources
-        ClientNotice.FORBIDDEN -> R.string.ft_notice_forbidden
-        ClientNotice.PLAYLIST_LIMIT -> R.string.ft_listening_playlist_limit
-        ClientNotice.PLAYLIST_SONG_LIMIT -> R.string.ft_listening_playlist_song_limit
-        ClientNotice.IMAGE_UPLOAD_LIMIT -> R.string.ft_listening_image_upload_limit
-        ClientNotice.IMAGE_TOO_LARGE -> R.string.ft_listening_image_too_large
-    }
+    val resource = clientNoticeMessageRes(notice)
     val informational = notice in setOf(ClientNotice.PASSWORD_CHANGED, ClientNotice.PAGE_LIMIT, ClientNotice.SOME_SOURCES_UNAVAILABLE)
     Text(
         stringResource(resource),

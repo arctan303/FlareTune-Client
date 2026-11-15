@@ -7,6 +7,7 @@ import coil.ImageLoader
 import com.flaretune.client.data.*
 import com.flaretune.client.model.*
 import com.flaretune.client.playback.PlaybackGateway
+import com.flaretune.client.playback.SleepTimerState
 import com.flaretune.client.ui.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,6 +32,8 @@ class ClientViewModel(
     private val discoveryCache: DiscoveryCache? = null,
     savedStateHandle: SavedStateHandle? = null,
     private val systemMediaFavorites: SystemMediaFavoriteChanges? = null,
+    private val historyExtras: ListeningHistoryExtrasRepository? = null,
+    private val playlistPreferences: PlaylistPreferencesStore? = null,
 ) : ViewModel(), ClientActions {
     private val navigation = ClientNavigationState(savedStateHandle)
     private var preferredVolume = runCatching { translationPreferences?.readVolume() ?: 1f }
@@ -39,13 +42,21 @@ class ClientViewModel(
     private var volumeSaveJob: Job? = null
     private val volumeMutex = Mutex()
     private var translationEnabled = runCatching { translationPreferences?.read() ?: false }.getOrDefault(false)
-    private val mutable = MutableStateFlow(ClientUiState(instanceUrl = connections.lastOrigin, translationEnabled = translationEnabled, playback = PlaybackSnapshot(volume = preferredVolume)))
+    private var keepScreenOnEnabled = runCatching { translationPreferences?.readKeepScreenOn() ?: true }.getOrDefault(true)
+    private var themeMode = runCatching { translationPreferences?.readThemeMode() ?: AppThemeMode.SYSTEM }.getOrDefault(AppThemeMode.SYSTEM)
+    private val preferenceMutex = Mutex()
+    private var keepScreenRevision = 0L
+    private var themeModeRevision = 0L
+    private var addingAccount = false
+    private val mutable = MutableStateFlow(freshUi(instanceUrl = connections.lastOrigin, translationEnabled = translationEnabled, playback = PlaybackSnapshot(volume = preferredVolume)))
     val state: StateFlow<ClientUiState> = mutable
     private val mutablePlaybackPositionMs = MutableStateFlow(player.state.value.positionMs.coerceAtLeast(0L))
     val playbackPositionMs: StateFlow<Long> = mutablePlaybackPositionMs
+    val sleepTimerFlow: StateFlow<SleepTimerState> get() = player.sleepTimerFlow
     val imageLoader: ImageLoader? get() = player.imageLoader
     private val lyrics = LyricsCoordinator(viewModelScope, ioDispatcher)
     private var identity = 0L
+    private var splashNonce = 0
     private val searchMutex = Mutex()
     private var discoveryRevision = 0L
     private var discoveryJob: Job? = null
@@ -73,6 +84,8 @@ class ClientViewModel(
     private var requestRevision = 0L
     private var requestJob: Job? = null
     private var offset = 0
+    private var homeLibraryRevision = 0L
+    private var homeLibraryJob: Job? = null
     private var albumOffset = 0
     private var albumRevision = 0L
     private var detailRevision = 0L
@@ -98,6 +111,14 @@ class ClientViewModel(
     private var historyEntries: List<HistoryEntry> = emptyList()
     private val historySongs = mutableMapOf<String, Song>()
     private val historyResolved = mutableSetOf<String>()
+    private var historyExtrasSnapshot = ListeningHistoryExtrasSnapshot()
+    private val artistCoverCache = mutableMapOf<String, String>()
+    private val collectionCoverCache = mutableMapOf<String, String>()
+    private val collectionPreviewCoversCache = mutableMapOf<String, List<String>>()
+    private val snapshotSongCache = mutableMapOf<String, Song>()
+    private var activeQueueOriginType: String = "queue"
+    private var activeQueueOriginLabel: String = ""
+    private var snapshotNonce: Long = 0L
     private var homeSnapshotEpoch = 0L
     private var homeContinueLocked = false
     private var homeHistoryPreviewLocked = false
@@ -115,8 +136,47 @@ class ClientViewModel(
     private var searchHistorySnapshotLocked = false
     private var playlistsLoadedOnce = false
     private var favoritesLoadedOnce = false
+    private var profileRevision = 0L
+    private var profileJob: Job? = null
 
     private enum class SearchSnapshotMode { LOAD_AND_LOCK, RECORD_ONLY, APPLY_TO_VISIBLE }
+
+    private fun freshUi(
+        screen: ClientScreen = ClientScreen.RESTORING,
+        instanceUrl: String = connections.lastOrigin,
+        username: String = "",
+        accountName: String = "",
+        avatarUrl: String? = null,
+        avatarRevision: Long = 0L,
+        busy: Boolean = false,
+        notice: ClientNotice? = null,
+        translationEnabled: Boolean = this.translationEnabled,
+        playback: PlaybackSnapshot = PlaybackSnapshot(volume = preferredVolume),
+        navigationIdentity: String? = null,
+        playbackReady: Boolean = false,
+    ): ClientUiState {
+        val accounts = runCatching { connections.savedAccounts }
+        return ClientUiState(
+            screen = screen, instanceUrl = instanceUrl, username = username, accountName = accountName,
+            avatarUrl = avatarUrl, avatarRevision = avatarRevision,
+            busy = busy, notice = notice ?: if (accounts.isFailure) ClientNotice.STORAGE_FAILED else null,
+            translationEnabled = translationEnabled, playback = playback,
+            navigationIdentity = navigationIdentity, playbackReady = playbackReady,
+            savedAccounts = accounts.getOrDefault(emptyList()), addingAccount = addingAccount,
+            splashNonce = splashNonce,
+            keepScreenOnEnabled = keepScreenOnEnabled,
+            themeMode = themeMode,
+        )
+    }
+
+    private fun accountSummaries(): List<SavedAccountSummary> =
+        runCatching { connections.savedAccounts }.getOrDefault(emptyList())
+
+    private fun refreshSavedAccounts() {
+        val accounts = runCatching { connections.savedAccounts }
+        mutable.value = mutable.value.copy(savedAccounts = accounts.getOrDefault(emptyList()),
+            addingAccount = addingAccount, notice = if (accounts.isFailure) ClientNotice.STORAGE_FAILED else mutable.value.notice)
+    }
 
     private fun current(): ActiveConnection? = connections.current?.takeIf {
         mutable.value.screen == ClientScreen.LIBRARY && it.network.isActive && !it.auth.mustChangePassword
@@ -141,6 +201,8 @@ class ClientViewModel(
         continueSearchRevision++; continueSearchJob?.cancel()
         albumSearchRevision++; albumSearchJob?.cancel()
         discoveryRevision++; discoveryJob?.cancel(); discoveryCheckedDate = null; seenSpotlightArtists.clear()
+        homeLibraryRevision++; homeLibraryJob?.cancel()
+        profileRevision++; profileJob?.cancel()
     }
 
     private fun resetPrivateData(clearHistory: Boolean = true) {
@@ -161,13 +223,22 @@ class ClientViewModel(
         allStatsReady = false
         favoritesReadyForContinue = false
         searchHistorySnapshotLocked = false
+        secondaryOverlayActive = false
         cancelRequests()
         lyrics.clear()
         queueRestoreNotice = null
-        if (clearHistory) { history?.clear(); queueRepository?.clear() }
+        if (clearHistory) { history?.detach(); queueRepository?.detach(); historyExtras?.detach() }
+        player.imageLoader?.memoryCache?.clear()
         historyEntries = emptyList()
         historySongs.clear()
         historyResolved.clear()
+        historyExtrasSnapshot = ListeningHistoryExtrasSnapshot()
+        artistCoverCache.clear()
+        collectionCoverCache.clear()
+        collectionPreviewCoversCache.clear()
+        snapshotSongCache.clear()
+        activeQueueOriginType = "queue"
+        activeQueueOriginLabel = ""
     }
 
     private data class NavigationStateSignature(
@@ -241,13 +312,30 @@ class ClientViewModel(
                 if (current() != null) mutable.value = mutable.value.copy(historyNotice = it)
             } }
         }
+        historyExtras?.let { repository ->
+            viewModelScope.launch {
+                repository.state.collect { extras ->
+                    if (current() == null) return@collect
+                    historyExtrasSnapshot = extras
+                    renderHistoryExtras()
+                }
+            }
+            viewModelScope.launch { repository.notice.collect { notice ->
+                if (current() != null && notice != null) mutable.value = mutable.value.copy(historyNotice = notice)
+            } }
+        }
         viewModelScope.launch {
             connections.invalidations.collect {
+                // A buffered expiry from a retired connection must not reset a newer login/add flow.
+                if (connections.current?.network?.isActive == true || addingAccount ||
+                    ((mutable.value.screen == ClientScreen.CONNECT || mutable.value.screen == ClientScreen.RESTORING) && mutable.value.busy)) return@collect
                 identity++
                 resetPrivateData()
                 player.stopAndClear()
-                mutable.value = ClientUiState(screen = ClientScreen.CONNECT,
-                    instanceUrl = connections.lastOrigin, notice = it)
+                addingAccount = false
+                val selected = accountSummaries().firstOrNull { account -> account.accountKey == connections.selectedAccountKey }
+                mutable.value = freshUi(screen = ClientScreen.CONNECT,
+                    instanceUrl = selected?.origin ?: connections.lastOrigin, username = selected?.username ?: "", notice = it)
             }
         }
         val ticket = identity
@@ -255,11 +343,17 @@ class ClientViewModel(
             try {
                 val connection = connections.restore()
                 if (ticket != identity) return@launch
-                if (connection == null) { navigation.clear(); mutable.value = mutable.value.copy(screen = ClientScreen.CONNECT) }
+                if (connection == null) {
+                    navigation.clear()
+                    val selected = accountSummaries().firstOrNull { it.accountKey == connections.selectedAccountKey }
+                    mutable.value = freshUi(screen = ClientScreen.CONNECT,
+                        instanceUrl = selected?.origin ?: connections.lastOrigin, username = selected?.username ?: "",
+                        notice = if (selected?.needsReauth == true) ClientNotice.SESSION_EXPIRED else null)
+                }
                 else enter(connection, ticket)
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
-                if (ticket == identity) mutable.value = mutable.value.copy(screen = ClientScreen.CONNECT, notice = notice(error))
+                if (ticket == identity) mutable.value = freshUi(screen = ClientScreen.CONNECT, notice = notice(error))
             }
         }
     }
@@ -273,28 +367,35 @@ class ClientViewModel(
         val ticket = ++identity
         resetPrivateData()
         player.stopAndClear()
-        mutable.value = ClientUiState(screen = ClientScreen.CONNECT, instanceUrl = instanceUrl.trim(),
+        mutable.value = freshUi(screen = ClientScreen.CONNECT, instanceUrl = instanceUrl.trim(),
             username = username.trim(), busy = true)
         viewModelScope.launch {
             try {
+                if (ticket != identity) return@launch
                 val connection = connections.login(instanceUrl, username, password)
                 if (ticket == identity) enter(connection, ticket)
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
-                if (ticket == identity) mutable.value = mutable.value.copy(busy = false, notice = notice(error))
+                if (ticket == identity) { refreshSavedAccounts(); mutable.value = mutable.value.copy(busy = false, notice = notice(error)) }
             }
         }
     }
 
     private suspend fun enter(connection: ActiveConnection, ticket: Long) {
+        if (ticket != identity || connections.current !== connection || !connection.network.isActive) return
+        addingAccount = false
         favoriteOwner = connection
         knownFavoriteSummary = null
         knownFavoriteDetail = null
         val restoredNavigation = if (connection.auth.mustChangePassword) { navigation.clear(); null } else navigation.restore(connection)
-        val baseState = ClientUiState(
+        val initialAvatarUrl = connection.auth.account.avatarUrl ?: accountSummaries().firstOrNull { it.active }?.avatarUrl
+        val baseState = freshUi(
             screen = if (connection.auth.mustChangePassword) ClientScreen.CHANGE_PASSWORD else ClientScreen.LIBRARY,
             instanceUrl = connection.network.address.origin, username = connection.auth.account.username,
-            accountName = connection.auth.account.displayName, translationEnabled = translationEnabled,
+            accountName = connection.auth.account.displayName,
+            avatarUrl = initialAvatarUrl,
+            avatarRevision = connection.auth.account.avatarRevision,
+            translationEnabled = translationEnabled,
             navigationIdentity = ClientNavigationState.identity(connection), playbackReady = false)
         mutable.value = restoredNavigation?.applyTo(baseState) ?: baseState
         if (connection.auth.mustChangePassword) return
@@ -312,12 +413,24 @@ class ClientViewModel(
                 renderHistory()
                 hydrateHistory()
             }
+            historyExtras?.let { repository ->
+                repository.bind(HistoryIdentity(connection.network.address.origin, connection.auth.account.id))
+                historyExtrasSnapshot = repository.state.value
+                renderHistoryExtras()
+            }
             queueRepository?.let { repository ->
                 repository.bind(HistoryIdentity(connection.network.address.origin, connection.auth.account.id))
                 observeQueueNotice(repository, connection, ticket)
             }
             restoreSavedQueue()
-            mutable.value = mutable.value.copy(playbackReady = true, playback = player.state.value)
+            val accountIdentity = HistoryIdentity(connection.network.address.origin, connection.auth.account.id)
+            val savedPlaylistSort = runCatching { playlistPreferences?.readSortMode(accountIdentity) ?: PlaylistSortMode.CUSTOM }
+                .getOrDefault(PlaylistSortMode.CUSTOM)
+            mutable.value = mutable.value.copy(
+                playbackReady = true,
+                playback = player.state.value,
+                playlistSortMode = savedPlaylistSort,
+            )
             lyrics.activate(connection, player.state.value.current)
             lyrics.updatePosition(player.state.value.positionMs)
             refreshCatalogAndPlaylists()
@@ -326,6 +439,7 @@ class ClientViewModel(
                 refreshArtists(mutable.value.query); searchAlbums(mutable.value.query)
             }
             loadListeningOverview()
+            refreshAvatarSlot(connection, ticket)
         }
     }
 
@@ -340,7 +454,7 @@ class ClientViewModel(
                     identity++
                     resetPrivateData()
                     player.stopAndClear()
-                    mutable.value = ClientUiState(screen = ClientScreen.CONNECT,
+                    mutable.value = freshUi(screen = ClientScreen.CONNECT,
                         instanceUrl = connections.lastOrigin, username = mutable.value.username,
                         notice = ClientNotice.PASSWORD_CHANGED)
                 }
@@ -352,17 +466,194 @@ class ClientViewModel(
     }
 
     override fun logout() {
+        addingAccount = false
         val ticket = ++identity
         resetPrivateData()
         player.stopAndClear()
-        mutable.value = ClientUiState(screen = ClientScreen.CONNECT, instanceUrl = connections.lastOrigin, busy = true)
+        mutable.value = freshUi(screen = ClientScreen.CONNECT, instanceUrl = connections.lastOrigin, busy = true)
         viewModelScope.launch {
             var failure: ClientNotice? = null
-            try { connections.logout() } catch (error: Exception) {
+            try { if (ticket != identity) return@launch; connections.logout() } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 failure = notice(error)
             }
-            if (ticket == identity) mutable.value = mutable.value.copy(busy = false, notice = failure)
+            if (ticket == identity) { refreshSavedAccounts(); mutable.value = mutable.value.copy(busy = false, notice = failure) }
+        }
+    }
+
+    override fun beginAddAccount() {
+        ++identity
+        resetPrivateData()
+        player.stopAndClear()
+        connections.beginAddAccount()
+        addingAccount = true
+        mutable.value = freshUi(screen = ClientScreen.CONNECT)
+    }
+
+    override fun cancelAddAccount() {
+        if (!addingAccount) return
+        transitionAccount(playSplash = true) { connections.cancelAddAccount() }
+    }
+
+    override fun switchAccount(accountKey: String) {
+        if (accountSummaries().none { it.accountKey == accountKey }) return
+        if (!addingAccount && connections.activeAccountKey == accountKey && current() != null) return
+        transitionAccount(accountKey, playSplash = true) { connections.switchAccount(accountKey) }
+    }
+
+    private fun transitionAccount(
+        accountKey: String? = null,
+        playSplash: Boolean = false,
+        work: suspend (() -> Boolean) -> ActiveConnection?,
+    ) {
+        val selected = accountSummaries().firstOrNull { it.accountKey == accountKey }
+        val ticket = ++identity
+        if (playSplash) splashNonce++
+        resetPrivateData()
+        player.stopAndClear()
+        addingAccount = false
+        mutable.value = freshUi(
+            screen = if (playSplash) ClientScreen.RESTORING else ClientScreen.CONNECT,
+            instanceUrl = selected?.origin ?: connections.lastOrigin,
+            username = selected?.username ?: "",
+            accountName = if (playSplash) (selected?.displayName ?: "") else "",
+            busy = true,
+        )
+        viewModelScope.launch {
+            if (ticket != identity) return@launch
+            try {
+                val connection = work { ticket == identity }
+                if (ticket != identity) return@launch
+                if (connection != null) enter(connection, ticket)
+                else {
+                    refreshSavedAccounts()
+                    val target = accountSummaries().firstOrNull { it.accountKey == connections.selectedAccountKey } ?: selected
+                    mutable.value = mutable.value.copy(
+                        screen = ClientScreen.CONNECT,
+                        busy = false,
+                        instanceUrl = target?.origin ?: mutable.value.instanceUrl,
+                        username = target?.username ?: mutable.value.username,
+                        accountName = "",
+                        notice = if (target?.needsReauth == true) ClientNotice.SESSION_EXPIRED else null,
+                    )
+                }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (ticket == identity) {
+                    refreshSavedAccounts()
+                    val target = accountSummaries().firstOrNull { it.accountKey == connections.selectedAccountKey } ?: selected
+                    mutable.value = mutable.value.copy(
+                        screen = ClientScreen.CONNECT,
+                        busy = false,
+                        instanceUrl = target?.origin ?: mutable.value.instanceUrl,
+                        username = target?.username ?: mutable.value.username,
+                        accountName = "",
+                        notice = notice(error),
+                    )
+                }
+            }
+        }
+    }
+
+    override fun removeSavedAccount(accountKey: String) {
+        val target = accountSummaries().firstOrNull { it.accountKey == accountKey } ?: return
+        val targetHistoryIdentity = HistoryIdentity(target.origin, target.accountId)
+        val active = connections.activeAccountKey == accountKey
+        if (active || mutable.value.busy || addingAccount) {
+            transitionAccount { stillCurrent ->
+                connections.removeSavedAccount(accountKey)
+                historyExtras?.clearAccount(targetHistoryIdentity)
+                playlistPreferences?.clear(targetHistoryIdentity)
+                if (!stillCurrent()) return@transitionAccount null
+                // Newest first; never let an old fallback retire a newer user intent.
+                var next: ActiveConnection? = null
+                for (candidate in accountSummaries().filterNot { it.needsReauth }) {
+                    if (!stillCurrent()) return@transitionAccount null
+                    next = connections.switchAccount(candidate.accountKey)
+                    if (!stillCurrent()) return@transitionAccount null
+                    if (next != null) break
+                }
+                next
+            }
+        } else {
+            val ticket = identity
+            viewModelScope.launch {
+                try {
+                    connections.removeSavedAccount(accountKey)
+                    historyExtras?.clearAccount(targetHistoryIdentity)
+                    playlistPreferences?.clear(targetHistoryIdentity)
+                    if (ticket == identity) refreshSavedAccounts()
+                } catch (error: Exception) {
+                    if (error is CancellationException) throw error
+                    if (ticket == identity) mutable.value = mutable.value.copy(notice = notice(error))
+                }
+            }
+        }
+    }
+
+    override fun setSleepTimer(minutes: Int) { if (current() != null) player.setSleepTimer(minutes) }
+    override fun setSleepTimerEndOfTrack() { if (current() != null) player.setSleepTimerEndOfTrack() }
+    override fun setSleepTimerFinishCurrentTrack(enabled: Boolean) {
+        if (current() != null) player.setSleepTimerFinishCurrentTrack(enabled)
+    }
+    override fun cancelSleepTimer() = player.cancelSleepTimer()
+
+    override fun setKeepScreenOnEnabled(enabled: Boolean) {
+        val revision = ++keepScreenRevision
+        viewModelScope.launch {
+            try {
+                withContext(ioDispatcher) { preferenceMutex.withLock {
+                    if (revision == keepScreenRevision) translationPreferences?.writeKeepScreenOn(enabled)
+                } }
+                if (revision == keepScreenRevision) {
+                    keepScreenOnEnabled = enabled
+                    mutable.value = mutable.value.copy(keepScreenOnEnabled = enabled)
+                }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (revision == keepScreenRevision) mutable.value = mutable.value.copy(notice = ClientNotice.STORAGE_FAILED)
+            }
+        }
+    }
+
+    override fun setThemeMode(mode: AppThemeMode) {
+        val revision = ++themeModeRevision
+        viewModelScope.launch {
+            try {
+                withContext(ioDispatcher) { preferenceMutex.withLock {
+                    if (revision == themeModeRevision) translationPreferences?.writeThemeMode(mode)
+                } }
+                if (revision == themeModeRevision) {
+                    themeMode = mode
+                    mutable.value = mutable.value.copy(themeMode = mode)
+                }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (revision == themeModeRevision) mutable.value = mutable.value.copy(notice = ClientNotice.STORAGE_FAILED)
+            }
+        }
+    }
+
+    @OptIn(coil.annotation.ExperimentalCoilApi::class)
+    override fun clearImageCache() {
+        if (mutable.value.imageCacheClearResult == ImageCacheClearResult.CLEARING) return
+        val loader = player.imageLoader
+        if (loader == null || (loader.memoryCache == null && loader.diskCache == null)) {
+            mutable.value = mutable.value.copy(imageCacheClearResult = ImageCacheClearResult.UNAVAILABLE)
+            return
+        }
+        val ticket = identity
+        mutable.value = mutable.value.copy(imageCacheClearResult = ImageCacheClearResult.CLEARING)
+        viewModelScope.launch {
+            val result = try {
+                loader.memoryCache?.clear()
+                withContext(ioDispatcher) { loader.diskCache?.clear() }
+                ImageCacheClearResult.CLEARED
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                ImageCacheClearResult.FAILED
+            }
+            if (ticket == identity) mutable.value = mutable.value.copy(imageCacheClearResult = result)
         }
     }
 
@@ -430,6 +721,7 @@ class ClientViewModel(
                 if (mutable.value.tab != LibraryTab.CATALOG) selectTab(LibraryTab.CATALOG)
                 else if (mutable.value.query.isNotBlank()) search("")
                 else if (leftSearch) load(true)
+                if (mutable.value.homeLibrarySongs.isEmpty() && !mutable.value.homeLibraryLoading) loadHomeLibrarySongs()
                 if (!favoritesLoadedOnce || mutable.value.favoritesNotice != null) refreshFavorites()
             }
             MainDestination.DISCOVER -> {
@@ -519,6 +811,12 @@ class ClientViewModel(
         if (mutable.value.tab == LibraryTab.ALBUMS) loadAlbums(true)
         else {
             load(true)
+            if (mutable.value.query.isBlank() &&
+                mutable.value.tab != LibraryTab.FAVORITES &&
+                (mutable.value.destination == MainDestination.HOME || mutable.value.homeLibrarySongs.isEmpty())
+            ) {
+                loadHomeLibrarySongs()
+            }
             if (mutable.value.destination == MainDestination.HOME || mutable.value.destination == MainDestination.DISCOVER) loadAlbums(true)
             if (mutable.value.destination == MainDestination.DISCOVER) loadArtists(true)
         }
@@ -623,6 +921,51 @@ class ClientViewModel(
         mutable.value = mutable.value.copy(selectedAlbum = null, albumSongs = emptyList(), albumLoading = false, albumNotice = null)
     }
 
+    private fun loadHomeLibrarySongs() {
+        val connection = current() ?: return
+        val ticket = identity
+        val revision = ++homeLibraryRevision
+        homeLibraryJob?.cancel()
+        mutable.value = mutable.value.copy(homeLibraryLoading = true)
+        homeLibraryJob = viewModelScope.launch {
+            try {
+                val mixed = withContext(ioDispatcher) {
+                    val counts = runCatching { connection.api.languageCounts(includeUntagged = true) }.getOrNull()
+                    if (counts.isNullOrEmpty()) {
+                        connection.api.songs("", 0, "all", "desc").songs.take(HOME_LIBRARY_LIMIT)
+                    } else {
+                        val quotas = allocateHomeLibraryQuotas(counts, HOME_LIBRARY_LIMIT)
+                        val fetched = coroutineScope {
+                            quotas.keys.associateWith { lang ->
+                                async {
+                                    runCatching { connection.api.songs("", 0, lang, "desc").songs }.getOrNull()
+                                }
+                            }.mapValues { (_, deferred) -> deferred.await() }
+                        }
+                        val tracksByLang = fetched.mapNotNull { (lang, list) ->
+                            list?.let { lang to it }
+                        }.toMap()
+                        val anyFailed = fetched.values.any { it == null }
+                        val targetCount = minOf(HOME_LIBRARY_LIMIT, counts.values.filter { it > 0 }.sum())
+                        val pre = interleaveProportionalTracks(tracksByLang, quotas, limit = HOME_LIBRARY_LIMIT)
+                        val fallback = if (anyFailed || pre.size < targetCount) {
+                            runCatching { connection.api.songs("", 0, "all", "desc").songs }.getOrDefault(emptyList())
+                        } else emptyList()
+                        if (fallback.isEmpty()) pre
+                        else interleaveProportionalTracks(tracksByLang, quotas, fallbackSongs = fallback, limit = HOME_LIBRARY_LIMIT)
+                    }
+                }
+                if (!valid(ticket, connection) || revision != homeLibraryRevision) return@launch
+                mutable.value = mutable.value.copy(homeLibrarySongs = mixed, homeLibraryLoading = false)
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (valid(ticket, connection) && revision == homeLibraryRevision) {
+                    mutable.value = mutable.value.copy(homeLibraryLoading = false)
+                }
+            }
+        }
+    }
+
     override fun loadMore() {
         if (mutable.value.hasMore && !mutable.value.loadingMore && !mutable.value.loading) load(false)
     }
@@ -714,7 +1057,9 @@ class ClientViewModel(
         val ticket = identity
         val revision = ++playlistRevision
         playlistJob?.cancel()
+        val samePlaylist = mutable.value.selectedPlaylist?.id == canonical.id
         mutable.value = mutable.value.copy(selectedPlaylist = canonical, playlistSongs = emptyList(), selectedPlaylistEntries = emptyList(),
+            playlistSongSort = if (samePlaylist) mutable.value.playlistSongSort else PlaylistSongSortMode.DEFAULT,
             playlistLoading = true, playlistNotice = null)
         playlistJob = viewModelScope.launch {
             try {
@@ -734,7 +1079,23 @@ class ClientViewModel(
         playlistRevision++; playlistJob?.cancel()
         closePlaylistSongPicker()
         mutable.value = mutable.value.copy(selectedPlaylist = null, playlistSongs = emptyList(), selectedPlaylistEntries = emptyList(),
-            playlistLoading = false, playlistNotice = null)
+            playlistSongSort = PlaylistSongSortMode.DEFAULT, playlistLoading = false, playlistNotice = null)
+    }
+
+    override fun selectPlaylistSort(mode: PlaylistSortMode) {
+        val connection = current() ?: return
+        if (mutable.value.playlistSortMode == mode) return
+        mutable.value = mutable.value.copy(playlistSortMode = mode)
+        val store = playlistPreferences ?: return
+        val accountIdentity = HistoryIdentity(connection.network.address.origin, connection.auth.account.id)
+        viewModelScope.launch(ioDispatcher) {
+            runCatching { store.writeSortMode(accountIdentity, mode) }
+        }
+    }
+
+    override fun selectPlaylistSongSort(mode: PlaylistSongSortMode) {
+        if (mutable.value.playlistSongSort == mode) return
+        mutable.value = mutable.value.copy(playlistSongSort = mode)
     }
 
     override fun refreshPlaylist() { mutable.value.selectedPlaylist?.let(::openPlaylist) }
@@ -833,7 +1194,13 @@ class ClientViewModel(
                         connectPlayer(connection)
                         if (valid(ticket, connection) && revision == playRevision) {
                             val latest = currentFavoriteDetail() ?: throw ApiFailure(Failure.REQUEST)
-                            if (latest.songs.isNotEmpty()) player.play(latest.songs, 0)
+                            if (latest.songs.isNotEmpty()) {
+                                captureQueueSnapshotBeforeReplacement(latest.songs)
+                                recordPlaylistCollection(latest.playlist, latest.songs)
+                                activeQueueOriginType = "favorites"
+                                activeQueueOriginLabel = latest.playlist.name
+                                player.play(latest.songs, 0)
+                            }
                         }
                     }
                 } catch (error: Exception) {
@@ -892,6 +1259,106 @@ class ClientViewModel(
             playHistory = rendered,
             homeHistoryPreviewSong = preview,
         )
+        if (historyExtras != null) renderHistoryExtras()
+    }
+
+    private fun renderHistoryExtras() {
+        val snapshot = mutable.value
+        val allSongs = snapshot.playback.queue + snapshot.songs + snapshot.favoriteSongs +
+            snapshot.albumSongs + snapshot.playlistSongs + snapshot.playHistory + snapshot.discoverySongs +
+            snapshot.continueListeningSongs + snapshot.artistSongs
+        val songsById = allSongs.associateBy { it.id }
+        val artistNameCovers = buildMap {
+            snapshot.artists.forEach { a -> a.coverUrl?.takeIf(String::isNotBlank)?.let { put(a.name.lowercase(), it) } }
+            snapshot.spotlightArtist?.let { s ->
+                (s.photoUrl ?: s.coverUrl)?.takeIf(String::isNotBlank)?.let { put(s.artist.lowercase(), it) }
+            }
+        }
+        val artistIdCovers = buildMap {
+            snapshot.artists.forEach { a -> if (!a.id.isNullOrBlank() && !a.coverUrl.isNullOrBlank()) put(a.id, a.coverUrl) }
+        }
+        val visitedArtists = historyExtrasSnapshot.artists.map { entry ->
+            val key = entry.canonicalKey()
+            val cover = artistCoverCache[key]
+                ?: entry.id?.let { artistIdCovers[it] }
+                ?: artistNameCovers[entry.name.lowercase()]
+                ?: allSongs.firstOrNull { song ->
+                    !song.coverUrl.isNullOrBlank() &&
+                        ((entry.id != null && (song.artistId == entry.id || song.artists.any { it.id == entry.id })) ||
+                            song.artist.equals(entry.name, ignoreCase = true))
+                }?.coverUrl
+            VisitedArtist(
+                id = entry.id,
+                name = entry.name,
+                source = entry.source,
+                visitedAtMs = entry.visitedAtMs,
+                coverUrl = cover,
+            )
+        }
+        val albumLookup = (snapshot.albums + snapshot.searchAlbums + snapshot.artistAlbums).associateBy { it.id }
+        val playlistLookup = snapshot.playlists.associateBy { it.id }
+        val playedCollections = historyExtrasSnapshot.collections.map { entry ->
+            val key = entry.canonicalKey()
+            when (entry.type) {
+                PlayedCollectionType.ALBUM -> {
+                    val liveAlbum = albumLookup[entry.id]
+                    val cover = collectionCoverCache[key]
+                        ?: liveAlbum?.coverUrl
+                        ?: allSongs.firstOrNull { !it.coverUrl.isNullOrBlank() && (it.albumId == entry.id || it.album == entry.title) }?.coverUrl
+                    PlayedCollection(
+                        type = entry.type,
+                        id = entry.id,
+                        title = entry.title,
+                        subtitle = entry.subtitle.ifBlank { liveAlbum?.artist.orEmpty() },
+                        trackCount = if (entry.trackCount > 0) entry.trackCount else (liveAlbum?.knownTrackCount ?: 0),
+                        source = entry.source,
+                        kind = entry.kind,
+                        playedAtMs = entry.playedAtMs,
+                        coverUrl = cover,
+                    )
+                }
+                PlayedCollectionType.PLAYLIST -> {
+                    val livePlaylist = playlistLookup[entry.id]
+                    val previews = collectionPreviewCoversCache[key]
+                        ?: livePlaylist?.previewCovers.orEmpty()
+                    val cover = collectionCoverCache[key]
+                        ?: livePlaylist?.customCoverUrl
+                        ?: if (entry.kind == "favorite") snapshot.latestFavoriteCoverUrl ?: snapshot.favoriteSongs.firstOrNull { !it.coverUrl.isNullOrBlank() }?.coverUrl else null
+                    PlayedCollection(
+                        type = entry.type,
+                        id = entry.id,
+                        title = entry.title,
+                        subtitle = entry.subtitle.ifBlank { livePlaylist?.description.orEmpty() },
+                        trackCount = if (entry.trackCount > 0) entry.trackCount else (livePlaylist?.songCount ?: 0),
+                        source = entry.source,
+                        kind = entry.kind,
+                        playedAtMs = entry.playedAtMs,
+                        coverUrl = cover,
+                        previewCovers = previews,
+                    )
+                }
+            }
+        }
+        val queueSnapshots = historyExtrasSnapshot.queueSnapshots.map { entry ->
+            val resolvedSongs = entry.entries.map { item ->
+                val stored = item.toSong()
+                val rich = snapshotSongCache[item.id] ?: historySongs[item.id] ?: songsById[item.id]
+                if (rich != null) songContext(rich, stored, preserveCover = false) else stored
+            }
+            QueueSnapshot(
+                id = entry.id,
+                capturedAtMs = entry.capturedAtMs,
+                sourceLabel = entry.sourceLabel,
+                sourceType = entry.sourceType,
+                songs = resolvedSongs,
+                currentIndex = entry.currentIndex.coerceIn(0, (resolvedSongs.size - 1).coerceAtLeast(0)),
+            )
+        }
+        mutable.value = mutable.value.copy(
+            visitedArtists = visitedArtists,
+            playedCollections = playedCollections,
+            queueSnapshots = queueSnapshots,
+        )
     }
 
     private fun hydrateHistory() {
@@ -942,6 +1409,25 @@ class ClientViewModel(
         if (index >= 0) playSongs(songs, index)
     }
 
+    private var secondaryOverlayActive = false
+    private var playbackFeedbackNonce = 0L
+
+    override fun setSecondaryOverlayActive(active: Boolean) {
+        secondaryOverlayActive = active
+    }
+
+    override fun dismissPlaybackFeedback(eventId: Long) {
+        if (mutable.value.playbackFeedback?.id == eventId) {
+            mutable.value = mutable.value.copy(playbackFeedback = null)
+        }
+    }
+
+    private fun emitPlaybackFeedback(kind: PlaybackFeedbackKind, omittedCount: Int = 0) {
+        mutable.value = mutable.value.copy(
+            playbackFeedback = PlaybackFeedbackEvent(++playbackFeedbackNonce, kind, omittedCount),
+        )
+    }
+
     override fun playHistorySong(song: Song) {
         val connection = current() ?: return
         val entries = historyEntries.toList()
@@ -957,29 +1443,22 @@ class ClientViewModel(
                 if (!valid(ticket, connection) || revision != playRevision) return@launch
                 if (received.id != stored.id) throw ApiFailure(Failure.INVALID_RESPONSE)
                 val freshClicked = songContext(received, stored, preserveCover = false)
-                val otherEntries = entries.filterNot { it.id == stored.id }
-                val otherResolved = if (otherEntries.isEmpty()) emptyMap() else {
-                    try {
-                        resolveStoredSongs(
-                            connection = connection,
-                            ids = otherEntries.map { it.id },
-                            contexts = otherEntries.associate { it.id to it.toSong() },
-                        ).associateBy { it.id }
-                    } catch (error: Exception) {
-                        if (error is CancellationException) throw error
-                        emptyMap()
-                    }
+                if (!freshClicked.canPlay) {
+                    mutable.value = mutable.value.copy(historyNotice = ClientNotice.PLAYBACK_FAILED)
+                    emitPlaybackFeedback(PlaybackFeedbackKind.TRACK_UNAVAILABLE)
+                    return@launch
                 }
-                if (!valid(ticket, connection) || revision != playRevision) return@launch
-                val queue = entries.mapNotNull { entry ->
-                    if (entry.id == stored.id) freshClicked else otherResolved[entry.id]
-                }.ifEmpty { listOf(freshClicked) }
-                val targetIndex = queue.indexOfFirst { it.id == freshClicked.id }.coerceAtLeast(0)
                 connectPlayer(connection)
                 if (!valid(ticket, connection) || revision != playRevision) return@launch
-                queue.forEach { historySongs[it.id] = it }
+                historySongs[freshClicked.id] = freshClicked
                 renderHistory()
-                player.play(queue, targetIndex)
+                val started = player.playSingleAsNext(freshClicked)
+                if (started) {
+                    emitPlaybackFeedback(PlaybackFeedbackKind.PLAYED_SINGLE_NEXT)
+                } else {
+                    mutable.value = mutable.value.copy(historyNotice = ClientNotice.PLAYBACK_FAILED)
+                    emitPlaybackFeedback(PlaybackFeedbackKind.TRACK_UNAVAILABLE)
+                }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 if (valid(ticket, connection) && revision == playRevision)
@@ -1163,8 +1642,15 @@ class ClientViewModel(
             }
         }
     }
-    private fun rememberSearchEntity(entry: SearchEntity) {
-        if (mutable.value.destination == MainDestination.SEARCH) {
+    private fun isSearchRootActive(ui: ClientUiState = mutable.value): Boolean =
+        ui.destination == MainDestination.SEARCH &&
+            !secondaryOverlayActive &&
+            ui.selectedArtist == null &&
+            ui.selectedAlbum == null &&
+            ui.selectedPlaylist == null
+
+    private fun rememberSearchEntity(entry: SearchEntity, allowed: Boolean = isSearchRootActive()) {
+        if (allowed) {
             updateSearchHistory(SearchSnapshotMode.RECORD_ONLY) { store, key -> store.addEntity(key, entry) }
         }
     }
@@ -1186,7 +1672,7 @@ class ClientViewModel(
     ) { store, key -> store.clearTerms(key) }
     override fun openRecentSearch(entry: SearchEntity) {
         when (entry.type) {
-            "song" -> playSongsInternal(listOf(entry.toSong()), recordSearchEntity = false)
+            "song" -> playSingleAsNextInternal(entry.toSong(), recordSearchEntity = false)
             "artist" -> openArtistInternal(
                 Artist(entry.name, id = entry.id.takeIf { it.matches(Regex("yt:artist:UC[A-Za-z0-9_-]{1,126}")) }),
                 recordSearchEntity = false,
@@ -1437,8 +1923,9 @@ class ClientViewModel(
     override fun openArtist(artist: Artist) = openArtistInternal(artist, recordSearchEntity = true)
 
     private fun openArtistInternal(artist: Artist, recordSearchEntity: Boolean) {
-        if (recordSearchEntity) rememberSearchEntity(SearchEntity.fromArtist(artist.name, artist.id))
         if (current() == null || artist.name.isBlank()) return
+        val searchOrigin = recordSearchEntity && isSearchRootActive(mutable.value)
+        if (searchOrigin) rememberSearchEntity(SearchEntity.fromArtist(artist.name, artist.id), allowed = true)
         closeAlbum(); closePlaylist(); closeArtist()
         mutable.value = mutable.value.copy(selectedArtist = artist)
         loadArtist(true)
@@ -1468,6 +1955,16 @@ class ClientViewModel(
                 if (!valid(ticket, connection) || revision != artistRevision || mutable.value.selectedArtist?.name != selected.name ||
                     mutable.value.selectedArtist?.id != selected.id) return@launch
                 artistOffset = detail.nextOffset
+                if (reset) {
+                    val artistEntry = VisitedArtistEntry(
+                        id = detail.artist.id,
+                        name = detail.artist.name,
+                        source = if (detail.artist.id != null) "youtube" else "local",
+                        visitedAtMs = System.currentTimeMillis(),
+                    )
+                    detail.artist.coverUrl?.takeIf(String::isNotBlank)?.let { artistCoverCache[artistEntry.canonicalKey()] = it }
+                    historyExtras?.recordArtist(artistEntry)
+                }
                 mutable.value = mutable.value.copy(selectedArtist = detail.artist,
                     artistSongs = (if (reset) detail.songs else mutable.value.artistSongs + detail.songs).distinctBy { it.id },
                     artistLoading = false, artistLoadingMore = false, artistHasMore = detail.hasMore,
@@ -1732,6 +2229,44 @@ class ClientViewModel(
         }
     }
 
+    override fun addFavorites(songs: List<Song>) {
+        val ids = songs.map { it.id }.distinct()
+        if (ids.isEmpty() || mutable.value.libraryMutationBusy) return
+        val snapshot = mutable.value
+        val toAdd = ids.filterNot { it in snapshot.favoriteSongIds }
+        if (toAdd.isEmpty()) {
+            mutable.value = snapshot.copy(
+                libraryMutationNotice = null,
+                libraryMutationVersion = snapshot.libraryMutationVersion + 1,
+            )
+            emitPlaybackFeedback(PlaybackFeedbackKind.FAVORITED_BATCH)
+            return
+        }
+        val known = snapshot.playlists.find { it.kind == "favorite" }
+        mutateLibrary { connection ->
+            var favorite = known ?: connection.api.playlists().firstOrNull { row -> row.kind == "favorite" }
+                ?: throw ApiFailure(Failure.INVALID_RESPONSE)
+            var lastResults = emptyList<PlaylistTargetResult>()
+            var allComplete = true
+            for (batch in toAdd.chunked(100)) {
+                val result = connection.api.addPlaylistSongs(listOf(PlaylistTarget(favorite.id, favorite.revision)), batch)
+                lastResults = result.results
+                if (result.outcome !in setOf("applied", "noop")) {
+                    allComplete = false
+                    break
+                }
+                val nextRevision = result.results.firstOrNull { it.playlistId == favorite.id }?.revision
+                if (nextRevision != null) {
+                    favorite = favorite.copy(revision = nextRevision)
+                } else if (toAdd.size > 100) {
+                    favorite = connection.api.playlist(favorite.id).playlist
+                }
+            }
+            if (allComplete) emitPlaybackFeedback(PlaybackFeedbackKind.FAVORITED_BATCH)
+            LibraryUpdate(results = lastResults, complete = allComplete)
+        }
+    }
+
     override fun addPlaylistSongs(playlistIds: List<String>, songIds: List<String>) {
         val ids = playlistIds.distinct()
         val songs = songIds.distinct()
@@ -1791,7 +2326,7 @@ class ClientViewModel(
         val snapshot = mutable.value
         // Only account-owned current state may supply the selected context. Caller URLs are never used.
         val owned = snapshot.albumSongs + snapshot.playlistSongs + snapshot.artistSongs + snapshot.songs +
-            snapshot.favoriteSongs + snapshot.continueListeningSongs + snapshot.discoverySongs + snapshot.spotlightArtist?.songs.orEmpty() +
+            snapshot.homeLibrarySongs + snapshot.favoriteSongs + snapshot.continueListeningSongs + snapshot.discoverySongs + snapshot.spotlightArtist?.songs.orEmpty() +
             snapshot.playback.queue + snapshot.playStats?.songs.orEmpty().map { it.song } + snapshot.playHistory
         val stored = snapshot.recentSearches.filter { it.type == "song" }.map { it.toSong() } +
             historyEntries.map { it.toSong() }
@@ -1817,13 +2352,51 @@ class ClientViewModel(
         }
     }
 
+    override fun playSingleAsNext(song: Song, fromSearch: Boolean) =
+        playSingleAsNextInternal(song, recordSearchEntity = fromSearch && isSearchRootActive(mutable.value))
+
+    private fun playSingleAsNextInternal(song: Song, recordSearchEntity: Boolean) {
+        val connection = current() ?: return
+        val ticket = identity
+        val revision = beginPlaybackCommand()
+        playJob?.cancel()
+        playJob = viewModelScope.launch {
+            try {
+                val resolved = preparePlaybackSongs(connection, listOf(song)).singleOrNull()?.second
+                if (!valid(ticket, connection) || revision != playRevision) return@launch
+                if (resolved == null || !resolved.canPlay) {
+                    mutable.value = mutable.value.copy(notice = ClientNotice.PLAYBACK_FAILED)
+                    emitPlaybackFeedback(PlaybackFeedbackKind.TRACK_UNAVAILABLE)
+                    return@launch
+                }
+                connectPlayer(connection)
+                if (valid(ticket, connection) && revision == playRevision) {
+                    val started = player.playSingleAsNext(resolved)
+                    if (started) {
+                        if (recordSearchEntity) rememberSearchEntity(SearchEntity.fromSong(resolved), allowed = true)
+                        emitPlaybackFeedback(PlaybackFeedbackKind.PLAYED_SINGLE_NEXT)
+                    } else {
+                        mutable.value = mutable.value.copy(notice = ClientNotice.PLAYBACK_FAILED)
+                        emitPlaybackFeedback(PlaybackFeedbackKind.TRACK_UNAVAILABLE)
+                    }
+                }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (valid(ticket, connection) && revision == playRevision)
+                    mutable.value = mutable.value.copy(notice = notice(error))
+            }
+        }
+    }
+
     override fun playSongs(songs: List<Song>, startIndex: Int, shuffle: Boolean) =
-        playSongsInternal(songs, startIndex, shuffle, recordSearchEntity = true)
+        playSongsInternal(songs, startIndex, shuffle, recordSearchEntity = isSearchRootActive(mutable.value))
 
     private fun playSongsInternal(songs: List<Song>, startIndex: Int = 0, shuffle: Boolean = false, recordSearchEntity: Boolean) {
         val connection = current() ?: return
         if (startIndex !in songs.indices) return
         val captured = songs.toList()
+        val uiBefore = mutable.value
+        val (originType, originLabel, albumToRecord, playlistToRecord) = detectQueueSource(uiBefore, captured)
         val ticket = identity
         val revision = beginPlaybackCommand()
         playJob?.cancel()
@@ -1832,9 +2405,17 @@ class ClientViewModel(
                 val indexed = preparePlaybackSongs(connection, captured)
                 val target = indexed.indexOfFirst { it.first == startIndex }
                 if (!valid(ticket, connection) || revision != playRevision || target < 0) return@launch
-                if (recordSearchEntity) rememberSearchEntity(SearchEntity.fromSong(indexed[target].second))
+                if (recordSearchEntity) rememberSearchEntity(SearchEntity.fromSong(indexed[target].second), allowed = true)
                 connectPlayer(connection)
-                if (valid(ticket, connection) && revision == playRevision) player.play(indexed.map { it.second }, target, shuffle)
+                if (valid(ticket, connection) && revision == playRevision) {
+                    val resolvedSongs = indexed.map { it.second }
+                    captureQueueSnapshotBeforeReplacement(resolvedSongs)
+                    albumToRecord?.let { recordAlbumCollection(it, resolvedSongs) }
+                    playlistToRecord?.let { recordPlaylistCollection(it, resolvedSongs) }
+                    activeQueueOriginType = originType
+                    activeQueueOriginLabel = originLabel
+                    player.play(resolvedSongs, target, shuffle)
+                }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 if (valid(ticket, connection) && revision == playRevision)
@@ -1858,7 +2439,42 @@ class ClientViewModel(
                 connectPlayer(connection)
                 if (valid(ticket, connection) && revision == playRevision) {
                     val latest = if (received.playlist.kind == "favorite") currentFavoriteDetail() ?: throw ApiFailure(Failure.REQUEST) else detail
-                    if (latest.songs.isNotEmpty()) player.play(latest.songs, 0, shuffle)
+                    if (latest.songs.isNotEmpty()) {
+                        captureQueueSnapshotBeforeReplacement(latest.songs)
+                        recordPlaylistCollection(latest.playlist, latest.songs)
+                        activeQueueOriginType = if (latest.playlist.kind == "favorite") "favorites" else "playlist"
+                        activeQueueOriginLabel = latest.playlist.name
+                        player.play(latest.songs, 0, shuffle)
+                    }
+                }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (valid(ticket, connection) && revision == playRevision)
+                    mutable.value = mutable.value.copy(playlistNotice = notice(error))
+            }
+        }
+    }
+
+    override fun enqueuePlaylist(playlist: PlaylistSummary) {
+        val connection = current() ?: return
+        val ticket = identity
+        val revision = beginPlaybackCommand()
+        playJob?.cancel()
+        playJob = viewModelScope.launch {
+            try {
+                val received = withContext(ioDispatcher) { connection.api.playlist(playlist.id) }
+                if (!valid(ticket, connection) || revision != playRevision) return@launch
+                val detail = if (received.playlist.kind == "favorite")
+                    favoriteForPlayback(connection, received, ticket, revision) else publishPlaylist(received)
+                val songs = detail?.songs.orEmpty()
+                if (songs.isEmpty()) {
+                    emitPlaybackFeedback(PlaybackFeedbackKind.TRACK_UNAVAILABLE)
+                    return@launch
+                }
+                connectPlayer(connection)
+                if (valid(ticket, connection) && revision == playRevision) {
+                    player.enqueue(songs, false)
+                    emitPlaybackFeedback(PlaybackFeedbackKind.ENQUEUED_BATCH)
                 }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
@@ -1869,6 +2485,32 @@ class ClientViewModel(
     }
 
     override fun playNext(song: Song) = appendToQueue(listOf(song), true)
+    override fun playNextSongs(songs: List<Song>) {
+        val connection = current() ?: return
+        if (songs.isEmpty()) return
+        val ticket = identity
+        val revision = beginPlaybackCommand()
+        playJob?.cancel()
+        playJob = viewModelScope.launch {
+            try {
+                val playable = preparePlaybackSongs(connection, songs.toList()).map { it.second }
+                if (!valid(ticket, connection) || revision != playRevision) return@launch
+                if (playable.isEmpty()) {
+                    emitPlaybackFeedback(PlaybackFeedbackKind.TRACK_UNAVAILABLE)
+                    return@launch
+                }
+                connectPlayer(connection)
+                if (valid(ticket, connection) && revision == playRevision) {
+                    player.enqueue(playable, true)
+                    emitPlaybackFeedback(PlaybackFeedbackKind.PLAYED_BATCH_NEXT)
+                }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (valid(ticket, connection) && revision == playRevision)
+                    mutable.value = mutable.value.copy(queueNotice = notice(error))
+            }
+        }
+    }
     override fun enqueue(songs: List<Song>) = appendToQueue(songs, false)
     private fun appendToQueue(songs: List<Song>, next: Boolean) {
         val connection = current() ?: return
@@ -1907,6 +2549,260 @@ class ClientViewModel(
         mutateLibrary { if (!repository.clearEntries()) throw ApiFailure(Failure.STORAGE); LibraryUpdate(refreshRemote = false) }
     }
 
+    override fun removeVisitedArtist(artistKey: String) {
+        val repository = historyExtras ?: return
+        mutateLibrary { if (!repository.removeArtist(artistKey)) throw ApiFailure(Failure.STORAGE); LibraryUpdate(refreshRemote = false) }
+    }
+
+    override fun clearVisitedArtists() {
+        val repository = historyExtras ?: return
+        mutateLibrary { if (!repository.clearArtists()) throw ApiFailure(Failure.STORAGE); LibraryUpdate(refreshRemote = false) }
+    }
+
+    override fun removePlayedCollection(collectionKey: String) {
+        val repository = historyExtras ?: return
+        mutateLibrary { if (!repository.removeCollection(collectionKey)) throw ApiFailure(Failure.STORAGE); LibraryUpdate(refreshRemote = false) }
+    }
+
+    override fun clearPlayedCollections() {
+        val repository = historyExtras ?: return
+        mutateLibrary { if (!repository.clearCollections()) throw ApiFailure(Failure.STORAGE); LibraryUpdate(refreshRemote = false) }
+    }
+
+    override fun removeQueueSnapshot(snapshotId: String) {
+        val repository = historyExtras ?: return
+        mutateLibrary { if (!repository.removeQueueSnapshot(snapshotId)) throw ApiFailure(Failure.STORAGE); LibraryUpdate(refreshRemote = false) }
+    }
+
+    override fun clearQueueSnapshots() {
+        val repository = historyExtras ?: return
+        mutateLibrary { if (!repository.clearQueueSnapshots()) throw ApiFailure(Failure.STORAGE); LibraryUpdate(refreshRemote = false) }
+    }
+
+    override fun openPlayedCollection(collection: PlayedCollection) {
+        when (collection.type) {
+            PlayedCollectionType.ALBUM -> openAlbum(
+                Album(
+                    id = collection.id,
+                    title = collection.title,
+                    artist = collection.subtitle,
+                    coverUrl = collection.coverUrl,
+                    trackCount = collection.trackCount,
+                ),
+            )
+            PlayedCollectionType.PLAYLIST -> {
+                val summary = mutable.value.playlists.find { it.id == collection.id } ?: PlaylistSummary(
+                    id = collection.id,
+                    name = collection.title,
+                    kind = collection.kind,
+                    description = collection.subtitle,
+                    songCount = collection.trackCount,
+                    customCoverUrl = collection.coverUrl,
+                    previewCovers = collection.previewCovers,
+                )
+                openPlaylist(summary)
+            }
+        }
+    }
+
+    override fun playPlayedCollection(collection: PlayedCollection) {
+        val connection = current() ?: return
+        when (collection.type) {
+            PlayedCollectionType.ALBUM -> {
+                val ticket = identity
+                val revision = beginPlaybackCommand()
+                playJob?.cancel()
+                playJob = viewModelScope.launch {
+                    try {
+                        val detail = withContext(ioDispatcher) { connection.api.album(collection.id) }
+                        if (!valid(ticket, connection) || revision != playRevision) return@launch
+                        val playable = preparePlaybackSongs(connection, detail.songs).map { it.second }
+                        if (!valid(ticket, connection) || revision != playRevision || playable.isEmpty()) return@launch
+                        connectPlayer(connection)
+                        if (valid(ticket, connection) && revision == playRevision) {
+                            captureQueueSnapshotBeforeReplacement(playable)
+                            recordAlbumCollection(detail.album, playable)
+                            activeQueueOriginType = "album"
+                            activeQueueOriginLabel = detail.album.title
+                            player.play(playable, 0)
+                        }
+                    } catch (error: Exception) {
+                        if (error is CancellationException) throw error
+                        if (valid(ticket, connection) && revision == playRevision)
+                            mutable.value = mutable.value.copy(historyNotice = notice(error))
+                    }
+                }
+            }
+            PlayedCollectionType.PLAYLIST -> {
+                val summary = mutable.value.playlists.find { it.id == collection.id } ?: PlaylistSummary(
+                    id = collection.id,
+                    name = collection.title,
+                    kind = collection.kind,
+                    description = collection.subtitle,
+                    songCount = collection.trackCount,
+                    customCoverUrl = collection.coverUrl,
+                    previewCovers = collection.previewCovers,
+                )
+                playPlaylist(summary)
+            }
+        }
+    }
+
+    override fun restoreQueueSnapshot(snapshotId: String) {
+        val connection = current() ?: return
+        val stored = historyExtrasSnapshot.queueSnapshots.find { it.id == snapshotId } ?: return
+        if (stored.entries.isEmpty()) return
+        val ticket = identity
+        val revision = beginPlaybackCommand()
+        playJob?.cancel()
+        playJob = viewModelScope.launch {
+            try {
+                val contexts = stored.entries.associate { it.id to it.toSong() }
+                val resolved = resolveStoredSongs(connection, stored.entries.map { it.id }, contexts).associateBy { it.id }
+                if (!valid(ticket, connection) || revision != playRevision) return@launch
+                val indexed = stored.entries.mapIndexedNotNull { index, entry ->
+                    resolved[entry.id]?.let { fresh -> index to songContext(fresh, entry.toSong(), preserveCover = false) }
+                }
+                val playableIndexed = indexed.filter { it.second.canPlay }
+                if (playableIndexed.isEmpty()) {
+                    mutable.value = mutable.value.copy(historyNotice = ClientNotice.SOME_SOURCES_UNAVAILABLE)
+                    emitPlaybackFeedback(PlaybackFeedbackKind.QUEUE_RESTORE_UNAVAILABLE)
+                    return@launch
+                }
+                val omittedCount = (stored.entries.size - playableIndexed.size).coerceAtLeast(0)
+                val target = playableIndexed.indexOfFirst { it.first >= stored.currentIndex }.takeIf { it >= 0 } ?: playableIndexed.lastIndex
+                val queue = playableIndexed.map { it.second }
+                queue.forEach { if (!it.coverUrl.isNullOrBlank()) snapshotSongCache[it.id] = it }
+                connectPlayer(connection)
+                if (!valid(ticket, connection) || revision != playRevision) return@launch
+                captureQueueSnapshotBeforeReplacement(queue)
+                activeQueueOriginType = stored.sourceType.ifBlank { "queue" }
+                activeQueueOriginLabel = stored.sourceLabel
+                player.play(queue, target)
+                if (omittedCount > 0) {
+                    mutable.value = mutable.value.copy(historyNotice = ClientNotice.SOME_SOURCES_UNAVAILABLE)
+                    emitPlaybackFeedback(PlaybackFeedbackKind.QUEUE_RESTORED_PARTIAL, omittedCount = omittedCount)
+                } else {
+                    mutable.value = mutable.value.copy(historyNotice = null)
+                    emitPlaybackFeedback(PlaybackFeedbackKind.QUEUE_RESTORED)
+                }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (valid(ticket, connection) && revision == playRevision)
+                    mutable.value = mutable.value.copy(historyNotice = notice(error))
+            }
+        }
+    }
+
+    private data class DetectedQueueSource(
+        val type: String,
+        val label: String,
+        val album: Album? = null,
+        val playlist: PlaylistSummary? = null,
+    )
+
+    private fun detectQueueSource(ui: ClientUiState, requested: List<Song>): DetectedQueueSource {
+        fun sameOrder(other: List<Song>) = requested.isNotEmpty() && requested.size == other.size &&
+            requested.indices.all { requested[it].id == other[it].id }
+        val selectedAlbum = ui.selectedAlbum
+        if (selectedAlbum != null && ui.albumSongs.isNotEmpty() && sameOrder(ui.albumSongs)) {
+            return DetectedQueueSource("album", selectedAlbum.title, album = selectedAlbum)
+        }
+        val selectedPlaylist = ui.selectedPlaylist
+        val activePlaylistSongs = if (selectedPlaylist != null) {
+            sortPlaylistEntries(ui.selectedPlaylistEntries, ui.playlistSongSort)
+                .mapNotNull { entry -> entry.song.takeIf { entry.canPlay } }
+                .ifEmpty { ui.playlistSongs }
+        } else emptyList()
+        if (selectedPlaylist != null && activePlaylistSongs.isNotEmpty() && sameOrder(activePlaylistSongs)) {
+            val type = if (selectedPlaylist.kind == "favorite") "favorites" else "playlist"
+            return DetectedQueueSource(type, selectedPlaylist.name, playlist = selectedPlaylist)
+        }
+        val selectedArtist = ui.selectedArtist
+        if (selectedArtist != null && ui.artistSongs.isNotEmpty() && sameOrder(ui.artistSongs)) {
+            return DetectedQueueSource("artist", selectedArtist.name)
+        }
+        if (sameOrder(ui.playHistory)) return DetectedQueueSource("history", "")
+        if (sameOrder(ui.continueListeningSongs)) return DetectedQueueSource("continue", "")
+        if (sameOrder(ui.discoverySongs)) return DetectedQueueSource("discovery", "")
+        if (sameOrder(ui.homeLibrarySongs)) return DetectedQueueSource("library", "")
+        if (sameOrder(ui.favoriteSongs)) return DetectedQueueSource("favorites", "")
+        if (ui.playStats?.songs?.map { it.song }?.let(::sameOrder) == true) return DetectedQueueSource("stats", "")
+        if (ui.destination == MainDestination.SEARCH && sameOrder(ui.songs)) {
+            return DetectedQueueSource("search", ui.query)
+        }
+        return DetectedQueueSource("library", "")
+    }
+
+    private fun captureQueueSnapshotBeforeReplacement(incomingSongs: List<Song>) {
+        val repository = historyExtras ?: return
+        val existing = player.state.value
+        val surviving = existing.queue.mapIndexedNotNull { originalIndex, song ->
+            if (song.id.isBlank() || (!song.canPlay && song.title.isBlank())) return@mapIndexedNotNull null
+            val entry = runCatching { metadataEntry(song) }.getOrNull() ?: return@mapIndexedNotNull null
+            Triple(originalIndex, song, entry)
+        }
+        if (surviving.size < 2) return
+        val validOld = surviving.map { it.second }
+        val entries = surviving.map { it.third }
+        if (validOld.map { it.id } == incomingSongs.map { it.id }) return
+        val now = System.currentTimeMillis()
+        val mappedIndex = if (existing.currentIndex in existing.queue.indices) {
+            surviving.indexOfFirst { it.first >= existing.currentIndex }
+                .takeIf { it >= 0 } ?: surviving.lastIndex
+        } else {
+            0
+        }
+        validOld.forEach { if (!it.coverUrl.isNullOrBlank()) snapshotSongCache[it.id] = it }
+        repository.recordQueueSnapshot(
+            QueueSnapshotEntry(
+                id = "qs-$now-${++snapshotNonce}",
+                capturedAtMs = now,
+                sourceLabel = activeQueueOriginLabel,
+                sourceType = activeQueueOriginType,
+                entries = entries,
+                currentIndex = mappedIndex,
+            ),
+        )
+    }
+
+    private fun recordAlbumCollection(album: Album, songs: List<Song>) {
+        val source = if (album.id.startsWith("yt:")) "youtube" else "local"
+        val entry = PlayedCollectionEntry(
+            type = PlayedCollectionType.ALBUM,
+            id = album.id,
+            title = album.title,
+            subtitle = album.artist,
+            trackCount = album.knownTrackCount ?: songs.size,
+            source = source,
+            kind = "album",
+            playedAtMs = System.currentTimeMillis(),
+        )
+        val cover = album.coverUrl ?: songs.firstOrNull { !it.coverUrl.isNullOrBlank() }?.coverUrl
+        if (!cover.isNullOrBlank()) collectionCoverCache[entry.canonicalKey()] = cover
+        historyExtras?.recordCollection(entry)
+    }
+
+    private fun recordPlaylistCollection(playlist: PlaylistSummary, songs: List<Song>) {
+        val entry = PlayedCollectionEntry(
+            type = PlayedCollectionType.PLAYLIST,
+            id = playlist.id,
+            title = playlist.name,
+            subtitle = playlist.description,
+            trackCount = songs.size.takeIf { it > 0 } ?: playlist.songCount,
+            source = "local",
+            kind = playlist.kind,
+            playedAtMs = System.currentTimeMillis(),
+        )
+        val key = entry.canonicalKey()
+        playlist.customCoverUrl?.takeIf(String::isNotBlank)?.let { collectionCoverCache[key] = it }
+        val previews = playlist.previewCovers.ifEmpty {
+            songs.mapNotNull { it.coverUrl?.takeIf(String::isNotBlank) }.distinct().take(4)
+        }
+        if (previews.isNotEmpty()) collectionPreviewCoversCache[key] = previews
+        historyExtras?.recordCollection(entry)
+    }
+
     override fun setPlaylistCover(playlist: PlaylistSummary, sourceUri: String) {
         val processor = coverImageProcessor ?: return
         if (playlist.kind == "favorite") return
@@ -1942,6 +2838,109 @@ class ClientViewModel(
             val slot = it.api.imageSlot("playlist", playlist.id)
             val updated = it.api.setPlaylistCover(playlist.id, null, slot.revision)
             LibraryUpdate(summary = playlist.copy(customCoverUrl = updated.url, coverRevision = updated.revision))
+        }
+    }
+
+    private data class ProfileUpdate(
+        val displayName: String? = null,
+        val avatarUrl: String? = null,
+        val updateAvatar: Boolean = false,
+        val avatarRevision: Long? = null,
+    )
+
+    private fun refreshAvatarSlot(connection: ActiveConnection, ticket: Long) {
+        val revision = ++profileRevision
+        viewModelScope.launch {
+            val slot = runCatching { withContext(ioDispatcher) { connection.api.imageSlot("avatar", "avatar") } }.getOrNull()
+                ?: return@launch
+            if (!valid(ticket, connection) || revision != profileRevision) return@launch
+            applyProfileUpdate(ProfileUpdate(avatarUrl = slot.url, updateAvatar = true, avatarRevision = slot.revision))
+        }
+    }
+
+    private fun applyProfileUpdate(update: ProfileUpdate) {
+        connections.updateActiveAccountProfile(
+            displayName = update.displayName,
+            avatarUrl = update.avatarUrl,
+            updateAvatar = update.updateAvatar,
+            avatarRevision = update.avatarRevision,
+        )
+        val currentUi = mutable.value
+        mutable.value = currentUi.copy(
+            accountName = update.displayName ?: currentUi.accountName,
+            avatarUrl = if (update.updateAvatar) update.avatarUrl else currentUi.avatarUrl,
+            avatarRevision = update.avatarRevision ?: currentUi.avatarRevision,
+            profileBusy = false,
+            profileNotice = null,
+            savedAccounts = accountSummaries(),
+        )
+    }
+
+    private fun mutateProfile(operation: suspend (ActiveConnection) -> ProfileUpdate) {
+        val connection = current() ?: return
+        if (mutable.value.profileBusy) return
+        val ticket = identity
+        val revision = ++profileRevision
+        mutable.value = mutable.value.copy(profileBusy = true, profileNotice = null)
+        profileJob?.cancel()
+        profileJob = viewModelScope.launch {
+            try {
+                val update = withContext(ioDispatcher) { operation(connection) }
+                if (!valid(ticket, connection) || revision != profileRevision) return@launch
+                applyProfileUpdate(update)
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (valid(ticket, connection) && revision == profileRevision) {
+                    mutable.value = mutable.value.copy(profileBusy = false, profileNotice = notice(error))
+                }
+            }
+        }
+    }
+
+    override fun dismissProfileNotice() {
+        if (!mutable.value.profileBusy) {
+            mutable.value = mutable.value.copy(profileNotice = null)
+        }
+    }
+
+    override fun updateDisplayName(displayName: String) {
+        mutateProfile { connection ->
+            val updated = connection.api.updateDisplayName(displayName.trim())
+            ProfileUpdate(displayName = updated.displayName)
+        }
+    }
+
+    override fun setAccountAvatar(sourceUri: String) {
+        val processor = coverImageProcessor ?: return
+        val ticket = identity
+        mutateProfile { connection ->
+            val slot = connection.api.imageSlot("avatar", "avatar")
+            currentCoroutineContext().ensureActive()
+            val bytes = processor.prepareAvatar(sourceUri)
+            currentCoroutineContext().ensureActive()
+            if (!valid(ticket, connection)) throw CancellationException()
+            var draft: UserImage? = null
+            var applied = false
+            try {
+                draft = connection.api.uploadAvatar(bytes)
+                currentCoroutineContext().ensureActive()
+                if (!valid(ticket, connection)) throw CancellationException()
+                val updated = connection.api.setAvatar(draft.id, slot.revision)
+                applied = true
+                ProfileUpdate(avatarUrl = updated.url, updateAvatar = true, avatarRevision = updated.revision)
+            } finally {
+                if (!applied && draft != null) withContext(NonCancellable) {
+                    runCatching { connection.api.discardUserImage(draft.id) }
+                }
+            }
+        }
+    }
+
+    override fun clearAccountAvatar() {
+        mutateProfile { connection ->
+            val slot = connection.api.imageSlot("avatar", "avatar")
+            val updated = connection.api.setAvatar(null, slot.revision)
+            ProfileUpdate(avatarUrl = updated.url, updateAvatar = true, avatarRevision = updated.revision)
         }
     }
 

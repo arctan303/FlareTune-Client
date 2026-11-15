@@ -7,11 +7,12 @@
     <string name="ft_library_add_to_playlist">加入歌单</string>
     <string name="ft_library_quick_next">下一首</string>
     <string name="ft_library_quick_playlist">加入歌单</string>
-    <string name="ft_library_quick_favorite">我喜欢</string>
-    <string name="ft_library_quick_favorited">已喜欢</string>
+    <string name="ft_library_quick_favorite">加入收藏</string>
+    <string name="ft_library_quick_favorited">已收藏</string>
     <string name="ft_library_view_artist">查看歌手</string>
     <string name="ft_library_view_album">查看专辑</string>
     <string name="ft_library_remove_song">从此歌单移除</string>
+    <string name="ft_library_copy_song_info">复制歌曲信息</string>
     <string name="ft_library_create_playlist">新建歌单</string>
     <string name="ft_library_edit_playlist">编辑歌单</string>
     <string name="ft_library_playlist_name">名称</string>

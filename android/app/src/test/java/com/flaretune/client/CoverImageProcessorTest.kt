@@ -37,6 +37,23 @@ class CoverImageProcessorTest {
         finally { decoded.recycle() }
     }
 
+    @Test fun prepareAvatarProduces512SquareWebp() {
+        val context = RuntimeEnvironment.getApplication()
+        val input = png(1600, 900)
+        val uri = Uri.parse("content://cover-fixture/avatar-512")
+        shadowOf(context.contentResolver).registerInputStream(uri, input.inputStream())
+
+        val output = processor.prepareAvatar(uri.toString())
+
+        assertTrue(output.isNotEmpty())
+        assertTrue(output.size <= 5 * 1024 * 1024)
+        assertEquals("RIFF", output.copyOfRange(0, 4).toString(Charsets.US_ASCII))
+        assertEquals("WEBP", output.copyOfRange(8, 12).toString(Charsets.US_ASCII))
+        val decoded = BitmapFactory.decodeByteArray(output, 0, output.size)
+        try { assertEquals(512, decoded.width); assertEquals(512, decoded.height) }
+        finally { decoded.recycle() }
+    }
+
     @Test fun externalNetworkFileAndMalformedInputsAreRejectedBeforeAnyAuthenticatedRequest() {
         for (uri in listOf("https://other.example/image", "file:///private/image", "data:image/png;base64,AA==")) {
             try { processor.prepare(uri); fail("Expected content URI only") } catch (_: ApiFailure) { }

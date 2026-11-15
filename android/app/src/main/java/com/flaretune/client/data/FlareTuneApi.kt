@@ -97,9 +97,40 @@ class FlareTuneApi(val network: SessionNetwork) : AccountApi {
         val user = json.optJSONObject("user") ?: invalidResponse()
         val id = user.optString("accountId")
         val csrf = json.optString("csrfToken")
-        if (id.isBlank() || csrf.isBlank() || user.optString("username").isBlank()) invalidResponse()
-        return AuthSession(Account(id, user.getString("username"), user.optString("displayName").ifBlank { user.getString("username") }),
-            csrf, json.optBoolean("mustChangePassword"))
+        val username = user.optString("username")
+        if (id.isBlank() || csrf.isBlank() || username.isBlank()) invalidResponse()
+        val avatarSlot = if (user.has("avatar") && !user.isNull("avatar")) {
+            (user.optJSONObject("avatar") ?: invalidResponse()).let(::parseImageSlot)
+        } else null
+        return AuthSession(
+            Account(
+                id = id,
+                username = username,
+                displayName = user.optString("displayName").ifBlank { username },
+                avatarUrl = avatarSlot?.url,
+                avatarRevision = avatarSlot?.revision ?: 0L,
+            ),
+            csrf,
+            json.optBoolean("mustChangePassword"),
+        )
+    }
+
+    override fun updateDisplayName(displayName: String): Account {
+        val trimmed = displayName.trim()
+        if (trimmed.length > 80 || trimmed.any { it.code < 32 || it.code == 127 || it == '\u2028' || it == '\u2029' }) {
+            throw ApiFailure(Failure.REQUEST)
+        }
+        val data = mutation(address.endpoint("/api/account/profile"), "PATCH", JSONObject().put("displayName", trimmed))
+        val user = data.optJSONObject("user") ?: invalidResponse()
+        val id = requiredString(user, "accountId")
+        val username = requiredString(user, "username")
+        val returnedName = (user.opt("displayName") as? String)?.trim()?.ifBlank { username } ?: invalidResponse()
+        session?.let { currentSession ->
+            if (currentSession.account.id == id) {
+                session = currentSession.copy(account = currentSession.account.copy(displayName = returnedName))
+            }
+        }
+        return Account(id, username, returnedName)
     }
 
     override fun changePassword(current: String, replacement: String) {
@@ -115,7 +146,7 @@ class FlareTuneApi(val network: SessionNetwork) : AccountApi {
     override fun songs(query: String, offset: Int, language: String, sort: String): SongPage {
         if (sort !in setOf("asc", "desc")) throw ApiFailure(Failure.REQUEST)
         if (offset !in 0..2000) throw ApiFailure(Failure.REQUEST)
-        val filter = languageFilter(language)
+        val filter = languageFilter(language, allowUntagged = true)
         val searching = query.isNotBlank()
         val builder = if (!searching) {
             if (offset % 50 != 0) throw ApiFailure(Failure.REQUEST)
@@ -444,8 +475,13 @@ class FlareTuneApi(val network: SessionNetwork) : AccountApi {
         if (!url.isHttps || url.username.isNotEmpty() || url.password.isNotEmpty() || (!raw.startsWith('/') && !raw.startsWith("https://", true)) || raw.startsWith("//")) invalidResponse()
         return url.toString()
     }
-    override fun languageCounts(): Map<String, Int> {
-        val data = catalogData(request(address.endpoint("/api/songs").newBuilder().addQueryParameter("counts", "language").build()))
+    override fun languageCounts(): Map<String, Int> = languageCounts(includeUntagged = false)
+
+    override fun languageCounts(includeUntagged: Boolean): Map<String, Int> {
+        val builder = address.endpoint("/api/songs").newBuilder()
+            .addQueryParameter("counts", "language")
+        if (includeUntagged) builder.addQueryParameter("includeUntagged", "1")
+        val data = catalogData(request(builder.build()))
         return data.keys().asSequence().associateWith { requiredInt(data, it) }
     }
 
@@ -526,11 +562,22 @@ class FlareTuneApi(val network: SessionNetwork) : AccountApi {
         return parseImageSlot(request(url))
     }
 
-    override fun uploadPlaylistCover(bytes: ByteArray): UserImage {
+    override fun uploadPlaylistCover(bytes: ByteArray): UserImage = uploadUserImage("playlist", 1024, bytes)
+
+    override fun setPlaylistCover(id: String, imageId: String?, revision: Long): ImageSlot =
+        setImageSlot("playlist", id, imageId, revision)
+
+    override fun uploadAvatar(bytes: ByteArray): UserImage = uploadUserImage("avatar", 512, bytes)
+
+    override fun setAvatar(imageId: String?, revision: Long): ImageSlot =
+        setImageSlot("avatar", "avatar", imageId, revision)
+
+    private fun uploadUserImage(purpose: String, expectedDimension: Int, bytes: ByteArray): UserImage {
         requireMutationSession()
         if (bytes.isEmpty() || bytes.size > 5 * 1024 * 1024) throw ApiFailure(Failure.REQUEST)
         val auth = session ?: throw ApiFailure(Failure.SESSION_EXPIRED)
-        val builder = Request.Builder().url(address.endpoint("/api/account/images/upload/playlist"))
+        val url = address.endpoint("/api/account/images/upload").newBuilder().addPathSegment(purpose).build()
+        val builder = Request.Builder().url(url)
             .header("Accept", "application/json").header("Origin", address.origin).header("X-Requested-With", "FlareTune")
             .header("X-FlareTune-Expected-Account", auth.account.id).header("X-CSRF-Token", auth.csrfToken)
             .post(bytes.copyOf().toRequestBody("image/webp".toMediaType()))
@@ -539,15 +586,16 @@ class FlareTuneApi(val network: SessionNetwork) : AccountApi {
         val width = requiredInt(data, "width")
         val height = requiredInt(data, "height")
         val size = requiredInt(data, "byteSize")
-        if (width != 1024 || height != 1024 || size !in 1..5 * 1024 * 1024 || size != bytes.size) invalidResponse()
+        if (width != expectedDimension || height != expectedDimension || size !in 1..5 * 1024 * 1024 || size != bytes.size) invalidResponse()
         return UserImage(id, privateImageUrl(nullableString(data, "url"), id) ?: invalidResponse(), width, height, size)
     }
 
-    override fun setPlaylistCover(id: String, imageId: String?, revision: Long): ImageSlot {
-        checkImageId(id)
+    private fun setImageSlot(purpose: String, targetId: String, imageId: String?, revision: Long): ImageSlot {
+        checkImageId(targetId)
         imageId?.let(::checkImageId)
         revisionBody(revision)
-        val url = address.endpoint("/api/account/images/slots/playlist").newBuilder().addPathSegment(id).build()
+        val url = address.endpoint("/api/account/images/slots").newBuilder()
+            .addPathSegment(purpose).addPathSegment(targetId).build()
         val data = mutation(url, "PUT", JSONObject().put("imageId", imageId ?: JSONObject.NULL).put("revision", revision))
         return parseImageSlot(data).also { if (it.imageId != imageId) invalidResponse() }
     }
@@ -672,8 +720,9 @@ class FlareTuneApi(val network: SessionNetwork) : AccountApi {
             throw error
         }
     }
-    private fun languageFilter(language: String): String? {
+    private fun languageFilter(language: String, allowUntagged: Boolean = false): String? {
         if (language == "all") return null
+        if (allowUntagged && language == "untagged") return language
         if (language !in ALL_LANGUAGES.split(',')) throw ApiFailure(Failure.REQUEST)
         return language
     }

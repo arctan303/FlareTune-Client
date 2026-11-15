@@ -57,8 +57,15 @@ class SessionNetwork(
     val mediaClient: OkHttpClient = common.newBuilder().followRedirects(true).followSslRedirects(false).build()
     fun retire() {
         jar.retire()
-        common.dispatcher.cancelAll()
-        common.connectionPool.evictAll()
+        // Closing pooled TLS sockets writes close_notify; run off the caller thread so UI actions never trigger NetworkOnMainThreadException.
+        try {
+            common.dispatcher.executorService.execute {
+                common.dispatcher.cancelAll()
+                common.connectionPool.evictAll()
+            }
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            // Executor already shutting down; jar retirement has already invalidated this session.
+        }
     }
 }
 

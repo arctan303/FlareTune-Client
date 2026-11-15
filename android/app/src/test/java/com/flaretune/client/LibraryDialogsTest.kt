@@ -366,6 +366,38 @@ class LibraryDialogsTest {
         }
     }
 
+    @Test fun songActionsCopiesFormattedSongInfoToClipboard() {
+        val clipboard = rule.activity.getSystemService(android.content.ClipboardManager::class.java)
+        clipboard?.clearPrimaryClip()
+        var sheetSong by mutableStateOf(track)
+        rule.setContent {
+            FlareTuneTheme {
+                SongActionsSheet(
+                    song = sheetSong,
+                    favorite = false,
+                    busy = false,
+                    notice = null,
+                    onToggleFavorite = {},
+                    onPlayNext = {},
+                    onEnqueue = {},
+                    onAddToPlaylist = {},
+                    onArtist = {},
+                    onAlbum = {},
+                    onDismiss = {},
+                )
+            }
+        }
+        rule.onNodeWithTag("song_action_copy_info").performScrollTo().performClick()
+        rule.runOnIdle {
+            assertEquals("After the rain - The Slow Hours", clipboard?.primaryClip?.getItemAt(0)?.text?.toString())
+            sheetSong = track.copy(artist = "")
+        }
+        rule.onNodeWithTag("song_action_copy_info").performScrollTo().performClick()
+        rule.runOnIdle {
+            assertEquals("After the rain", clipboard?.primaryClip?.getItemAt(0)?.text?.toString())
+        }
+    }
+
     private fun dragMember(from: String, to: String) {
         val source = rule.onNodeWithTag("playlist_order_entry_$from").fetchSemanticsNode().boundsInRoot
         val target = rule.onNodeWithTag("playlist_order_entry_$to").fetchSemanticsNode().boundsInRoot

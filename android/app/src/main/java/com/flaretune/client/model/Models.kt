@@ -19,7 +19,13 @@ data class Song(
 }
 
 data class SongPage(val songs: List<Song>, val nextOffset: Int, val hasMore: Boolean, val partialSources: Boolean = false, val capped: Boolean = false)
-data class Account(val id: String, val username: String, val displayName: String)
+data class Account(
+    val id: String,
+    val username: String,
+    val displayName: String,
+    val avatarUrl: String? = null,
+    val avatarRevision: Long = 0L,
+)
 data class AuthSession(val account: Account, val csrfToken: String, val mustChangePassword: Boolean)
 enum class ClientNotice {
     INVALID_URL, NOT_READY, NETWORK, INVALID_LOGIN, SESSION_EXPIRED, PASSWORD_CHANGED,

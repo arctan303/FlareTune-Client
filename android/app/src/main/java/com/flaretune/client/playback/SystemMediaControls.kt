@@ -65,6 +65,7 @@ internal class SystemMediaControls(
     private val isCurrent: () -> Boolean,
 ) : MediaSession.Callback {
     private val orderCommand = SessionCommand(SYSTEM_MEDIA_CYCLE_ORDER, Bundle.EMPTY)
+    private val playSingleNextCommand = SessionCommand(PLAYBACK_PLAY_SINGLE_NEXT, Bundle.EMPTY)
     private val favorites = SystemMediaFavorites(scope, SystemMediaFavoriteApi(connection, ioDispatcher), ::current) {
         changes.publish(connection, it)
     }
@@ -89,6 +90,7 @@ internal class SystemMediaControls(
         val result = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
         if (current() && trusted(controller)) {
             result.add(orderCommand)
+            result.add(playSingleNextCommand)
             result.add(SessionCommand(favorites.state.value.commandId, Bundle.EMPTY))
         }
         return result.build()
@@ -112,6 +114,17 @@ internal class SystemMediaControls(
             cycleSystemMediaOrder(session.player)
             publish()
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+        }
+        if (customCommand.customAction == PLAYBACK_PLAY_SINGLE_NEXT) {
+            val song = args.toSingleNextSong()
+                ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
+            if (!song.canPlay) {
+                return Futures.immediateFuture(SessionResult(SessionError.ERROR_BAD_VALUE))
+            }
+            val played = playSingleAsNext(session.player, song.item())
+            return Futures.immediateFuture(
+                SessionResult(if (played) SessionResult.RESULT_SUCCESS else SessionError.ERROR_INVALID_STATE),
+            )
         }
         // The opaque action is issued for one observed track/state. Request arguments cannot choose a song or account.
         if (customCommand.customAction != favorites.state.value.commandId ||

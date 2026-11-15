@@ -137,6 +137,7 @@ class ClientUiTest {
         rule.onNodeWithTag("queue_panel").assertExists()
         rule.onNodeWithTag("queue_item_1").performClick()
         rule.runOnIdle { assertEquals(1, actions.queueIndex) }
+        rule.onNodeWithTag("queue_panel").assertIsDisplayed()
     }
 
     @Test fun emptyFailureHasAnActualRetryAction() {
@@ -191,9 +192,70 @@ class ClientUiTest {
         val mini = rule.onNodeWithTag("mini_player").fetchSemanticsNode().boundsInRoot
         assertTrue("Wide dock overlaps", nav.right <= mini.left)
         screenshot("v2-home-wide")
+        // Wide MiniPlayer disables vertical swipe-up to avoid conflicting with tablet system gestures.
+        rule.onNodeWithTag("mini_player").performTouchInput {
+            swipeUp(startY = bottom - 6f, endY = top - 80f)
+        }
+        rule.waitForIdle()
+        rule.onNodeWithTag("player_mode").assertDoesNotExist()
         rule.onNodeWithTag("mini_player").performClick()
+        rule.waitForIdle()
         rule.onNodeWithTag("player_mode").assertIsDisplayed()
         screenshot("v2-player-wide")
+        rule.onNodeWithTag("player_close").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("player_mode").assertDoesNotExist()
+        rule.onNodeWithTag("mini_player").performClick()
+        rule.onNodeWithTag("player_mode").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "zh-rCN-w390dp-h844dp-mdpi")
+    fun miniPlayerUnifiedVerticalDragExpandsAndCollapsesPlayer() {
+        render(fixture())
+        rule.onNodeWithTag("mini_player").assertIsDisplayed()
+        // Small upward drag below open threshold settles cleanly back to MiniPlayer.
+        rule.onNodeWithTag("mini_player").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, -36f))
+            up()
+        }
+        rule.waitForIdle()
+        rule.onNodeWithTag("player_mode").assertDoesNotExist()
+
+        // Full vertical swipe expands via the unified sheet progress.
+        rule.onNodeWithTag("mini_player").performTouchInput {
+            swipeUp(startY = bottom - 6f, endY = top - 220f)
+        }
+        rule.waitForIdle()
+        rule.onNodeWithTag("player_mode").assertIsDisplayed()
+
+        // Dragging down on the top collapse handle dismisses back into MiniPlayer.
+        rule.onNodeWithTag("player_close", useUnmergedTree = true).performTouchInput {
+            swipeDown(startY = centerY, endY = centerY + 520f)
+        }
+        rule.waitForIdle()
+        rule.onNodeWithTag("player_mode").assertDoesNotExist()
+        rule.onNodeWithTag("mini_player").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "zh-rCN-w393dp-h851dp-night-xxhdpi")
+    fun compactLyricsModePersistsAcrossPlayerCloseAndReopen() {
+        render(fixture())
+        rule.onNodeWithTag("mini_player").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("player_artwork").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("player_lyrics_top_row").assertIsDisplayed()
+
+        rule.onNodeWithTag("player_close").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("player_lyrics_top_row").assertDoesNotExist()
+
+        rule.onNodeWithTag("mini_player").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("player_lyrics_top_row").assertIsDisplayed()
     }
 
     @Test
@@ -279,8 +341,8 @@ class ClientUiTest {
         actions.onNavigate = { state.value = state.value.copy(destination = it) }
         rule.setContent { FlareTuneTheme { ClientApp(state.value, actions, null) } }
         rule.onNodeWithTag("mini_player").performClick()
-        rule.onNodeWithTag("player_lyrics_toggle").assertDoesNotExist()
-        rule.onNodeWithTag("player_artwork").performClick()
+        rule.onNodeWithTag("player_lyrics_toggle").assertIsDisplayed()
+        rule.onNodeWithTag("player_lyrics_toggle").performClick()
         rule.onNodeWithTag("player_lyrics_list").assertExists()
         rule.runOnIdle {
             state.value = state.value.copy(
@@ -316,10 +378,10 @@ class ClientUiTest {
         rule.onNodeWithTag("mini_player").assertIsDisplayed()
         rule.onAllNodesWithText("你好世界").assertCountEquals(0)
 
-        // Open full player, tap artwork/preview to open lyrics, toggle display without triggering generation.
+        // Open full player, tap lyrics toggle beside more to open lyrics, toggle display without triggering generation.
         rule.onNodeWithTag("mini_player").performClick()
-        rule.onNodeWithTag("player_lyrics_toggle").assertDoesNotExist()
-        rule.onNodeWithTag("player_artwork").performClick()
+        rule.onNodeWithTag("player_lyrics_toggle").assertIsDisplayed()
+        rule.onNodeWithTag("player_lyrics_toggle").performClick()
         rule.onAllNodesWithText("你好世界").assertCountEquals(0)
         rule.onNodeWithTag("player_translate_button").performClick()
         rule.runOnIdle {
@@ -328,11 +390,31 @@ class ClientUiTest {
         }
         rule.onNodeWithText("你好世界").assertIsDisplayed()
 
-        // Generate button invokes requestLyricTranslation independently.
-        rule.onNodeWithTag("player_generate_translation").performClick()
-        rule.runOnIdle { assertEquals(1, actions.lyricTranslationRequests) }
+        // Without inline translations in IDLE mode, the unified translation button requests generation.
+        rule.runOnIdle {
+            state.value = state.value.copy(
+                translationEnabled = false,
+                lyricState = state.value.lyricState.copy(
+                    lines = listOf(LyricLine("Hello world", translation = null, timeSeconds = 0.0)),
+                    translationState = LyricTranslationStatus.IDLE,
+                    translationSupported = true,
+                ),
+            )
+        }
+        rule.onNodeWithTag("player_translate_button").performClick()
+        rule.runOnIdle {
+            assertEquals(true, actions.lastTranslationEnabled)
+            assertEquals(1, actions.lyricTranslationRequests)
+        }
 
-        // Close full player; mini player now reflects translationEnabled == true.
+        // Restore inline translation and close full player; mini player reflects translationEnabled == true.
+        rule.runOnIdle {
+            state.value = state.value.copy(
+                lyricState = state.value.lyricState.copy(
+                    lines = listOf(LyricLine("Hello world", translation = "你好世界", timeSeconds = 0.0)),
+                ),
+            )
+        }
         rule.onNodeWithTag("player_close").performClick()
         rule.onNodeWithText("你好世界").assertIsDisplayed()
     }
@@ -362,6 +444,21 @@ class ClientUiTest {
         render(fixture())
         rule.onNodeWithTag("mini_player").performClick()
         rule.onNodeWithTag("open_queue").performScrollTo().performClick()
+
+        // Slight accidental vertical brush does not activate reorder.
+        rule.onNodeWithTag("queue_drag_0", useUnmergedTree = true).performTouchInput {
+            down(center)
+            moveBy(Offset(0f, 8f))
+            up()
+        }
+        rule.runOnIdle { assertTrue(actions.movedQueuePairs.isEmpty()) }
+
+        // Current track relies on color distinction rather than visible status text.
+        val playingLabel = rule.activity.getString(R.string.ft_playing)
+        val pausedLabel = rule.activity.getString(R.string.ft_paused)
+        assertTrue(rule.onAllNodesWithText(playingLabel).fetchSemanticsNodes().isEmpty())
+        assertTrue(rule.onAllNodesWithText(pausedLabel).fetchSemanticsNodes().isEmpty())
+
         val firstBounds = rule.onNodeWithTag("queue_item_0").fetchSemanticsNode().boundsInRoot
         val secondBounds = rule.onNodeWithTag("queue_item_1").fetchSemanticsNode().boundsInRoot
         val distance = (secondBounds.center.y - firstBounds.center.y) + 40f
@@ -372,6 +469,57 @@ class ClientUiTest {
             up()
         }
         rule.runOnIdle { assertTrue(actions.movedQueuePairs.contains(0 to 1)) }
+    }
+
+    @Test fun queuePanelDragHandleReordersDuplicateEntriesAndScrollsNearEdge() {
+        val duplicateQueue = listOf(songs[0], songs[0]) + songs.drop(1)
+        render(
+            fixture().copy(
+                playback = PlaybackSnapshot(duplicateQueue[0], duplicateQueue, 0, true, positionMs = 30_000, durationMs = 180_000, volume = .7f),
+            ),
+        )
+        rule.onNodeWithTag("mini_player").performClick()
+        rule.onNodeWithTag("open_queue").performScrollTo().performClick()
+
+        val firstBounds = rule.onNodeWithTag("queue_item_0").fetchSemanticsNode().boundsInRoot
+        val secondBounds = rule.onNodeWithTag("queue_item_1").fetchSemanticsNode().boundsInRoot
+        val stepDistance = (secondBounds.center.y - firstBounds.center.y) + 40f
+        rule.onNodeWithTag("queue_drag_0", useUnmergedTree = true).performTouchInput {
+            down(center)
+            moveBy(Offset(0f, stepDistance / 2f))
+            moveBy(Offset(0f, stepDistance / 2f))
+            up()
+        }
+        rule.runOnIdle { assertTrue(actions.movedQueuePairs.contains(0 to 1)) }
+
+        actions.movedQueuePairs.clear()
+        val lastVisibleIdx = (11 downTo 1).first { idx ->
+            rule.onAllNodesWithTag("queue_drag_$idx", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        val listBottom = rule.onNodeWithTag("queue_panel").fetchSemanticsNode().boundsInRoot.bottom
+        val startCenterY = rule.onNodeWithTag("queue_drag_$lastVisibleIdx", useUnmergedTree = true)
+            .fetchSemanticsNode().boundsInRoot.center.y
+        val overscrollDy = (listBottom - startCenterY + 60f).coerceAtLeast(80f)
+        rule.mainClock.autoAdvance = false
+        try {
+            rule.onNodeWithTag("queue_drag_$lastVisibleIdx", useUnmergedTree = true).performTouchInput {
+                down(center)
+                moveBy(Offset(0f, overscrollDy / 2f))
+                moveBy(Offset(0f, overscrollDy / 2f))
+            }
+            repeat(30) {
+                rule.mainClock.advanceTimeByFrame()
+            }
+            rule.onNodeWithTag("queue_panel").performTouchInput { up() }
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+        rule.runOnIdle {
+            assertTrue(
+                "Expected drag from index $lastVisibleIdx past bottom edge to move downward, got ${actions.movedQueuePairs}",
+                actions.movedQueuePairs.any { (from, to) -> from == lastVisibleIdx && to > from },
+            )
+        }
     }
 
     @Test fun subpageBackButtonReturnsToDiscoverWithoutClosingApp() {
@@ -493,11 +641,16 @@ class ClientUiTest {
         assertEquals(rootWidth / 2f, artBounds.center.x, 3f)
         assertTrue(seekBounds.left >= 18f)
         assertTrue(moreSongBounds.right <= rootWidth - 8f)
+        val lyricsToggleBounds = rule.onNodeWithTag("player_lyrics_toggle").fetchSemanticsNode().boundsInRoot
+        assertEquals(moreSongBounds.center.y, lyricsToggleBounds.center.y, 2f)
+        assertTrue(lyricsToggleBounds.center.x < moreSongBounds.center.x)
+        assertTrue(lyricsToggleBounds.right <= moreSongBounds.center.x + 2f)
+        rule.onNodeWithTag("player_lyric_preview").assertDoesNotExist()
         val seekBefore = rule.onNodeWithTag("player_seek").fetchSemanticsNode().boundsInRoot
         val modeBefore = rule.onNodeWithTag("player_mode").fetchSemanticsNode().boundsInRoot
         val playBefore = rule.onNodeWithTag("player_play").fetchSemanticsNode().boundsInRoot
         screenshot("v2-player-mobile-song")
-        rule.onNodeWithTag("player_lyric_preview").performClick()
+        rule.onNodeWithTag("player_lyrics_toggle").performClick()
         rule.onNodeWithTag("player_lyrics_list").assertExists()
         screenshot("v2-player-mobile-lyrics")
         val seekLyrics = rule.onNodeWithTag("player_seek").fetchSemanticsNode().boundsInRoot
@@ -549,6 +702,7 @@ class ClientUiTest {
             }
         }
         rule.onNodeWithTag("player_artwork").assertIsDisplayed()
+        rule.onNodeWithTag("player_lyrics_toggle").assertIsDisplayed()
         rule.onNodeWithTag("player_play").assertIsDisplayed()
         rule.onNodeWithTag("player_lyric_preview").assertDoesNotExist()
         val seekSong = rule.onNodeWithTag("player_seek").fetchSemanticsNode().boundsInRoot
@@ -605,11 +759,55 @@ class ClientUiTest {
         rule.onNodeWithText(longLineText).assertExists()
 
         rule.onNodeWithTag("mini_player").performClick()
-        rule.onNodeWithTag("player_lyric_preview").assertIsDisplayed()
-        val previewBounds = rule.onNodeWithTag("player_lyric_preview").fetchSemanticsNode().boundsInRoot
-        val density = rule.density.density
-        assertTrue("Word preview strip should stay compact (<=90dp), was ${previewBounds.height / density}dp", previewBounds.height / density <= 90f)
+        rule.onNodeWithTag("player_lyric_preview").assertDoesNotExist()
+        rule.onNodeWithTag("player_lyrics_toggle").assertIsDisplayed().performClick()
+        rule.onNodeWithTag("player_lyrics_list").assertExists()
         rule.onNodeWithText(longLineText).assertExists()
+    }
+
+    @Config(qualifiers = "w800dp-h1280dp-mdpi")
+    @Test fun portraitTabletPlayerScalesProportionallyAndKeepsControlsAligned() {
+        val lyrics = LyricState(
+            songId = songs[0].id,
+            status = LyricStatus.READY,
+            lines = listOf(
+                LyricLine("First line of portrait tablet lyrics", translation = "竖屏平板第一句歌词", timeSeconds = 0.0),
+                LyricLine("Second line scales comfortably", translation = "字号与宽度等比放大", timeSeconds = 3.0),
+            ),
+            activeLyricIndex = 0,
+            translationState = LyricTranslationStatus.READY,
+        )
+        rule.setContent {
+            FlareTuneTheme {
+                NowPlayingScreen(
+                    state = PlaybackSnapshot(songs[0], songs, 0, true, positionMs = 30_000, durationMs = 180_000),
+                    lyricState = lyrics,
+                    translationEnabled = true,
+                    actions = actions,
+                    imageLoader = null,
+                    onClose = {},
+                    onQueue = {},
+                )
+            }
+        }
+        val density = rule.density.density
+        val artBounds = rule.onNodeWithTag("player_artwork").fetchSemanticsNode().boundsInRoot
+        val moreBounds = rule.onNodeWithTag("player_more").fetchSemanticsNode().boundsInRoot
+        val lyricsBtnBounds = rule.onNodeWithTag("player_lyrics_toggle").fetchSemanticsNode().boundsInRoot
+        val queueBounds = rule.onNodeWithTag("open_queue").fetchSemanticsNode().boundsInRoot
+        val artWidthDp = artBounds.width / density
+        assertTrue("Portrait tablet artwork should expand past 440dp cap, was ${artWidthDp}dp", artWidthDp >= 600f)
+        assertEquals(moreBounds.center.x, queueBounds.center.x, 2f)
+        assertEquals(moreBounds.center.y, lyricsBtnBounds.center.y, 2f)
+        assertTrue(lyricsBtnBounds.center.x < moreBounds.center.x)
+        assertTrue(lyricsBtnBounds.right <= moreBounds.center.x + 2f)
+        screenshot("v2-player-tablet-portrait-song")
+
+        rule.onNodeWithTag("player_lyrics_toggle").performClick()
+        rule.onNodeWithTag("player_lyrics_list").assertExists()
+        val lyricsBounds = rule.onNodeWithTag("player_lyrics_list").fetchSemanticsNode().boundsInRoot
+        assertTrue("Portrait tablet lyrics viewport should scale wide, was ${lyricsBounds.width / density}dp", lyricsBounds.width / density >= 600f)
+        screenshot("v2-player-tablet-portrait-lyrics")
     }
 
     @Test fun positionMsFlowDrivesMiniPlayerPreviousSwipeAndTransportTime() {
@@ -723,7 +921,8 @@ class ClientUiTest {
         render(fixture(MainDestination.SEARCH).copy(query = "After", songs = songs, hasMore = true))
         rule.onNodeWithTag("song_track-0").performClick()
         rule.waitForIdle()
-        assertEquals("track-0", actions.playedList?.first?.getOrNull(actions.playedList?.second ?: -1)?.id)
+        assertEquals("track-0", actions.insertedNextSong?.id)
+        assertNull(actions.playedList)
 
         val seeAllLabel = rule.activity.getString(R.string.ft_see_all)
         val backLabel = rule.activity.getString(R.string.ft_back)
@@ -735,11 +934,512 @@ class ClientUiTest {
         rule.waitForIdle()
         rule.onNodeWithTag("search_play_all").assertExists()
     }
+
+    @Test fun closingSheetIgnoresGhostClicksOnArtworkAndLyricsToggle() {
+        var lyricsMode by mutableStateOf(false)
+        rule.setContent {
+            FlareTuneTheme {
+                NowPlayingScreen(
+                    state = PlaybackSnapshot(songs[0], songs, 0, playing = true, positionMs = 45_000, durationMs = 180_000),
+                    lyricState = LyricState(
+                        songId = songs[0].id,
+                        status = LyricStatus.READY,
+                        lines = listOf(LyricLine("Line one", translation = "第一行", timeSeconds = 1.0)),
+                        translationState = LyricTranslationStatus.READY,
+                    ),
+                    actions = actions,
+                    imageLoader = null,
+                    onClose = {},
+                    onQueue = {},
+                    expandProgress = { 0.4f },
+                    mobileLyricsMode = lyricsMode,
+                    onMobileLyricsModeChange = { lyricsMode = it },
+                    sheetVisible = false,
+                )
+            }
+        }
+        rule.waitForIdle()
+        rule.onNodeWithTag("player_artwork").performClick()
+        rule.onNodeWithTag("player_lyrics_toggle").performClick()
+        rule.waitForIdle()
+        assertFalse(lyricsMode)
+
+        var translationEnabled = false
+        actions.onSetTranslationEnabled = { translationEnabled = it }
+        lyricsMode = true
+        rule.waitForIdle()
+        rule.onNodeWithTag("player_lyrics_top_row").performClick()
+        rule.onNodeWithTag("player_translate_button").performClick()
+        rule.waitForIdle()
+        assertTrue(lyricsMode)
+        assertFalse(translationEnabled)
+    }
+
+    @Config(qualifiers = "w800dp-h1280dp-mdpi", fontScale = 2.0f)
+    @Test fun portraitTabletWith200FontScaleKeepsControlsUnclippedAndNonOverlapping() {
+        val state = fixture(MainDestination.HOME).copy(
+            playback = PlaybackSnapshot(songs[0], songs, 0, playing = true, positionMs = 45_000, durationMs = 180_000),
+            lyricState = LyricState(songId = songs[0].id, status = LyricStatus.READY, lines = listOf(LyricLine("Line one", timeSeconds = 1.0))),
+        )
+        rule.setContent {
+            FlareTuneTheme {
+                NowPlayingScreen(
+                    state = state.playback,
+                    lyricState = state.lyricState,
+                    actions = actions,
+                    imageLoader = null,
+                    onClose = {},
+                    onQueue = {},
+                )
+            }
+        }
+        rule.waitForIdle()
+        val lyricsBounds = rule.onNodeWithTag("player_lyrics_toggle").fetchSemanticsNode().boundsInRoot
+        val moreBounds = rule.onNodeWithTag("player_more").fetchSemanticsNode().boundsInRoot
+        val queueBounds = rule.onNodeWithTag("open_queue").fetchSemanticsNode().boundsInRoot
+        assertTrue(lyricsBounds.width >= 48f && lyricsBounds.height >= 48f)
+        assertTrue(lyricsBounds.right <= moreBounds.left + 0.5f)
+        assertEquals(moreBounds.center.x, queueBounds.center.x, 1.5f)
+    }
+
+    @Test fun unifiedExpandTransitionStripRemainsPopulatedWhileHoldingMidDragNearMiniPlayer() {
+        val snap = fixture()
+        val progress = mutableFloatStateOf(0.08f)
+        val registry = PlayerTransitionRegistry().apply {
+            miniBarBounds = androidx.compose.ui.geometry.Rect(0f, 1800f, 1080f, 1992f)
+            miniArtworkBounds = androidx.compose.ui.geometry.Rect(36f, 1830f, 168f, 1962f)
+            miniBarSurfaceColor = androidx.compose.ui.graphics.Color(0xFFF3F4F7)
+        }
+        rule.setContent {
+            FlareTuneTheme {
+                NowPlayingScreen(
+                    state = snap.playback,
+                    lyricState = snap.lyricState,
+                    translationEnabled = false,
+                    actions = actions,
+                    imageLoader = null,
+                    onClose = {},
+                    onQueue = {},
+                    expandProgress = { progress.floatValue },
+                    isWideTransition = false,
+                    onCollapseDragStart = {},
+                    onCollapseDragDelta = { 0f },
+                    onCollapseDragEnd = {},
+                    transitionRegistry = registry,
+                    sheetVisible = false,
+                )
+            }
+        }
+        rule.onNodeWithTag("player_mini_transition_strip").assertExists()
+        rule.onNode(
+            hasText(songs[0].title) and hasAnyAncestor(hasTestTag("player_mini_transition_strip")),
+            useUnmergedTree = true,
+        ).assertExists()
+
+        rule.runOnIdle { progress.floatValue = 0.55f }
+        rule.onNodeWithTag("player_mini_transition_strip").assertDoesNotExist()
+    }
+
+    @Test fun queuePanelCentersCurrentTrackOnOpen() {
+        val longQueue = (0 until 24).map { idx ->
+            Song(
+                id = "center-track-$idx",
+                title = "Center Track $idx",
+                artist = "FlareTune",
+                album = "Echoes",
+                durationSeconds = 180.0,
+                audioUrl = "https://fixture.invalid/center-$idx.mp3",
+                coverUrl = null,
+            )
+        }
+        render(
+            fixture().copy(
+                playback = PlaybackSnapshot(
+                    current = longQueue[12],
+                    queue = longQueue,
+                    currentIndex = 12,
+                    playing = true,
+                    positionMs = 20_000L,
+                    durationMs = 180_000L,
+                ),
+            ),
+        )
+        rule.onNodeWithTag("mini_player").performClick()
+        rule.onNodeWithTag("open_queue").performScrollTo().performClick()
+        rule.waitForIdle()
+
+        val listBounds = rule.onNodeWithTag("queue_list").fetchSemanticsNode().boundsInRoot
+        val currentBounds = rule.onNodeWithTag("queue_item_12").fetchSemanticsNode().boundsInRoot
+        val viewportCenter = (listBounds.top + listBounds.bottom) / 2f
+        val rowHeight = (currentBounds.bottom - currentBounds.top).coerceAtLeast(40f)
+        assertTrue(
+            "Expected current queue item 12 near viewport center ($viewportCenter), got center ${currentBounds.center.y}",
+            kotlin.math.abs(currentBounds.center.y - viewportCenter) <= rowHeight,
+        )
+    }
+
+    @Test fun queuePanelDragPinsCurrentHighlightAndOptimisticOrderWithoutFlicker() {
+        val qSongs = listOf(songs[0], songs[1], songs[2], songs[3])
+        var snapshot by mutableStateOf(
+            PlaybackSnapshot(
+                current = qSongs[0],
+                queue = qSongs,
+                currentIndex = 0,
+                playing = true,
+                positionMs = 10_000L,
+                durationMs = 180_000L,
+            ),
+        )
+        val playingLabel = "Playing"
+        rule.setContent {
+            FlareTuneTheme {
+                QueuePanel(
+                    state = snapshot,
+                    loader = null,
+                    close = {},
+                    onMove = { from, to -> actions.movedQueuePairs += from to to },
+                    select = { actions.queueIndex = it },
+                )
+            }
+        }
+        rule.waitForIdle()
+        rule.onNodeWithTag("queue_item_0").assert(
+            SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, playingLabel),
+        )
+
+        val firstBounds = rule.onNodeWithTag("queue_item_0").fetchSemanticsNode().boundsInRoot
+        val secondBounds = rule.onNodeWithTag("queue_item_1").fetchSemanticsNode().boundsInRoot
+        val dragDistance = (secondBounds.center.y - firstBounds.center.y) + 40f
+        rule.mainClock.autoAdvance = false
+        try {
+            rule.onNodeWithTag("queue_drag_0", useUnmergedTree = true).performTouchInput {
+                down(center)
+                moveBy(Offset(0f, dragDistance / 2f))
+                moveBy(Offset(0f, dragDistance / 2f))
+                up()
+            }
+            rule.mainClock.advanceTimeBy(150L)
+            assertEquals(listOf(0 to 1), actions.movedQueuePairs)
+            // Before player emits async updated queue/currentIndex (and before 650ms fallback),
+            // optimistic order and pinned current highlight move to index 1.
+            rule.onNodeWithTag("queue_item_0").assertTextContains(qSongs[1].title, substring = true)
+            rule.onNodeWithTag("queue_item_1").assertTextContains(qSongs[0].title, substring = true)
+            rule.onNodeWithTag("queue_item_1").assert(
+                SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, playingLabel),
+            )
+
+            // When player confirms async commit, list reconciles cleanly without resetting order or losing current highlight.
+            snapshot = snapshot.copy(
+                queue = listOf(qSongs[1], qSongs[0], qSongs[2], qSongs[3]),
+                currentIndex = 1,
+            )
+            rule.mainClock.advanceTimeBy(150L)
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+        rule.waitForIdle()
+        rule.onNodeWithTag("queue_item_0").assertTextContains(qSongs[1].title, substring = true)
+        rule.onNodeWithTag("queue_item_1").assertTextContains(qSongs[0].title, substring = true)
+        rule.onNodeWithTag("queue_item_1").assert(
+            SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, playingLabel),
+        )
+    }
+
+    @Test fun miniPlayerSwipesToPreviousCardAfterThreeSecondsAndInShuffleMode() {
+        val state = mutableStateOf(
+            fixture(MainDestination.HOME).copy(
+                playback = PlaybackSnapshot(
+                    current = songs[1],
+                    queue = listOf(songs[0], songs[1], songs[2]),
+                    currentIndex = 1,
+                    previousQueueIndex = 2,
+                    nextQueueIndex = 0,
+                    shuffle = true,
+                    playing = true,
+                    positionMs = 45_000L,
+                    durationMs = 180_000L,
+                ),
+            ),
+        )
+        rule.setContent {
+            FlareTuneTheme {
+                ClientApp(state.value, actions, imageLoader = null)
+            }
+        }
+        rule.waitForIdle()
+        rule.onNodeWithTag("mini_player_card_current", useUnmergedTree = true).assertIsDisplayed()
+
+        // Drag right at 45s (> 3000ms) in shuffle mode: adjacent shuffle previous card (songs[2]) enters immediately.
+        rule.mainClock.autoAdvance = false
+        try {
+            rule.onNodeWithTag("mini_player").performTouchInput {
+                down(center)
+                moveBy(Offset(140f, 0f))
+            }
+            rule.mainClock.advanceTimeByFrame()
+            rule.onNodeWithTag("mini_player_card_preview_${songs[2].id}", useUnmergedTree = true).assertExists()
+            rule.onNodeWithTag("mini_player").performTouchInput {
+                moveBy(Offset(120f, 0f))
+                up()
+            }
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+        rule.waitForIdle()
+        assertEquals(1, actions.previousCalls)
+    }
+
+    @Test fun continueListeningTileScalesCleanlyAcrossCompactAndExpandedWidths() {
+        rule.setContent {
+            FlareTuneTheme {
+                androidx.compose.foundation.layout.Row {
+                    ContinueListeningGridTile(
+                        title = songs[0].title,
+                        showChevron = true,
+                        highlighted = false,
+                        size = 96.dp,
+                        onClick = {},
+                    ) { Box(Modifier.size(96.dp)) }
+                    ContinueListeningGridTile(
+                        title = songs[1].title,
+                        showChevron = true,
+                        highlighted = true,
+                        size = 196.dp,
+                        onClick = {},
+                    ) { Box(Modifier.size(196.dp)) }
+                }
+            }
+        }
+        rule.waitForIdle()
+        rule.onNodeWithText(songs[0].title).assertIsDisplayed()
+        rule.onNodeWithText(songs[1].title).assertIsDisplayed()
+    }
+
+    private fun assertMiniPlayerCardTextNotClippedAtDoubleFontScale() {
+        rule.waitForIdle()
+        val cardNode = rule.onNodeWithTag("mini_player_card_current", useUnmergedTree = true)
+        cardNode.assertIsDisplayed()
+        val cardBounds = cardNode.fetchSemanticsNode().boundsInRoot
+
+        val titleNode = rule.onNode(
+            hasText(songs[0].title) and hasAnyAncestor(hasTestTag("mini_player_card_current")),
+            useUnmergedTree = true,
+        )
+        val artistNode = rule.onNode(
+            hasText(songs[0].artist) and hasAnyAncestor(hasTestTag("mini_player_card_current")),
+            useUnmergedTree = true,
+        )
+        titleNode.assertIsDisplayed()
+        artistNode.assertIsDisplayed()
+
+        val titleBounds = titleNode.fetchSemanticsNode().boundsInRoot
+        val artistBounds = artistNode.fetchSemanticsNode().boundsInRoot
+        assertTrue("Expected positive title height", titleBounds.height > 0f)
+        assertTrue("Expected positive artist height", artistBounds.height > 0f)
+        assertTrue("Title top clipped (${titleBounds.top} < ${cardBounds.top})", titleBounds.top >= cardBounds.top - 0.5f)
+        assertTrue("Artist bottom clipped (${artistBounds.bottom} > ${cardBounds.bottom})", artistBounds.bottom <= cardBounds.bottom + 0.5f)
+        assertTrue("Title overlaps artist vertically", titleBounds.bottom <= artistBounds.top + 0.5f)
+
+        val titleLayouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+        titleNode.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult].action?.invoke(titleLayouts)
+        assertTrue(titleLayouts.isNotEmpty())
+        assertFalse("Title overflowed vertically at 2x font scale", titleLayouts.first().didOverflowHeight)
+
+        val artistLayouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+        artistNode.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult].action?.invoke(artistLayouts)
+        assertTrue(artistLayouts.isNotEmpty())
+        assertFalse("Artist overflowed vertically at 2x font scale", artistLayouts.first().didOverflowHeight)
+    }
+
+    @Test fun miniPlayerFitsDualLineCardTextWithoutVerticalClipAtDoubleFontScaleCompact() {
+        render(fixture(), largeText = true)
+        assertMiniPlayerCardTextNotClippedAtDoubleFontScale()
+    }
+
+    @Config(qualifiers = "w1024dp-h720dp-mdpi")
+    @Test fun miniPlayerFitsDualLineCardTextWithoutVerticalClipAtDoubleFontScaleWide() {
+        render(fixture(), largeText = true)
+        assertMiniPlayerCardTextNotClippedAtDoubleFontScale()
+    }
+
+    @Test fun queuePanelClampsBoundaryCenteringAndReCentersOnReopenAfterTrackChange() {
+        val longQueue = List(24) { idx ->
+            Song("q-$idx", "Queue Track $idx", "Artist $idx", "Album $idx", 180.0, "https://fixture.invalid/$idx.mp3")
+        }
+        var queueOpen by mutableStateOf(true)
+        var currentIndex by mutableIntStateOf(0)
+        rule.setContent {
+            FlareTuneTheme {
+                if (queueOpen) {
+                    QueuePanel(
+                        state = PlaybackSnapshot(
+                            current = longQueue[currentIndex],
+                            queue = longQueue,
+                            currentIndex = currentIndex,
+                            playing = true,
+                            positionMs = 10_000L,
+                            durationMs = 180_000L,
+                        ),
+                        loader = null,
+                        close = { queueOpen = false },
+                        select = {},
+                    )
+                }
+            }
+        }
+        rule.waitForIdle()
+
+        val listBoundsTop = rule.onNodeWithTag("queue_list").fetchSemanticsNode().boundsInRoot
+        val firstBounds = rule.onNodeWithTag("queue_item_0").fetchSemanticsNode().boundsInRoot
+        assertTrue("First item should anchor at list top without blank gap", firstBounds.top <= listBoundsTop.top + 8f)
+        rule.onNodeWithTag("queue_item_0").assert(
+            SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "Playing"),
+        )
+
+        // Close, switch to last track, reopen -> clamped cleanly at bottom without trailing whitespace gap.
+        queueOpen = false
+        rule.waitForIdle()
+        currentIndex = longQueue.lastIndex
+        queueOpen = true
+        rule.waitForIdle()
+
+        val listBoundsBottom = rule.onNodeWithTag("queue_list").fetchSemanticsNode().boundsInRoot
+        val lastTag = "queue_item_${longQueue.lastIndex}"
+        rule.onNodeWithTag(lastTag).assertIsDisplayed()
+        val lastBounds = rule.onNodeWithTag(lastTag).fetchSemanticsNode().boundsInRoot
+        val bottomPadPx = with(rule.density) { 18.dp.toPx() }
+        assertTrue(
+            "Last item should clamp near list bottom without trailing blank gap (${lastBounds.bottom} vs ${listBoundsBottom.bottom})",
+            lastBounds.bottom >= listBoundsBottom.bottom - bottomPadPx,
+        )
+        rule.onNodeWithTag(lastTag).assert(
+            SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "Playing"),
+        )
+
+        // Close, switch to middle track, reopen -> re-centers around middle track.
+        queueOpen = false
+        rule.waitForIdle()
+        currentIndex = 12
+        queueOpen = true
+        rule.waitForIdle()
+
+        val listBoundsMid = rule.onNodeWithTag("queue_list").fetchSemanticsNode().boundsInRoot
+        rule.onNodeWithTag("queue_item_12").assertIsDisplayed()
+        val midBounds = rule.onNodeWithTag("queue_item_12").fetchSemanticsNode().boundsInRoot
+        val listCenterY = (listBoundsMid.top + listBoundsMid.bottom) / 2f
+        val midCenterY = (midBounds.top + midBounds.bottom) / 2f
+        assertTrue(
+            "Middle item should re-center near viewport midpoint ($midCenterY vs $listCenterY)",
+            kotlin.math.abs(midCenterY - listCenterY) <= midBounds.height,
+        )
+        rule.onNodeWithTag("queue_item_0").assertDoesNotExist()
+        rule.onNodeWithTag("queue_item_12").assert(
+            SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "Playing"),
+        )
+    }
+
+    @Test fun queuePanelRoundTripDragInsideCommitWindowRetainsOptimisticOrderWithoutPrematureReset() {
+        val dupSongs = listOf(songs[0], songs[1], songs[2], songs[0])
+        val movedPairs = mutableListOf<Pair<Int, Int>>()
+        var snapshot by mutableStateOf(
+            PlaybackSnapshot(
+                current = dupSongs[0],
+                queue = dupSongs,
+                currentIndex = 0,
+                playing = true,
+                positionMs = 10_000L,
+                durationMs = 180_000L,
+            ),
+        )
+        rule.setContent {
+            FlareTuneTheme {
+                QueuePanel(
+                    state = snapshot,
+                    loader = null,
+                    close = {},
+                    onMove = { from, to -> movedPairs += from to to },
+                    select = {},
+                )
+            }
+        }
+        rule.waitForIdle()
+
+        val row0Bounds = rule.onNodeWithTag("queue_item_0").fetchSemanticsNode().boundsInRoot
+        val row1Bounds = rule.onNodeWithTag("queue_item_1").fetchSemanticsNode().boundsInRoot
+        val dragStep = (row1Bounds.center.y - row0Bounds.center.y) + 40f
+
+        rule.mainClock.autoAdvance = false
+        try {
+            // Drag 0 -> 1 (moves current duplicate songs[0] instance to index 1).
+            rule.onNodeWithTag("queue_drag_0", useUnmergedTree = true).performTouchInput {
+                down(center)
+                moveBy(Offset(0f, dragStep / 2f))
+                moveBy(Offset(0f, dragStep / 2f))
+                up()
+            }
+            rule.mainClock.advanceTimeBy(100L)
+            assertEquals(listOf(0 to 1), movedPairs)
+            rule.onNodeWithTag("queue_item_0").assertTextContains(dupSongs[1].title, substring = true)
+            rule.onNodeWithTag("queue_item_1").assertTextContains(dupSongs[0].title, substring = true)
+            rule.onNodeWithTag("queue_item_1").assert(
+                SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "Playing"),
+            )
+            // The second duplicate instance at index 3 must NOT steal Playing highlight.
+            rule.onNodeWithTag("queue_item_3").assert(
+                SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "Playing").not(),
+            )
+
+            // Allow row placement spring to settle while remaining within the 650ms commit window.
+            rule.mainClock.advanceTimeBy(260L)
+
+            // Rapidly drag 1 -> 0 back inside the 650ms commit window while player snapshot is still stale [0, 1, 2, 0].
+            rule.onNodeWithTag("queue_drag_1", useUnmergedTree = true).performTouchInput {
+                down(center)
+                repeat(12) { moveBy(Offset(0f, -dragStep / 12f)) }
+                up()
+            }
+            rule.mainClock.advanceTimeBy(100L)
+            assertEquals(listOf(0 to 1, 1 to 0), movedPairs)
+            rule.onNodeWithTag("queue_item_0").assertTextContains(dupSongs[0].title, substring = true)
+            rule.onNodeWithTag("queue_item_0").assert(
+                SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "Playing"),
+            )
+
+            // Delayed intermediate snapshot [1, 0, 2, 0] from move #1 arrives: must NOT revert optimistic [0, 1, 2, 0].
+            snapshot = snapshot.copy(
+                current = dupSongs[0],
+                queue = listOf(dupSongs[1], dupSongs[0], dupSongs[2], dupSongs[0]),
+                currentIndex = 1,
+            )
+            rule.mainClock.advanceTimeBy(120L)
+            rule.onNodeWithTag("queue_item_0").assertTextContains(dupSongs[0].title, substring = true)
+            rule.onNodeWithTag("queue_item_1").assertTextContains(dupSongs[1].title, substring = true)
+            rule.onNodeWithTag("queue_item_0").assert(
+                SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "Playing"),
+            )
+
+            // Final confirmation snapshot [0, 1, 2, 0] arrives and settles cleanly.
+            snapshot = snapshot.copy(
+                current = dupSongs[0],
+                queue = dupSongs,
+                currentIndex = 0,
+            )
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+        rule.waitForIdle()
+        rule.onNodeWithTag("queue_item_0").assertTextContains(dupSongs[0].title, substring = true)
+        rule.onNodeWithTag("queue_item_1").assertTextContains(dupSongs[1].title, substring = true)
+        rule.onNodeWithTag("queue_item_0").assert(
+            SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "Playing"),
+        )
+    }
 }
 
 private class RecordingActions : ClientActions {
     var credentials: List<String>? = null
     var song: Song? = null
+    var insertedNextSong: Song? = null
     var playedList: Pair<List<Song>, Int>? = null
     var album: Album? = null
     var refreshes = 0
@@ -778,6 +1478,7 @@ private class RecordingActions : ClientActions {
     override fun refresh() { refreshes++ }
     override fun loadMore() {}
     override fun playSong(song: Song) { this.song = song }
+    override fun playSingleAsNext(song: Song, fromSearch: Boolean) { this.insertedNextSong = song }
     override fun playSongs(songs: List<Song>, startIndex: Int, shuffle: Boolean) {
         this.playedList = songs to startIndex
         songs.getOrNull(startIndex)?.let { this.song = it }

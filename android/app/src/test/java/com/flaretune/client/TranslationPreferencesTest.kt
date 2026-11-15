@@ -2,6 +2,7 @@ package com.flaretune.client
 
 import android.content.Context
 import com.flaretune.client.data.AndroidTranslationPreferences
+import com.flaretune.client.data.AppThemeMode
 import com.flaretune.client.ui.ClientUiState
 import org.junit.Assert.*
 import org.junit.Test
@@ -27,6 +28,20 @@ class TranslationPreferencesTest {
         assertFalse(ClientUiState().translationEnabled)
     }
 
+    @Test fun keepScreenOnDefaultsTrueAndPersistsWithoutChangingTranslation() {
+        val context = RuntimeEnvironment.getApplication()
+        val backing = context.getSharedPreferences("playback_display_v1", Context.MODE_PRIVATE)
+        backing.edit().clear().commit()
+        val first = AndroidTranslationPreferences(context)
+        assertTrue(first.readKeepScreenOn())
+        first.writeKeepScreenOn(false)
+        assertFalse(AndroidTranslationPreferences(context).readKeepScreenOn())
+        assertFalse(first.read())
+        assertTrue(ClientUiState().keepScreenOnEnabled)
+        first.writeKeepScreenOn(true)
+        assertTrue(AndroidTranslationPreferences(context).readKeepScreenOn())
+    }
+
     @Test fun playerGainDefaultsToOneSurvivesReconstructionAndRejectsCorruptValues() {
         val context = RuntimeEnvironment.getApplication()
         val backing = context.getSharedPreferences("playback_display_v1", Context.MODE_PRIVATE)
@@ -43,5 +58,21 @@ class TranslationPreferencesTest {
         backing.edit().putFloat("player_gain", Float.NaN).commit()
         try { first.readVolume(); fail("Expected corrupt gain rejection") }
         catch (_: com.flaretune.client.data.ApiFailure) { }
+    }
+
+    @Test fun themeModeDefaultsToSystemAndPersistsAcrossInstances() {
+        val context = RuntimeEnvironment.getApplication()
+        val backing = context.getSharedPreferences("playback_display_v1", Context.MODE_PRIVATE)
+        backing.edit().clear().commit()
+        val first = AndroidTranslationPreferences(context)
+        assertEquals(AppThemeMode.SYSTEM, first.readThemeMode())
+        assertTrue(backing.all.isEmpty())
+        assertEquals(AppThemeMode.SYSTEM, ClientUiState().themeMode)
+        first.writeThemeMode(AppThemeMode.DARK)
+        assertEquals(AppThemeMode.DARK, AndroidTranslationPreferences(context).readThemeMode())
+        first.writeThemeMode(AppThemeMode.LIGHT)
+        assertEquals(AppThemeMode.LIGHT, AndroidTranslationPreferences(context).readThemeMode())
+        first.writeThemeMode(AppThemeMode.SYSTEM)
+        assertEquals(AppThemeMode.SYSTEM, AndroidTranslationPreferences(context).readThemeMode())
     }
 }

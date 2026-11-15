@@ -187,12 +187,12 @@ class PlayerLyricsMotionTest {
     }
     @Test fun aServerNotNeededResultHidesActionsEvenWhenCapabilityIsTrue() {
         current=song.copy(language="zh")
-        // Keep stale returned translations: NOT_NEEDED must still suppress both controls.
+        // Keep stale returned translations: NOT_NEEDED must suppress unified translation button.
         lyrics=lyrics.copy(translationTargetLanguage="zh-CN",
             translationState=LyricTranslationStatus.NOT_NEEDED)
         render()
         rule.onNodeWithTag("player_translate_button").assertDoesNotExist()
-        rule.onNodeWithTag("player_generate_translation").assertDoesNotExist()
+        rule.onNodeWithTag("player_translate_failed_badge").assertDoesNotExist()
     }
     @Test fun returnedLegacyTranslationRemainsReadableWithoutGenerationCapability() {
         lyrics=lyrics.copy(translationSupported=false, translationState=LyricTranslationStatus.UNAVAILABLE)
@@ -200,7 +200,6 @@ class PlayerLyricsMotionTest {
         rule.onNodeWithTag("player_translate_button").assertExists().performClick()
         settle()
         rule.onNodeWithText(lines.first().translation!!).assertExists()
-        rule.onNodeWithTag("player_generate_translation").assertDoesNotExist()
         assertEquals(0, translationRequests)
         screenshot("translation-returned-legacy")
     }
@@ -213,7 +212,7 @@ class PlayerLyricsMotionTest {
         }
         settle()
         rule.onNodeWithTag("player_translate_button").assertDoesNotExist()
-        rule.onNodeWithTag("player_generate_translation").assertDoesNotExist()
+        rule.onNodeWithTag("player_translate_failed_badge").assertDoesNotExist()
         assertEquals(0, translationRequests)
         screenshot("translation-not-needed")
     }
@@ -221,41 +220,58 @@ class PlayerLyricsMotionTest {
         lyrics=lyrics.copy(status=LyricStatus.INSTRUMENTAL)
         render()
         rule.onNodeWithTag("player_translate_button").assertDoesNotExist()
-        rule.onNodeWithTag("player_generate_translation").assertDoesNotExist()
     }
     @Test fun translationEligibilityComesFromTheApiAndNotTheSongLanguage() {
         current=song.copy(language="zh")
         lyrics=lyrics.copy(lines=lines.map { it.copy(translation=null) },translationTargetLanguage="zh",
             translationState=LyricTranslationStatus.IDLE)
         render()
-        rule.onNodeWithTag("player_translate_button").assertDoesNotExist()
-        rule.onNodeWithTag("player_generate_translation").assertExists()
+        rule.onNodeWithTag("player_translate_button").assertExists().assertIsNotSelected().performClick()
+        settle()
+        assertEquals(1, translationRequests)
     }
     @Test fun existingDifferentTranslationRemainsUsableWhenGenerationIsNotNeeded() {
         current=song.copy(language="zh")
         lyrics=lyrics.copy(translationTargetLanguage="zh",translationLanguage="en")
         render()
-        rule.onNodeWithTag("player_translate_button").assertExists()
-        rule.onNodeWithTag("player_generate_translation").assertDoesNotExist()
-        rule.onNodeWithTag("player_translate_button").performClick(); settle()
+        rule.onNodeWithTag("player_translate_button").assertExists().performClick(); settle()
         rule.onNodeWithText(lines.first().translation!!).assertExists()
+        assertEquals(0, translationRequests)
     }
     @Test fun unknownLanguageKeepsExplicitGenerationButNeverPretendsAnEmptyTranslationExists() {
         lyrics=lyrics.copy(lines=lines.map { it.copy(translation=null) },translationTargetLanguage="en",
             translationState=LyricTranslationStatus.IDLE)
         render()
-        rule.onNodeWithTag("player_translate_button").assertDoesNotExist()
-        rule.onNodeWithTag("player_generate_translation").assertExists()
-        rule.onNodeWithText("Translate to English").assertExists()
+        rule.onNodeWithTag("player_translate_button")
+            .assertExists()
+            .assertContentDescriptionEquals("Translate to English")
+            .assertIsNotSelected()
+            .performClick()
+        settle()
+        assertEquals(1, translationRequests)
     }
-    @Test fun aTranslationFailureKeepsOriginalTextAndShowsItsOwnError() {
+    @Test fun aTranslationFailureKeepsOriginalTextShowsSubtleBadgeAndRetriesWhenTapped() {
         lyrics=lyrics.copy(lines=lines.map { it.copy(translation=null) },translationTargetLanguage="en",
             translationState=LyricTranslationStatus.FAILED,notice=ClientNotice.NETWORK)
         render()
         rule.onNodeWithTag("player_lyric_0").assertExists()
-        rule.onNodeWithTag("player_generate_translation").assertExists()
-        rule.onNodeWithText("Translation could not be loaded. The original lyrics are still available.").assertExists()
+        rule.onNodeWithTag("player_translate_button").assertExists().assertIsNotSelected()
+        rule.onNodeWithTag("player_translate_failed_badge").assertExists()
+        rule.onNodeWithText("Translation could not be loaded. The original lyrics are still available.").assertDoesNotExist()
         rule.onNodeWithText("Secure storage is unavailable. Please try again.").assertDoesNotExist()
+        rule.onNodeWithTag("player_translate_button").performClick()
+        settle()
+        assertEquals(1, translationRequests)
+    }
+    @Test fun loadingOrGracePollingTranslationIsUnselectedAndNonInteractiveWhileBreathing() {
+        lyrics=lyrics.copy(lines=lines.map { it.copy(translation=null) },translationTargetLanguage="en",
+            translationState=LyricTranslationStatus.FAILED,polling=true)
+        render()
+        rule.onNodeWithTag("player_translate_button")
+            .assertExists()
+            .assertIsNotSelected()
+            .assertHasNoClickAction()
+        rule.onNodeWithTag("player_translate_failed_badge").assertDoesNotExist()
     }
     @Test fun fullScreenPlayerKeepsScreenAwakeOnlyWhilePlayingAndRestoresOnPauseOrDispose() {
         var visible by mutableStateOf(true)
@@ -482,7 +498,7 @@ class PlayerLyricsMotionTest {
         val above1 = resolveLyricPresentation(index = 3, activeIndex = 4, lineCount = 12, userScrolling = false)
         assertEquals(0.34f, above1.opacity, 1e-4f)
         assertEquals(0.985f, above1.scale, 1e-4f)
-        assertEquals(0.5f, above1.blurRadius.value, 1e-4f)
+        assertEquals(0f, above1.blurRadius.value, 1e-4f)
         assertEquals(-2f, above1.verticalOffset.value, 1e-4f)
 
         val below1 = resolveLyricPresentation(index = 5, activeIndex = 4, lineCount = 12, userScrolling = false)
@@ -492,7 +508,7 @@ class PlayerLyricsMotionTest {
         val below3 = resolveLyricPresentation(index = 8, activeIndex = 4, lineCount = 12, userScrolling = false)
         assertEquals(0.22f, below3.opacity, 1e-4f)
         assertEquals(0.935f, below3.scale, 1e-4f)
-        assertEquals(2.2f, below3.blurRadius.value, 1e-4f)
+        assertEquals(0f, below3.blurRadius.value, 1e-4f)
         assertEquals(16f, below3.verticalOffset.value, 1e-4f)
 
         val d0 = computeStaggerDelayMs(4, 4)

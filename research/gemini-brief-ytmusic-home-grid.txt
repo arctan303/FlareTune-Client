@@ -1,0 +1,591 @@
+YouTube Music · Android 9.45.51 (94551240) · com.google.android.apps.youtube.music
+首页「一键点歌」卡片 · 小屏 / 大屏的排版与响应式规则 · 实现事实
+
+=====================================================================
+0. 这份材料是什么 / 怎么来的
+=====================================================================
+
+对象：YouTube Music Android 9.45.51，versionCode 94551240，minSdk 32 / targetSdk 37。
+      split APK：base（85.6 MB，classes.dex ~ classes6.dex）+ split_config.xxhdpi + split_config.zh。
+来源：从真机 adb pull 的已安装包（2026-11-10 更新），不是商店下载的。
+
+取证方式：
+  · 资源 → androguard 解 ARSC。**资源名没被混淆**（能读到
+    dimen/page_margin、integer/grid_shelf_num_columns 这种），
+    但**资源文件名被混淆**成 res/zYX.xml 这种形式，布局 XML 只能靠资源 ID 定位。
+  · 行为 → 直接读 dex 里的 dalvik 指令。类名大多被 R8 压成 Ljdx; Livs; Laeiz;
+    这种短名，但 YouTube 自己的组件保留了完整包名，data class 的 toString
+    片段、枚举字面量、实验开关的 ID 与值、浮点常量全部保留。
+  · 下面每条都标了证据等级：[DEX] = 从字节码直接读出；
+    [资源] = 从 ARSC 读出；[推断] = 由结构合理推得但没直接证据。
+
+标注约定：
+  Lxxx; 是 dex 里的类描述符（L 开头、; 结尾是 dalvik 的类型写法）。
+  常量后面括号里的 0x…… 是 IEEE754 的原始位，方便反查。
+
+本文只讲**首页卡片的排版系统**（小屏 / 大屏怎么变）。
+播放器打开 / 关闭与封面连贯动画是另一套机制，见
+  gemini-brief-ytmusic-player-transition.txt
+两者没有共用代码，只共用了同一个尺寸分类枚举。
+
+
+=====================================================================
+1. 先说结论
+=====================================================================
+
+一句话：**它没有为小屏和大屏写两套布局，只有一张「尺寸分类 → 列数」的查表，
+加一个「可用宽度 ÷ 列数」的除法。**
+
+四步：
+
+    ① 把设备分成 4 类（竖屏手机 / 横屏手机 / 竖屏平板 / 横屏平板）
+    ② 每一类对应一个列数（服务端下发，本地有兜底）
+    ③ 卡片宽度 = (屏宽 − 左右边距 − 间距 × (列数−1)) ÷ 列数
+    ④ 卡片高度 = 卡片宽度 ÷ 1.75，或等于宽度（正方形），二选一
+
+这四步之外没有别的东西。没有 ConstraintLayout 的百分比、没有自动换行、
+没有对每个断点单独写一套 XML。**大屏之所以"变大"，是因为列数从 2 变成 3、
+边距从 16dp 变成 32dp，而卡片本身始终是同一个组件、同一套比例。**
+
+补充两个容易误判的点：
+
+  · 卡片高度**不是**随屏宽线性缩放的，它要么等于宽度（正方形），
+    要么等于宽度 ÷ 1.75。也就是说比例固定，绝对尺寸跟着列宽走。
+  · 首页 grid 卡片**不是固定 dp 宽**，它是算出来的；播放页的 tab 卡片才是
+    固定 151dp（见 §5 的两种模式）。
+
+
+=====================================================================
+2. 「一键点歌」在代码里是什么
+=====================================================================
+
+首页那一排点一下就播的卡片，在代码里是 **two-row item**（两行条目）：
+一张缩略图 + 一行主标题 + 一行副标题，整块可点。
+
+对应的渲染组件是 Ljdx;，它是 Litho 组件（字段里有 Context、三个
+YouTubeTextView、两个 LinearLayout、一个 FrameLayout、一个 ImageView）。
+它的 props 里有一组名字很直白的键 [DEX]：
+
+    "shelfItemWidthOverridePx"          强制指定卡片宽度（px）
+    "carouselItemWidth"                 轮播卡片的基准宽度
+    "twoRowItemShouldHaveMatchParentWidth"   卡片宽度是否跟随父容器
+    "collectionStyleItemSize"           集合样式下的条目尺寸
+    "presenterSizeConstraint"           最终下发的宽高约束对象
+    "pagePadding"                       页面级内边距
+    "isPlayerPage"                      是否在播放页
+    "logClientVe"                       埋点开关
+
+数据的载体是 Laogn;，字段 [DEX]：
+    b  I          某个枚举（渲染变体）
+    c  Lapqo;     缩略图
+    d  I          卡片类型枚举 —— 决定正方形还是横向（见 §6）
+    e  Lalhl;     主标题
+    f  Lalhl;     副标题
+    s  I          另一个枚举
+
+尺寸计算的结果类 Ljec;，它的 toString 直接写明了自己是什么 [DEX]：
+
+    "PresenterSizeConstraint{width=" + a + ", height=" + b + "}"
+
+也就是说这个类就是 **PresenterSizeConstraint(width, height)**，两个 int，
+最终被写进 View 的 LayoutParams。
+
+注：本文没有找到「播放按钮」这个子元素单独的绘制代码。卡片整块可点，
+播放按钮只是视觉元素；它的尺寸随卡片走，没有独立常量。
+
+
+=====================================================================
+3. 四档尺寸分类：怎么判断大小屏
+=====================================================================
+
+分类方法在 Livs;->E()I，完整逻辑 [DEX]：
+
+    int E() {
+        Configuration cfg = (this.i != null) ? this.i
+                                             : context.getResources().getConfiguration();
+        int orientation = cfg.orientation;          // 2 = LANDSCAPE
+        boolean isTablet = Tvk.w(context);
+
+        if (orientation == 2) {          // 横屏
+            return isTablet ? 4 : 2;
+        } else {                          // 竖屏
+            return isTablet ? 3 : 1;
+        }
+    }
+
+平板判定在 Tvk;->x(Configuration)Z，只有一行 [DEX]：
+
+    return cfg.smallestScreenWidthDp >= 600;
+
+也就是标准的 **sw600dp** 断点，不看当前宽度、不看屏幕尺寸、不看 dpi。
+
+合并起来就是这张表：
+
+    ┌──────────┬──────┬──────┐
+    │          │ 手机 │ 平板 │
+    ├──────────┼──────┼──────┤
+    │ 竖屏     │  1   │  3   │
+    │ 横屏     │  2   │  4   │
+    └──────────┴──────┴──────┘
+
+四个数字是**分类编号**，不是列数。它后面被用来查两张表：列数表（§4）
+和间距表（§7）。这是整套响应式系统唯一的「环境判断」入口 ——
+整个 App 的排版分支都收敛到这一个 int 上。
+
+旁证：Tvk;->w(Context) 在返回之前还会先问一次
+`sza.q(context)`。那个方法是 Android 16+（SDK_INT >= 37）的窗口尺寸类
+API 覆盖（带实验开关 1073830439），属于系统新能力的适配，
+不改变 sw600dp 这个主判据 [DEX]。
+
+
+=====================================================================
+4. 列数从哪来：查表，不是算出来的
+=====================================================================
+
+列数的唯一入口是 Livs;->j(Lalmf)I，完整逻辑 [DEX]：
+
+    int j(Lalmf cfg) {
+        int cls = E();                       // §3 的四档分类
+
+        // cfg.b 的第 10 位（0x400）表示「本次下发带列数配置」
+        Lalmd colsCfg = ((cfg.b & 1024) != 0) ? cfg.f : null;
+
+        if (colsCfg != null) {
+            switch (cls - 1) {
+                case 0: return colsCfg.d;    // 竖屏手机
+                case 1: return colsCfg.e;    // 横屏手机
+                case 2: return colsCfg.f;    // 竖屏平板
+                default: return colsCfg.c;   // 横屏平板
+            }
+        }
+
+        // 兜底：读本地 integer 资源
+        return context.getResources().getInteger(0x7F0E0027);
+    }
+
+Lalmd; 是 protobuf message（super 是 Lainz;，实现了 Laipe;），
+字段 a(默认实例) + b..f 五个 int。c / d / e / f 就是四档列数，
+**由服务端随首页响应一起下发**，客户端不硬编码 [DEX]。
+
+兜底资源 [资源]：
+
+    @integer/grid_shelf_num_columns
+        默认（< sw600dp）      = 1
+        sw600dp-land           = 2
+
+注意这个兜底值是 **1 和 2**，比常见的 2/3 保守。它只在服务端没下发
+列数配置时生效，正常在线用户走不到这里。
+
+列数算出来之后立刻被用于两件事 [DEX]（Livs;->t 的收尾）：
+
+    event1 = (列数, 间距配置, Optional, 状态栏高度px)
+    event2 = Pair(容器宽度px, 容器宽度px / 列数)     // ← 第二个就是单列宽度
+
+两条事件分别发到两个发布者（Lawsy;->kp）。这是**唯一的「列宽」产出点**，
+下游所有卡片宽度都从这里拿。
+
+
+=====================================================================
+5. 卡片宽度：一个减法加一个除法
+=====================================================================
+
+5.1 首页 grid 卡片（本文主角）
+
+在 Ladow;->a(Ladox, Ladny, I)V 里 [DEX]：
+
+    int cols     = param.a;                        // 列数
+    int screenW  = Tvk.e(windowManager);           // 屏幕宽（px）
+    int padA     = param.c;
+    int padB     = param.d;
+    int spacing  = param.e;
+
+    int itemWidth = (screenW - padA - padB - spacing * (cols - 1)) / cols;
+
+    props.f("shelfItemWidthOverridePx", itemWidth);
+    props.f("twoRowItemShouldHaveMatchParentWidth", Boolean.TRUE);
+    props.f("collectionStyleItemSize", param.b);
+
+即：
+
+    卡片宽 = (屏宽 − 左边距 − 右边距 − 间距 × (列数 − 1)) ÷ 列数
+
+这个公式没有任何魔法数字，全部来自入参。它保证 N 列卡片加 N−1 个间距
+**刚好铺满**可用宽度，不留余数（整除截断，误差 ≤ 1px）。
+
+`twoRowItemShouldHaveMatchParentWidth = true` 的含义在 Ljdx;->hW 里 [DEX]：
+
+    if (props.j("twoRowItemShouldHaveMatchParentWidth")) {
+        lp.width = LayoutParams.MATCH_PARENT;      // -1
+    } else {
+        lp.width = LayoutParams.WRAP_CONTENT;      // -2
+    }
+
+它决定**外层容器**用哪种宽度策略；真正的宽高随后被 PresenterSizeConstraint
+覆盖写入（Ljec;->b(View) 里 `lp.width = a; lp.height = b;`）。
+所以这里设 true 只是让容器先撑满，再由约束收窄到算出来的 itemWidth。
+
+5.2 播放页 tab 卡片（对照组）
+
+同一个 prop，在 Ljmc;->a(Ladox, Ladny, I)V 里走的是另一条路 [DEX]：
+
+    props.f("backgroundColor", 0);
+    props.f("isPlayerPage", Boolean.TRUE);
+
+    if (jmh.o()) {
+        int px = res.getDimensionPixelSize(0x7F0A005E);   // player_page_tab_shelf_item_length
+        props.f("shelfItemWidthOverridePx", px);
+    } else {
+        props.f("pagePadding", Ljlf.x(context));
+    }
+
+两个分支互斥：
+
+    · 播放页 tab  → 固定宽度 = 151dp   （@dimen/player_page_tab_shelf_item_length [资源]）
+    · 其他        → 不指定宽度，改用 pagePadding 让父容器自己排
+
+这就是「小屏大屏」在代码里的真实分界：**首页是算出来的，播放页 tab 是写死的。**
+播放页 tab 不需要响应式，因为它本来就只占一小段横向滚动区。
+
+
+=====================================================================
+6. 卡片尺寸约束：正方形 或 1.75:1
+=====================================================================
+
+最终宽高由 Ljdx;->g(Ladox, I)Ljec; 决定，全文 [DEX]：
+
+    PresenterSizeConstraint g(props, int cardType) {
+        int override = props.b("shelfItemWidthOverridePx", -1);
+        if (override > 0) {
+            return Ljec.a(override);        // → (override, round(override / 1.75f))
+        }
+
+        int w = props.b("carouselItemWidth",
+                        res.getDimensionPixelSize(two_row_item_thumbnail_height));
+
+        if (cardType != 3) {
+            return new Ljec(w, w);                  // 正方形
+        }
+        return new Ljec(round(w * 1.75f), w);       // 横向 1.75:1
+    }
+
+配合 Ljec;->a(I) 的实现 [DEX]：
+
+    static Ljec a(int width) {
+        return new Ljec(width, Math.round(width / 1.75f));
+    }
+
+三种结果：
+
+    ┌─────────────────┬────────────────────────────┬──────────────────┐
+    │ 条件            │ 宽                          │ 高               │
+    ├─────────────────┼────────────────────────────┼──────────────────┤
+    │ 有 override     │ override                    │ override / 1.75  │
+    │ 无 override，   │ w                           │ w                │
+    │ cardType ≠ 3    │                             │                  │
+    │ 无 override，   │ round(w × 1.75)             │ w                │
+    │ cardType == 3   │                             │                  │
+    └─────────────────┴────────────────────────────┴──────────────────┘
+
+其中 1.75 = 0x3FE66666 [DEX]。
+
+`w` 的默认值来自 @dimen/two_row_item_thumbnail_height = **155dp** [资源]。
+注意这个资源名里带 thumbnail，但它被当成了**卡片基准宽度**用 —— 也就是
+在「无 override」的兜底路径上，卡片是 155dp 宽、88dp 高（155/1.75），
+或 155×155 正方形。
+
+cardType 来自 Laogn;->d 这个枚举字段，经 La;->aO(I)I（R8 的 switchmap
+重映射表）转换后传入。`== 3` 这一支对应横向宽卡，其余对应正方形 [DEX]。
+
+换算成设计语言：
+
+    · 有 override 时，比例恒为 1.75:1（横向），高度由宽度反推
+    · 首页 grid 卡片走 override 路径 → 永远是 1.75:1 横向卡
+    · 播放页 tab 卡片走 override 路径（151dp）→ 151 × 86dp
+
+所以 **首页所有"一键点歌"卡片都是 1.75:1 的横向矩形**，宽度随列数变，
+高度跟着等比变。正方形那两支是给别的 shelf 形态用的，不是首页主卡。
+
+
+=====================================================================
+7. 边距：三档 16 / 32 / 48
+=====================================================================
+
+@dimen/page_margin 在 ARSC 里有三条带限定符的记录 [资源]：
+
+    ┌──────────────────┬──────────┐
+    │ 限定符           │ 值       │
+    ├──────────────────┼──────────┤
+    │ 默认（< 600dp）  │ 16 dp    │
+    │ w600dp           │ 32 dp    │
+    │ w1024dp          │ 48 dp    │
+    └──────────────────┴──────────┘
+
+这是**宽度限定符**（w），不是 sw（最小宽度）。所以它跟 §3 的 sw600dp
+分类是两套独立判据：分类决定列数，限定符决定边距。
+
+两个取值函数 [DEX]：
+
+    Ljlf;->w(Context)I   =  res.getDimensionPixelSize(page_margin)
+                             // 直接返回 16 / 32 / 48
+
+    Ljlf;->x(Context)I   =  res.getDimensionPixelSize(page_margin)
+                          - res.getDimensionPixelSize(intrinsic_item_padding)
+                             // = 16/32/48 − 16 = 0 / 16 / 32
+
+@dimen/intrinsic_item_padding = 16dp，只有默认一档 [资源]。
+
+为什么要有减法：卡片自身带 16dp 的固有内边距，如果外层再加完整
+page_margin，视觉边距就会变成 32dp 而不是 16dp。减去它之后，
+**卡片内容距屏幕边缘正好等于 page_margin**。
+
+用途分工：
+
+    · 网格卡片左右边距  → Ljlf.w()   = 16 / 32 / 48
+    · 页面级 padding    → Ljlf.x()   =  0 / 16 / 32
+
+
+=====================================================================
+8. 响应式容器：一张断点表
+=====================================================================
+
+除了 §3 的四档分类，App 里还有一套更通用的响应式容器
+（Litho / RecyclerCollection 体系），结构更值得借鉴。
+
+配置类 Laeiy;，它的 toString 列出了全部 13 个字段 [DEX]：
+
+    ResponsiveContainerProperties{
+        usingResponsiveContainerConfiguration,   // Z  是否启用这套配置
+        containerSizeClassification,             // I  尺寸分类（就是 §3 的 1~4）
+        containerType,                           // I  容器类型
+        maxWidthPx,                              // I  宽度上限（匹配用）
+        maxHeightPx,                             // I  高度上限（匹配用）
+        containerMaxWidthDp,                     // I  容器最大宽度
+        minColumnSizePx,                         // I  单列最小宽度 ← 列数公式的分母
+        columnMultiplier,                        // I  列数乘数
+        columnAdder,                             // I  列数加数
+        minColumnCount,                          // I  列数下限
+        maxColumnCount,                          // I  列数上限
+        spacingConfigurationDp,                  // 间距配置
+        containerSpacingConfigurationPx          // 间距配置（px）
+    }
+
+字段到构造参数的映射（从 Laeiy;-><init> 的 iput 顺序读出）[DEX]：
+
+    p1(Z) → a   usingResponsiveContainerConfiguration
+    p2    → k   containerSizeClassification
+    p3    → l   containerType
+    p4    → b   maxWidthPx
+    p5    → c   maxHeightPx
+    p6    → m   containerMaxWidthDp
+    p7    → d   minColumnSizePx
+    p8    → e   columnMultiplier
+    p9    → f   columnAdder
+    p10   → g   minColumnCount
+    p11   → h   maxColumnCount
+    p12   → i   spacingConfigurationDp
+    p13   → j   containerSpacingConfigurationPx
+
+8.1 查表：按尺寸挑一条配置
+
+Laeiz;->k(I I)Laeiy; [DEX]：
+
+    Laeiy k(int widthPx, int heightPx) {
+        for (int i = 0; i < configs.size(); i++) {
+            Laeiy p = configs.get(i);
+            if (widthPx  <= p.b &&          // maxWidthPx
+                heightPx <= p.c) {          // maxHeightPx
+                return p;
+            }
+        }
+        // 兜底：1 列
+        return new Laeiy(true, 2, 2, 0, Integer.MAX_VALUE, 0,
+                         0, 0, 0, 1, 1,
+                         Lamqr.a, Laeir.a());
+    }
+
+关键点：
+
+    · 匹配条件是**双上限**，宽和高都要 ≤ 各自上限
+    · 取**第一个**满足的，所以表必须按尺寸升序排列
+    · 兜底是 maxWidthPx = 0（实际永不匹配）+ minColumnCount = maxColumnCount = 1
+
+这张表**不是硬编码的**，是服务端下发的 protobuf（Laeiz;->h(Lamqq) 里
+走 Lainx/Lainu/Lainm 那套 protobuf-lite 解析）[DEX]。
+
+8.2 列数公式
+
+Laeiz;->g(I I)V，这是整套系统的核心 [DEX]：
+
+    void g(int widthPx, int heightPx) {
+        DisplayMetrics dm = e();
+        Laeiy p = k(widthPx, heightPx);          // 查表
+
+        int cols = 1;
+        if (widthPx <= 0) goto done;              // 宽度无效
+        if (p.l == 2)     goto done;              // containerType == 2 → 单列
+
+        int minSize = (p.d > 0) ? p.d : 1;        // 防除零
+
+        if (!p.a) {                               // 未启用响应式配置
+            cols = p.g;                           //   → 用 minColumnCount
+            goto done;
+        }
+
+        cols = widthPx / minSize;                 // ① 宽度 ÷ 单列最小宽度
+        if (p.e > 0) cols *= p.e;                 // ② 乘 columnMultiplier
+        if (p.f > 0) cols += p.f;                 // ③ 加 columnAdder
+        cols = Math.max(p.g, cols);               // ④ 下限 minColumnCount
+        cols = Math.min(p.h, cols);               // ⑤ 上限 maxColumnCount
+
+      done:
+        this.l = cols;                            // 缓存
+        ...
+    }
+
+写成公式：
+
+    cols = clamp( floor(width / minColumnSizePx) × columnMultiplier + columnAdder,
+                  minColumnCount,
+                  maxColumnCount )
+
+乘数和加数是给「非整数倍」的调整留的口子：比如希望 600dp 时多塞一列，
+就把 columnAdder 设成 1。
+
+算完之后发两条事件 [DEX]：
+
+    ResizedEvent(cols, spacingConfig, optional, statusBarHeightPx)
+    Pair(widthPx, widthPx / cols)                 // 总宽 + 单列宽
+
+`widthPx / cols` 就是下游的「单列宽度」，和 §5.1 的除法是同一个思路。
+
+
+=====================================================================
+9. 网格切分：按列数把列表切块
+=====================================================================
+
+Livs;->t(List items, Lalmf cfg, int cols) 负责把一维列表切成二维行 [DEX]：
+
+    List<List<Item>> rows = new ArrayList<>();
+    for (int i = 0; i < items.size(); i += cols) {
+        List<Item> row = new ArrayList<>();
+        for (int j = 0; j < cols && i < items.size(); j++) {
+            row.add(items.get(i));
+            ...
+        }
+        rows.add(new Ladnz(cols, row, padA, padB, spacingPx, 0));
+    }
+
+每行被包成一个 Ladnz;（列数 + 这一行的 items + 左右边距 + 间距）。
+
+间距取值 [DEX]：
+
+    int spacingDp;
+    switch (classification - 1) {
+        case 0: spacingDp = spacing.h; break;     // 竖屏手机
+        case 1: spacingDp = spacing.i; break;     // 横屏手机
+        case 2: spacingDp = spacing.j; break;     // 竖屏平板
+        default: spacingDp = spacing.g; break;    // 横屏平板
+    }
+    int spacingPx = Tvk.c(dm, spacingDp);
+
+和 §4 的列数是同一个模式：**四档分类 → 四个预设值**。
+Lalmg; 也是 protobuf message，字段 b..j 是 int [DEX]。
+
+一个细节 [DEX]：某一行里含视频类条目时，右边距会被置 0
+（`right = rowHasVideo ? 0 : spacingPx`），由实验开关 219 / 45757537 控制。
+这是给视频卡片留出血位用的。
+
+9.1 增量更新
+
+Livs;->B(List) 不是重建，而是逐行比对 [DEX]：
+
+    for (int i = 0; i < n; i++) {
+        Ladnz old = adapter.get(base + i);
+        Ladnz neu = newRows.get(i);
+        if (old.b != neu.b) continue;                        // 行属性变了 → 跳过
+        if (old.b().equals(neu.b())) continue;               // items 完全相同 → 跳过
+        adapter.hN(base + i, neu);                            // 只替换变化的那一行
+    }
+
+所以滚动或刷新时，没变化的行不会重新 bind。这是长列表不卡的原因之一，
+和排版无关，但一起出现，容易误以为是动画效果。
+
+
+=====================================================================
+10. 关键数字汇总
+=====================================================================
+
+尺寸分类 [DEX]
+    平板判定      smallestScreenWidthDp >= 600
+    竖屏手机      1
+    横屏手机      2
+    竖屏平板      3
+    横屏平板      4
+
+边距 [资源]
+    @dimen/page_margin              16dp (<600) / 32dp (w600) / 48dp (w1024)
+    @dimen/intrinsic_item_padding   16dp
+    Ljlf.w()  = page_margin
+    Ljlf.x()  = page_margin − 16dp   → 0 / 16 / 32
+
+卡片尺寸 [资源 + DEX]
+    @dimen/two_row_item_thumbnail_height        155dp   （无 override 时的基准宽）
+    @dimen/player_page_tab_shelf_item_length    151dp   （播放页 tab 固定宽）
+    宽高比                                       1.75  (0x3FE66666)
+    override 分支                                高 = round(宽 / 1.75)
+    无 override + cardType ≠ 3                   正方形 (w, w)
+    无 override + cardType == 3                  (round(w×1.75), w)
+
+列数 [DEX]
+    首页 grid       服务端下发，四档各一个值
+    兜底            @integer/grid_shelf_num_columns = 1 / sw600dp-land = 2
+    响应式容器公式  clamp(floor(W/minColSize)×mult + adder, minCols, maxCols)
+
+卡片宽度 [DEX]
+    首页 grid       (屏宽 − 左 − 右 − 间距×(列数−1)) ÷ 列数
+    单列宽事件      widthPx ÷ cols
+
+实验开关 [DEX]
+    45762151        播放页相关（见播放器文档）
+    45833553        网格切分里控制 spacing 是否走 Optional 路径
+    45757537        行内含视频时右边距置 0
+    1073830439      Android 16+ 窗口尺寸类 API 覆盖
+
+
+=====================================================================
+11. 没能确定的部分
+=====================================================================
+
+1. **Ladnz 的字段归属没有 100% 对齐。**
+   构造签名是 Ladnz(int, List, int, int, int, int)，字段 a..e 依次是
+   p1/p3/p4/p5/p6。但 Ladow 里读的是 a（列数）、c、d、e，而 Livs->t 的
+   寄存器在 486–492 处有一次重排（v14 = v1）。所以「c/d/e 分别对应
+   左/右/间距」这个映射是我按公式形态反推的，不是逐寄存器确认的。
+   **公式形态 `(屏宽 − 边距 − 间距×(列数−1)) ÷ 列数` 是确定的**，
+   但哪两个字段是左右边距没有对齐。
+
+2. **四档列数的实际数值拿不到。**
+   Lalmd 的 c/d/e/f 来自服务端 protobuf，本地没有默认值。
+   兜底资源是 1 和 2，但那不是正常在线路径。
+   要知道真机上是 2 列还是 3 列，只能截图数。
+
+3. **cardType 枚举的语义没解出来。**
+   `cardType == 3` 对应横向 1.75:1、其余对应正方形，这一点确定。
+   但 0/1/2/4 分别代表哪种卡片形态没有对应上 —— La.aO 是 R8 的
+   switchmap，只做了 ordinal 重映射，原始枚举名在 clinit 里被内联掉了。
+
+4. **间距的四个预设值没拿到。**
+   Lalmg 的 g/h/i/j 同样是服务端 protobuf，本地无默认值。
+
+5. **「播放按钮」没有独立常量。**
+   全库搜 playButton / oneClick 只有 `playButtonSize` 这一个字符串，
+   且没有对应的尺寸读取点。判断它是随卡片走的视觉元素、没有自己的
+   排版参数，但这是推断，不是直接证据。
+
+6. **响应式断点表的默认内容没拿到。**
+   Laeiz 的配置列表来自 protobuf，兜底只有「1 列」。
+   表里实际有哪几条断点（比如 600dp → 3 列、900dp → 4 列）无法静态确定。
+
+7. **正方形卡片用在哪没确认。**
+   §6 的两支正方形分支存在，但没追到哪个 shelf 形态会走进去。
+   首页主卡走的是 override 路径（永远 1.75:1），所以正方形不是首页。

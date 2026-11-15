@@ -1,0 +1,792 @@
+YouTube Music · Android 9.45.51 (94551240) · com.google.android.apps.youtube.music
+全屏播放器 · 打开 / 关闭 · 专辑封面的连贯动画 · 实现事实
+
+=====================================================================
+0. 这份材料是什么 / 怎么来的
+=====================================================================
+
+对象：YouTube Music Android 9.45.51，versionCode 94551240，minSdk 32 / targetSdk 37。
+      split APK：base（85.6 MB，classes.dex ~ classes6.dex）+ split_config.xxhdpi + split_config.zh。
+来源：从真机 adb pull 的已安装包（2026-11-10 更新），不是商店下载的，和线上一致。
+
+取证方式：
+  · 资源 → androguard 解 ARSC + AXML。**这个 App 的资源名没被混淆**
+    （能看到 anim/fade_in、anim/fade_out 这种），但**资源文件名被混淆**成
+    res/--P.xml 这种形式，所以布局 XML 只能靠资源 ID 定位。
+  · 行为 → 直接读 dex 里的 dalvik 指令。类名大多被 R8 压成 Ljna; Ljnp; Lhkx;
+    这种短名，但 **YouTube Music 自己的组件类保留了完整包名**
+    （PlayerBottomSheet、PlayerPageBehavior、AutoCropImageView、WatchWhileLayout），
+    枚举字面量、实验开关的 ID 与值、浮点常量全部保留。
+  · 下面每条都标了证据等级：[DEX] = 从字节码直接读出；
+    [资源] = 从 ARSC / AXML 读出；[推断] = 由结构合理推得但没直接证据。
+
+标注约定：
+  Lxxx; 是 dex 里的类描述符（L 开头、; 结尾是 dalvik 的类型写法）。
+  常量后面括号里的 0x…… 是 IEEE754 的原始位，方便你反查。
+
+
+=====================================================================
+1. 先说结论
+=====================================================================
+
+一句话：**YouTube Music 的全屏播放器不是 Activity、也不是 Fragment 转场，
+是一个 BottomSheet。** 所以「打开 / 关闭」根本不是两个页面之间的转场动画，
+而是一个面板在同一个窗口里上下滑动。
+
+而「专辑封面的连贯动画」不是共享元素（shared element），也不是
+Material 的 Container Transform。它是：
+
+    **一个 0 ~ 1 的进度值，同时驱动「封面外框的测量尺寸」和
+      「封面位图的缩放矩阵」，两边都做线性插值。**
+
+进度值来自 BottomSheet 的 slideOffset，是逐帧连续的，没有任何
+动画包装（不是 animateTo、不是 spring、不是 tween）—— 拖动时它就是
+手指位置的函数，松手后由 Material 的 settle 动画驱动它继续连续变化。
+这就是「连贯」的全部来源。
+
+三个反直觉的点：
+
+  1. 代码里确实存在 `MaterialContainerTransform` 的影子吗？没有。
+     全库搜 MaterialContainerTransform / SharedTransitionLayout /
+     AnimatedContent 都是 0 命中。Compose 的共享元素 API 完全没用到。
+  2. 有一个 `MusicPlayerView` 也吃同一个进度、也做尺寸插值，但它的
+     插值公式在数学上恒等（见 §8），**实际上不产生任何尺寸变化**。
+     它管的是视频画面，不是专辑封面。
+  3. 专辑封面加载时会**先自动裁掉图片上下的纯色边**，再算缩放。
+     这不是为了好看，是为了让「填满容器」时不留白边。
+
+
+=====================================================================
+2. 页面结构：为什么是 BottomSheet
+=====================================================================
+
+AndroidManifest 里只有一个真正的宿主 Activity： [DEX]
+
+    com.google.android.apps.youtube.music.activities.MusicActivity
+      launchMode = singleTask（0x2）
+      configChanges = 0x00001FB8
+      exported = true
+
+全库 22 个 Activity，其余都是裁剪头像、设置、TV 配对、Google Play 结算这类
+边角功能。**没有任何 PlayerActivity / NowPlayingActivity。**
+所以全屏播放器一定在 MusicActivity 内部。
+
+三个关键类： [DEX]
+
+    Lcom/google/android/apps/youtube/music/watchpage/ui/WatchWhileLayout;
+        super = Ljnc;   （播放器页的根布局，自己实现 onMeasure / onLayout）
+        字段里有：PlayerPageBehavior aL、PlayerPageBehavior aM、
+                  PlayerBottomSheet ag、Lhui bH（当前状态）、F bI（当前进度）
+
+    Lcom/google/android/apps/youtube/music/watchpage/ui/PlayerBottomSheet;
+        super = Ljnb;   （Ljnb 是 LinearLayout 的子类，带 Dagger 组件）
+
+    Lcom/google/android/apps/youtube/music/watchpage/ui/PlayerPageBehavior;
+        super = com.google.android.material.bottomsheet.BottomSheetBehavior
+        （直接继承 Material 的标准 BottomSheetBehavior）
+
+也就是说布局是：
+
+    WatchWhileLayout            ← 根容器，自己算布局
+      ├── PlayerBottomSheet     ← 播放器面板本体（LinearLayout）
+      │     behavior = PlayerPageBehavior（BottomSheetBehavior 子类）
+      │     └── 封面 / 控件 / tab
+      └── mini player 区域
+
+`WatchWhileLayout` 里有两个 `PlayerPageBehavior` 字段（aL、aM），
+对应两套面板（竖屏一套、横屏或大屏一套）。 [推断]
+
+
+=====================================================================
+3. 状态机：12 个状态
+=====================================================================
+
+枚举 `Lhui;`，12 个值，全部字面量保留在 <clinit> 里： [DEX]
+
+    ordinal  字段   名字
+    --------------------------------------------------------------
+    0        a      DISMISSED
+    1        b      MINIMIZED
+    2        c      MAXIMIZED_NOW_PLAYING
+    3        d      MAXIMIZED_NOW_PLAYING_HALF_EXPANDED
+    4        e      MAXIMIZED_PLAYER_ADDITIONAL_VIEW
+    5        f      DOCKED_ENGAGEMENT_PANEL_BELOW_MINI_PLAYER
+    6        g      DOCKED_ENGAGEMENT_PANEL_BELOW_PLAYER
+    7        h      FULLSCREEN
+    8        i      SLIDING_VERTICALLY
+    9        j      QUEUE_EXPANDING
+    10       k      DOCKED_ENGAGEMENT_PANEL_EXPANDING
+    11       l      SLIDING_HORIZONTALLY
+
+「全屏播放器展开」= `MAXIMIZED_NOW_PLAYING`（ordinal 2）。
+「mini player」= `MINIMIZED`（ordinal 1）。
+
+还有一个判定方法： [DEX]
+
+    Lhui;->d(Lhui;)Z
+        return (state == MINIMIZED)
+            || (state == MAXIMIZED_PLAYER_ADDITIONAL_VIEW)
+            || (state == DOCKED_ENGAGEMENT_PANEL_BELOW_MINI_PLAYER)
+
+即「是否处于小态」。这个方法在 3 个地方被调用。
+
+状态和进度是**一起**设置的，入口只有一个： [DEX]
+
+    WatchWhileLayout.I(Lhui state, float progress)
+        bH = state
+        bI = progress
+
+`bI` 是「当前进度」字段。注意它是 float 类型、初值 0。
+
+
+=====================================================================
+4. 拖动链路：从手指到进度
+=====================================================================
+
+4.1 BottomSheetBehavior 的 onSlide 回调
+---------------------------------------------------------------------
+`PlayerPageBehavior` 没有重写 onSlide / onStateChanged，
+它把回调注册成了独立的类 `Ljnp`： [DEX]
+
+    Ljnp;->a(Landroid/view/View; F)V      // = BottomSheetCallback.onSlide(view, slideOffset)
+    Ljnp;->b(Landroid/view/View; I)V      // = BottomSheetCallback.onStateChanged(view, newState)
+
+onSlide 的实现（伪代码）： [DEX]
+
+    if (!wwl.am()) {                          // am() = 是否处于最大化态
+        if (behavior.state != STATE_SETTLING) {
+            if (wwl.Z() && slideOffset != 1.0f) {
+                if (wwl.cc.r() && !wwl.bH.a()) {
+                    wwl.I(Lhui.j /* QUEUE_EXPANDING */, slideOffset);
+                }
+            }
+        }
+    }
+
+注意 `I(状态, slideOffset)` —— **slideOffset 原样当作进度传进去**。
+这就是「跟手」的源头：进度不是算出来的，是 Material 给的滑动比例。
+
+onStateChanged 的实现（简化）： [DEX]
+
+    if (wwl.am()) {                            // 最大化态
+        if (!wwl.cc.s()) {
+            if (!wwl.bS.a().contains(wwl.bH)) {
+                wwl.I(Lhui.c /* MAXIMIZED_NOW_PLAYING */, 0f);
+            }
+        }
+    } else {
+        wwl.T();
+        if (behavior.state != STATE_SETTLING) {
+            switch (newState) {
+                case 4 /* COLLAPSED */:
+                case 6 /* HALF_EXPANDED */:
+                    if (wwl.X()) {
+                        wwl.I(Lhui.d /* HALF_EXPANDED */, wwl.q());
+                    }
+                    break;
+                case 3 /* EXPANDED */:
+                    if (wwl.cc.r() && !wwl.bH.a()) {
+                        if (wwl.bK.orElse(newState) == newState) {
+                            wwl.I(Lhui.c /* MAXIMIZED_NOW_PLAYING */, 0f);
+                        }
+                    } else {
+                        wwl.I(Lhui.e /* ADDITIONAL_VIEW */, 1.0f);
+                    }
+                    break;
+            }
+        }
+    }
+
+关键：**全屏态（MAXIMIZED_NOW_PLAYING）的进度是 0f，不是 1f。**
+半展开态才用 `q()`（实时值）。附加视图态用 1.0f。
+
+这个方向和直觉相反，说明 `bI` 的语义不是「展开程度」，
+而是「额外展开量」或「非标准态偏移」。见 §9 的说明。
+
+4.2 状态变化后按状态重置进度
+---------------------------------------------------------------------
+`WatchWhileLayout.as()V` 是一个按 `bH.ordinal()` 的 packed-switch： [DEX]
+
+    switch (bH.ordinal()) {
+        case 2  /* MAXIMIZED_NOW_PLAYING */          -> bI = 0f
+        case 7  /* FULLSCREEN */                     -> bI = 0f
+        case 3  /* HALF_EXPANDED */                  -> bI = q()
+        case 6  /* DOCKED_..._BELOW_PLAYER */        -> bI = q()
+        case 8  /* SLIDING_VERTICALLY */             -> bH = MINIMIZED; bI = 0f
+        case 9  /* QUEUE_EXPANDING */                -> bH = MAXIMIZED_NOW_PLAYING; bI = 0f
+        case 10 /* DOCKED_..._EXPANDING */           -> bH = MAXIMIZED_NOW_PLAYING; bI = 0f
+        case 11 /* SLIDING_HORIZONTALLY */           -> bH = DISMISSED; bI = 0f
+        case 0,1,4,5                                 -> bI = 0f
+    }
+
+（switch 的 case 目标用 packed-switch payload 的 targets 算出来，
+ targets 是相对 switch 指令的 16-bit code unit 偏移。）
+
+4.3 手势方向判定
+---------------------------------------------------------------------
+`PlayerPageBehavior.ac(MotionEvent e1, MotionEvent e2)I`： [DEX]
+
+    double dx = e2.getRawX() - e1.getRawX();
+    double dy = e2.getRawY() - e1.getRawY();
+    double dist = Math.hypot(dx, dy);
+    if (dist <= touchSlop) return 1;               // 1 = 不算滑动
+
+    double angle = Math.atan2(dy, dx);
+    if (angle >=  0.785398 && angle <= 2.356194) return 3;   // +45° ~ +135°
+    if (angle >= -2.356194 && angle <= -0.785398) return 2;  // -135° ~ -45°
+    return 1;
+
+角度常量（double 原始位）：
+    0.7853981633974483  = 45°     (4605249457297304856)
+    2.356194490192345   = 135°    (4612488097114038738)
+   -2.356194490192345   = -135°   (-4610883939740737070)
+   -0.7853981633974483  = -45°    (-4618122579557470952)
+
+Android 屏幕坐标 y 向下，所以：
+    **返回 3 = 向下滑（关闭方向）**
+    **返回 2 = 向上滑（展开方向）**
+    **返回 1 = 不算垂直手势**
+
+4.4 速度追踪器
+---------------------------------------------------------------------
+`PlayerPageBehavior` 里有一个 `Ltsl` 字段，构造是： [DEX]
+
+    new Ltsl(context, 200, 1, 20)
+
+`Ltsl` 是 AndroidX `ViewDragHelper` 的一个 fork，特征：
+  · 有 `"snapVelocity cannot be less than 200"` 这条异常字符串
+  · 有 `getScaledPagingTouchSlop()` / `getScaledTouchSlop()` /
+    `getScaledMaximumFlingVelocity()` 的调用
+  · 字段：`a`=touchSlop、`g`=activePointerId(-1)、`h`=edgeSize、
+    `i`=maxFlingVelocity、`j`=minFlingVelocity
+
+三个构造参数的含义：
+    200 = snapVelocity（吸附速度阈值，px/s）
+    1   = 用 pagingTouchSlop 而不是普通 touchSlop
+    20  = minFlingVelocity
+
+4.5 甩动直接关闭
+---------------------------------------------------------------------
+`PlayerPageBehavior.onTouchEvent(...)` 的尾部： [DEX]
+
+    int dir = tracker.e(ev, 1);           // 返回 1/2/3，同上
+    if (dir == 1) return false;           // 不是垂直手势，不消费
+
+    int h = parent.getHeight();
+    float f = 1.0f - this.z;              // z = BottomSheetBehavior 的 mSlideOffset
+    int threshold = (int)(h * f);
+    if (child.getTop() >= threshold) {
+        S(4);                             // setState(STATE_COLLAPSED)
+        tracker.c();                      // 清速度
+    }
+    return super.onTouchEvent(...);
+
+即：**下滑且面板顶部已经低于「按 slideOffset 推算的理论位置」时，
+直接 setState(COLLAPSED)，不等 settle 动画。** 这是「一甩就关」。
+
+
+=====================================================================
+5. 进度怎么算（q()）
+=====================================================================
+
+`WatchWhileLayout.q()F`： [DEX]
+
+    if (aL.c /* boolean 标志 */) {
+        float f = p(s(), u());
+        if (f > 0f) return f;
+    }
+
+    int h1 = av.getMeasuredHeight() - aM.E();     // E() = BottomSheetBehavior.getExpandedOffset()
+    int h2 = v();
+    if (h1 == h2) return 0.42f;                   // 0x3ED70A3D
+
+    int x = h1 - (int)(av.getMeasuredHeight() * 0.58f);   // 0x3F147AE2
+    return (float)(h1 - x) / (float)(h1 - h2);
+
+辅助函数 `p(int a, int b)F`： [DEX]
+
+    int h = getHeight();
+    if (h - b <= 0) return 0f;
+    return clamp((float)(h - a) / (float)(h - b), 0f, 1f);
+
+两个常量：
+    **0.42** = h1 与 h2 相等时的退化返回值
+    **0.58** = 分子上的高度比例
+
+`r(float input)F` 是反函数： [DEX]
+
+    float cur = q();
+    return clamp((input - cur) / (1.0f - cur), 0f, 1f);
+
+
+=====================================================================
+6. 进度怎么分发
+=====================================================================
+
+6.1 发布
+---------------------------------------------------------------------
+`WatchWhileLayout` 有一个 `Lawsx` 字段 `cl`，是数据流容器（可 setValue / observe）。
+
+    WatchWhileLayout.y()Lavsw;      // 返回这条流（给外部订阅）
+    WatchWhileLayout.J(F)V;         // 往流里发一个 Float
+
+`y()` 的实现： [DEX]
+
+    if (!experiment(85, 45746502L))
+        return Lavsw.x();           // 实验关着 → 返回空流
+    return this.cl.Q();             // 实验开着 → 返回 cl 的流
+
+`J(float)` 的实现： [DEX]
+
+    if (experiment(85, 45746502L))
+        this.cl.kp(Float.valueOf(f));   // kp = 发布
+
+**同一个实验开关（flag 85 / 值 45746502）在 4 个地方出现**：
+  · WatchWhileLayout.y()          —— 决定要不要返回真流
+  · WatchWhileLayout.J(F)         —— 决定要不要发布
+  · MusicPlayerView.f()           —— 决定要不要走自定义 onMeasure
+  · MusicPlayerView.onMeasure 里的判断
+
+这说明整套「封面按进度变形」是一个实验特性，且已经全量
+（否则真机上不会看到这个动画）。
+
+`J(float)` 的三个调用点： [DEX]
+    · WatchWhileLayout.onMeasure(II)V
+    · Ljna.E()V
+    · Ljna.p(F)V
+
+6.2 订阅
+---------------------------------------------------------------------
+`MusicPlayerView.onAttachedToWindow` 里订阅： [DEX]
+
+    WatchWhileLayout wwl = (WatchWhileLayout) a.get();
+    Lavsw s = wwl.y()
+                 .M(this.c /* Lavtr */)
+                 .an(new Lhkx(this, 16), new Lhjr(15));
+    this.h.c(s);      // Lavuc.c() = 订阅
+
+`Lhkx` 是一个巨型 lambda 分发类（R8 把几十个 lambda 合并进一个类，
+用 `$cid` 字段做 packed-switch）。其中两个分支处理 Float： [DEX]
+
+    // 分支 A → 写 AutoCropImageView（专辑封面）
+    float v = clamp(((Float) obj).floatValue(), 0f, 1f);
+    AutoCropImageView civ = ((Lhtn) this.a).b;
+    if (civ.e != v) {
+        civ.e = v;
+        if (civ.a()) civ.requestLayout();
+    }
+
+    // 分支 B → 写 MusicPlayerView（视频画面）
+    float v = clamp(((Float) obj).floatValue(), 0f, 1f);
+    MusicPlayerView mpv = (MusicPlayerView) this.a;
+    if (mpv.d != v) {
+        mpv.d = v;
+        mpv.requestLayout();
+    }
+
+**两处都是「值不同就赋值 + requestLayout」，没有任何动画包装。**
+没有 ValueAnimator、没有 animateFloatAsState、没有 spring。
+所以进度是逐帧跟手的，动画的「顺滑」完全来自输入本身就是连续的。
+
+`clamp` 用的是 `Ltyj;->ad(F,F,F)F`，参数是 (value, min, max)。
+
+
+=====================================================================
+7. 专辑封面：连贯动画的主体
+=====================================================================
+
+类是 `com.google.android.apps.youtube.music.ui.image.AutoCropImageView`，
+继承 `Lixi;`（AppCompatImageView 系）。 [DEX]
+
+它只在播放页 Fragment `Lhtn`（`WatchFragment` 的子类）里使用，
+字段 `b` 就是封面实例。**mini player 用的不是这个类**，是另外的 View。
+
+三个字段决定它的形态：
+    e  (float) = 进度 0~1，由上面那条流写入
+    h  (int)   = 位图原始高度
+    i  (int)   = 位图原始宽度
+    b  (int)   = 顶部被裁掉的像素行数
+    c  (int)   = 裁边后的有效高度
+    j  (bool)  = 是否 CENTER_CROP
+    g  (Matrix)= 当前变换矩阵
+
+7.1 加载时先自动裁掉上下纯色边
+---------------------------------------------------------------------
+`setImageBitmap(Bitmap)`： [DEX]
+
+    b = 0;
+    c = bitmap.getHeight();
+    h = bitmap.getHeight();
+    i = bitmap.getWidth();
+
+    if (height > 1 && width > 1) {
+        int limit = (int)(0.25f * height);       // 0x3E800000，只扫前 25%
+        // 从上往下扫
+        for (y = 0; y < limit; y++) {
+            Color.colorToHSV(pixels[y * width + width/2], hsv);
+            if (hsv[2] > 0.08f) break;           // 0x3DA3D70A
+            b = y + 1;
+        }
+        // 从下往上扫
+        for (y = height - 1; y >= height - limit; y--) {
+            Color.colorToHSV(pixels[y * width + width/2], hsv);
+            if (hsv[2] > 0.08f) break;
+        }
+        c = bottom - b;                          // 有效高度
+    }
+
+只取**每一行的中心像素**，用 HSV 的**明度**（下标 2）判断是不是纯色边，
+阈值 **0.08**。扫描范围只有高度的 **25%**，防止把整张图吃掉。
+
+7.2 宽高比判定
+---------------------------------------------------------------------
+`a()Z`： [DEX]
+
+    if (h <= 0) return false;
+    return ((float) i / (float) h) > 1.2f;       // 0x3F99999A
+
+即「**图片宽高比 > 1.2**」= 宽图。只有宽图才会走后面的缩放插值。
+
+7.3 缩放矩阵：从「按宽适配」插值到「cover 填满」
+---------------------------------------------------------------------
+`onLayout(...)` 的核心（伪代码，全部从字节码还原）： [DEX]
+
+    matrix.reset();
+    if (c <= 0) return;
+
+    int availW = r - l;
+    int availH = b - t;
+    int imgH = h;
+    int imgW = i;
+
+    // ① 先无条件算一个「裁剪宽度」
+    int cropW = (int)(imgH * 1.8f);             // 0x3FE66666，恒等于 1.8 × 图高
+
+    // ② 实验开关 95 / 45762151 且非 CENTER_CROP 时，先做一次水平平移
+    if (flag95 && !j /* 非 CENTER_CROP */) {
+        float diff = (float) cropW - (float) imgW;
+        diff /= 2f;
+        if (diff > 0f) matrix.setTranslate(diff, 0f);
+    }
+
+    float imgRatio = (float) imgW / (float) imgH;
+
+    // ② 选基准缩放
+    float base;
+    if (imgRatio > 0.9 && imgRatio >= 1.2f && ((float) availW / (float) availH) >= imgRatio)
+        base = (float) availH / (float) imgH;   // 按高度
+    else
+        base = (float) availW / (float) imgW;   // 按宽度
+
+    // ③ 宽图且进度 > 0 → 向 cover 插值  ← 这就是「连贯」的那一步
+    if (a() && e > 0f) {
+        float fitH   = (float) availH / (float) imgH;
+        float fitW   = (float) availW / (float) imgW;
+        float cover  = Math.max(fitW, fitH);
+        base = base + (cover - base) * e;
+    }
+
+    // ④ 居中
+    float dx = ((float) cropW * base - availW) / 2f;
+    float translateX = 0f;
+    if (dx > 0f && a() && e > 0f && j /* CENTER_CROP */) {
+        base = (float) availW / (float) cropW;   // 改用「按裁剪宽度撑满」
+    } else {
+        translateX = dx;                         // 否则水平居中（dx 可能为负）
+    }
+    float dy = ((float) availH - (float) imgH * base) / 2f;
+    matrix.postScale(base, base);
+    matrix.postTranslate(translateX, dy);
+    setScaleType(ScaleType.MATRIX);
+    setImageMatrix(matrix);
+
+三个常量：
+    **1.2f** = 宽图判定阈值
+    **1.8f** = 裁剪宽度 = 1.8 × 图高
+    **0.9**  = 判断链里的第一个下限（double 4606281698874543309）
+
+第 ③ 步是全部的重点：
+
+    base 是「按宽或按高适配」的缩放（可能留白）
+    cover 是「一定填满容器」的缩放（max of 两个方向）
+    e = 0  → 用 base，可能上下留白
+    e = 1  → 用 cover，一定填满、超出部分裁掉
+    0<e<1  → 线性插值
+
+所以封面的「长大」过程中，内部填充方式会**连续地从留白过渡到填满**，
+而不是在某一帧突然切换裁剪方式。这就是看起来「连贯」而不「跳」的原因。
+
+7.4 绘制时还有一层裁剪
+---------------------------------------------------------------------
+`draw(Canvas)`： [DEX]
+
+    canvas.save();
+    if (a() && e > 0f) {
+        canvas.clipRect(0, 0, getWidth(), getHeight());       // 全裁
+    } else if (!j) {
+        canvas.clipRect(0, 0, (int)(getHeight() * 1.8f), getHeight());   // 裁到 1.8×高
+    }
+    super.draw(canvas);
+    canvas.restore();
+
+也就是说：宽图 + 有进度时，裁剪矩形从「1.8 × 图高」扩到「整个 View」。
+和第 ③ 步的缩放插值配合，视觉上就是「图从窄条变成满幅」。
+
+
+=====================================================================
+8. 对照：MusicPlayerView（视频画面，不是封面）
+=====================================================================
+
+`com.google.android.apps.youtube.music.player.MusicPlayerView`，继承 `Lhti;`。 [DEX]
+
+它也吃同一个进度（字段 `d`），在 `onMeasure` 里做尺寸插值：
+
+    int w = getMeasuredWidth();
+    int h = getMeasuredHeight();
+    int a = zke.e();                 // 源宽
+    int b = zke.d();                 // 源高
+    float t = this.d;
+
+    Size s0 = e(w, h, a, b, false);
+    Size s1 = e(w, h, a, b, true);
+
+    Size target;
+    if (t == 0f)      target = s0;
+    else if (t == 1f) target = s1;
+    else              target = new Size(
+                          lerp(s0.getWidth(),  s1.getWidth(),  t),
+                          lerp(s0.getHeight(), s1.getHeight(), t));
+
+    child.measure(makeMeasureSpec(target.w, EXACTLY),
+                  makeMeasureSpec(target.h, EXACTLY));
+
+其中 `lerp(a, b, t)` 是 `c(I I F)I`：
+    return (int)(a + (b - a) * t);
+
+`e(w, h, srcW, srcH, flip)` 的完整逻辑： [DEX]
+
+    if (w <= 0 || h <= 0 || srcW <= 0 || srcH <= 0) return new Size(w, h);
+
+    double containerRatio = (double) h / (double) w;     // 容器 高/宽
+    double imageRatio     = (double) srcH / (double) srcW;
+
+    if (flip) {
+        if (containerRatio > imageRatio) goto 按宽;
+    } else {
+        if (containerRatio < imageRatio) goto 按宽;
+    }
+    // 按高：
+    return new Size((int)(h / imageRatio), h);
+    // 按宽：
+    return new Size(w, (int)(w * imageRatio));
+
+**注意：这个函数的两个分支在数学上等价。**
+  · flip=false：containerRatio < imageRatio → 按宽，否则按高
+  · flip=true ：containerRatio <= imageRatio → 按宽，否则按高
+两者只在 `containerRatio == imageRatio` 时有差别，而那时两种算出来的
+Size 完全相同。
+
+**所以 `s0` 恒等于 `s1`，`MusicPlayerView` 的尺寸插值实际上什么都不做。**
+它唯一的副作用是 `requestLayout()`。
+
+`zke` 是视频渲染器接口，有 `f()Landroid/view/Surface;`、`g()Landroid/view/ViewGroup;`、
+`h(Landroid/graphics/Bitmap, Lswa;)V` —— 说明 `MusicPlayerView` 管的是
+MV / 视频画面，不是专辑封面。**做封面动画时不要参考这一段。**
+
+
+=====================================================================
+9. 打开 / 关闭时到底发生了什么
+=====================================================================
+
+9.1 打开
+---------------------------------------------------------------------
+用户点 mini player → `setState(EXPANDED)` → Material 的
+`ViewDragHelper.smoothSlideViewTo` 开始跑（默认 250ms 的 settle）→
+**动画期间 onSlide 每帧回调** → `I(state, slideOffset)` → 进度连续变 →
+封面连续变形。
+
+也就是说：**「打开动画」不是一段独立的动画代码，而是 settle 动画的副产物。**
+没有专门的 enter transition，没有 duration，没有 interpolator。
+
+9.2 关闭
+---------------------------------------------------------------------
+两条路径：
+
+  (a) 慢拖 → 松手时位置判定 → Material 自己 settle 到 COLLAPSED，
+      onSlide 继续逐帧回调，封面连续缩回去。
+
+  (b) 快甩 → `onTouchEvent` 里 `child.getTop() >= h * (1 - slideOffset)` 成立
+      → 直接 `S(4)` 即 `setState(COLLAPSED)`。
+      **这时候没有 settle 动画**，面板瞬间到位。
+      但即使这样，封面也不会「跳」—— 因为 onStateChanged(COLLAPSED) 之后
+      会 `I(MINIMIZED, 0f)`，进度归 0，封面回到基准缩放。
+
+9.3 进度语义的一个疑点
+---------------------------------------------------------------------
+按 §4.1 的代码，**全屏态（MAXIMIZED_NOW_PLAYING）的进度是 0f**，
+而不是 1f。这跟「进度 = 展开程度」的直觉相反。
+
+有两种可能，静态分析分不出来： [推断]
+  · 可能性一：`bI` 的语义是「额外偏移量」，全屏态是基准态所以为 0，
+    封面在全屏时的尺寸由布局本身决定（不是进度决定）。
+  · 可能性二：`I()` 里的 float 参数和最终流出去的 float 不是同一个东西，
+    中间还有一次映射（`Ljna.p(F)` 里有一段归一化 + 反转，见下）。
+
+`Ljna.p(F)` 里确实有一次归一化： [DEX]
+
+    v3 = (v1 - v8) / (v9 - v8);      // 线性归一化
+    v7 = v9 - v3;                    // 反转
+    v3 = clamp(v7, v5, v9);
+    if (experiment(...)) {
+        if (kwi.l() == Lhzh.b) v3 = kwi.k();    // 用另一个来源覆盖
+        if (wwl.bA) v3 = 0f;
+        wwl.J(v3);
+    } else {
+        E();
+    }
+
+所以流出去的确实是「归一化 + 反转 + 可能的覆盖」之后的值。
+0 和 1 的具体归属（哪个端点对应全屏）**没能 100% 确定**。
+
+
+=====================================================================
+10. 容器尺寸也在插值
+=====================================================================
+
+`Ljna` 是 `WatchWhileLayout` 的布局管理器（实现 `Ljnv` 接口，
+接口方法有 a() / j() / l(II) / m(I) / p(F) / o() / n()）。
+
+`Ljna.p(float progress)` 里有一段： [DEX]
+
+    if (设备/资源开关) {
+        if (bH in {DISMISSED, SLIDING_HORIZONTALLY, MINIMIZED, SLIDING_VERTICALLY}) {
+            float w = getWidth();
+            float target = 0.65f * w;                    // 0x3F266666
+
+            View av = wwl.av;
+            av.getLayoutParams().height = (int)(w + (target - w) * progress);
+
+            View ak = wwl.ak;
+            // 同理，但先减掉 MarginLayoutParams 的 marginStart + marginEnd
+            ak.getLayoutParams().height = (int)(w + (target - margin - w) * progress);
+        }
+    }
+
+常量 **0.65**。这段只在「小态」分支里跑，所以它控制的是
+mini player 区域的高度插值（从正方形 `w × w` 到 `0.65w` 高）。
+
+`Ljna.E()` 是另一个进度来源： [DEX]
+
+    if (!wwl.bA && experiment(95, 45762151L)) {
+        if (bH in {SLIDING_VERTICALLY, MAXIMIZED_NOW_PLAYING,
+                   QUEUE_EXPANDING, DOCKED_ENGAGEMENT_PANEL_EXPANDING}) {
+            wwl.J(((Lkwi) b.get()).k());
+        }
+    }
+
+`Lkwi.k()` 是读一个数据流当前值（`Lawsx.aE()` → Number → float）。
+
+
+=====================================================================
+11. 其它零散事实
+=====================================================================
+
+  · `AutoCropImageView` 的 `d` 字段（boolean）由 `Lhtn.p(Z)` 写入，
+    同时 `Lhtn.p(Z)` 还会切换两个 `TouchImageView`（`ah` / `ai`）的可见性，
+    并改一个 MarginLayoutParams 的 marginStart（两个不同的 dimen 资源：
+    2131166854 / 2131166281）。说明播放页有「封面模式 / 视频模式」两套图。
+    [DEX]
+
+  · `Lhtn` 的构造函数里加载了两个 XML 动画： [DEX][资源]
+        AnimationUtils.loadAnimation(ctx, 2130772019)  → anim/fade_out
+        AnimationUtils.loadAnimation(ctx, 2130772016)  → anim/fade_in
+    分别存在 `aO` / `aP` 字段，都 `setAnimationListener(this)`。
+    **这两个动画的作用对象没能定位**（见 §12）。
+
+  · `PlayerPageBehavior` 里有一个 `Map<View, Lahyw>`（字段 `a`），
+    通过 `B(View, boolean)` 注册、`C(View)` 注销。
+    `Lahyw` 的 `<init>(Landroid/view/View; Z)` 版本会 `new Rect()` 存起来，
+    说明它是「跟踪某个 View 的位置变化」的包装。
+    但**驱动这个 Map 的代码没找到**（`PlayerPageBehavior` 只有 6 个方法，
+    没有遍历这个 Map 的地方）。 [推断：可能在别的类里通过 getter 访问]
+
+  · `WatchWhileLayout` 里有两个 `F` 字段（`aY`、`aZ`），在
+    `Ljna.p()` 里被当作两个偏移量传给 `Ljmz;-><init>(I I F F F)V`，
+    后面跟着 `Math.pow(v, 2.0)`。这一段是滚动/缩放的缓动计算，
+    和封面无关。 [DEX]
+
+  · `AutoCropImageView` 在 `onLayout` 里会 `setScaleType(ScaleType.MATRIX)`，
+    也就是说**它不用 ImageView 自带的 CENTER_CROP**，全部自己算矩阵。
+    这解释了为什么它的变换能和进度精确对应。
+
+
+=====================================================================
+12. 没能确定的部分
+=====================================================================
+
+  1. **0 / 1 端点的归属**：全屏态进度是 0f（§4.1、§4.2 的代码明确），
+     但 `Ljna.p()` 里又有归一化 + 反转。到底哪个端点是「全屏」，
+     静态分析没能闭环。要确认得真机录屏逐帧对齐。
+
+  2. **fade_in / fade_out 的作用对象**：两个 Animation 加载了、存了、
+     设了 listener，但没找到 `startAnimation` 的调用点。
+     可能是给某个浮层（歌词？播放按钮？）用的。
+
+  3. **mini player 的封面类**：全库搜 MiniPlayer / PlayerBar 都没有类名命中
+     （只有 `MiniPlayerMetadataModel` 这个 Litho props 字符串）。
+     mini player 很可能是用 Litho 组件渲染的，不是普通 View。
+     **所以「全屏封面」和「mini 封面」如何衔接（硬切 / 交叉淡入 / 位置跟随）
+     完全没有证据。**
+
+  4. **`PlayerPageBehavior` 的 `Map<View, Lahyw>` 谁来驱动**：注册方法有、
+     注销方法有，但没有遍历。可能在别的类的 `onLayout` 里通过 getter 读。
+
+  5. **`Lkwi.k()` 读的是哪条流**：`Lkwi` 是被 R8 合并的巨型类
+     （20 多个构造函数），`b` 字段是 `Lawsx`，但构造来源有 20 多种可能。
+
+  6. **`0.65` 的语义**：`Ljna.p()` 里 `target = 0.65 * width`，
+     只在「小态」分支跑。是 mini player 收起后的高度？还是别的？
+     `av` / `ak` 两个 View 的身份没确认（资源文件名被混淆，
+     布局 XML 没法按名字找）。
+
+  7. **settle 的实际时长**：`PlayerPageBehavior` 没有重写 settle 逻辑，
+     理论上用 Material 的默认值（`ViewDragHelper` 内部 250ms）。
+     但 `Ltsl` 是 fork 过的（多了 snapVelocity），fork 版可能改了时长。
+     没在 `Ltsl` 里找到 duration 常量。
+
+  8. **横屏 / 大屏是否走同一套**：`WatchWhileLayout` 有两个
+     `PlayerPageBehavior`（aL、aM），`Ljna.p()` 里有 `aahy.cc(context)` 的
+     设备判断。横屏可能是另一条路径，没展开看。
+
+
+=====================================================================
+13. 可直接对照的类名映射
+=====================================================================
+
+（做同类实现时，这些是「名字没被混淆」的锚点，方便你回头核对）
+
+  com/google/android/apps/youtube/music/watchpage/ui/WatchWhileLayout
+      播放器页根布局，自己实现 onMeasure / onLayout，
+      持有状态（bH）与进度（bI），进度发布在 cl（Lawsx）
+  com/google/android/apps/youtube/music/watchpage/ui/PlayerBottomSheet
+      面板容器（LinearLayout 子类），字段 c 是一个 View、d 是 TabbedView
+  com/google/android/apps/youtube/music/watchpage/ui/PlayerPageBehavior
+      BottomSheetBehavior 子类，手势判定 + 甩动关闭
+  com/google/android/apps/youtube/music/ui/image/AutoCropImageView
+      专辑封面。自动裁边 + 按进度插值缩放矩阵
+  com/google/android/apps/youtube/music/player/MusicPlayerView
+      视频画面（不是封面）。尺寸插值恒等，可忽略
+  com/google/android/apps/youtube/music/player/PlayerPanel
+      FrameLayout，只有一个 View 字段 a
+
+  Lhui    状态枚举（12 值，见 §3）
+  Ljnp    BottomSheetCallback 实现（onSlide / onStateChanged）
+  Ljna    WatchWhileLayout 的布局管理器（实现 Ljnv）
+  Lhkx    巨型 lambda 分发类（$cid 做 packed-switch），
+          两个分支分别写 AutoCropImageView.e 和 MusicPlayerView.d
+  Ltsl    ViewDragHelper 的 fork（snapVelocity=200）
+  Lawsx   数据流容器（kp 发布 / aE 读当前值 / Q 取流）
+  Ltyj;->ad(F,F,F)F   clamp(value, min, max)
+  Ljnv    布局管理器接口（a/j/l/m/p/o/n）
+  Lzke    视频渲染器接口（e()/d() 给源宽高）
+  Lahyw   View + Rect 的包装（用途未定位）

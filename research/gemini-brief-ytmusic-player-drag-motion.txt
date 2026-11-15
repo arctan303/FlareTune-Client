@@ -1,0 +1,629 @@
+YouTube Music · Android 9.45.51 (94551240) · com.google.android.apps.youtube.music
+全屏播放器 · 拖动跟手 / 往返 / 吸附 · 补充取证
+
+=====================================================================
+0. 这份材料是什么
+=====================================================================
+
+对象与上一份《gemini-brief-ytmusic-player-transition.txt》相同：
+YouTube Music Android 9.45.51，从真机 adb pull 的 base APK（85.6 MB，
+classes.dex ~ classes6.dex），2026-11-10 更新。
+
+上一份讲的是「整体结构 + 封面在容器内的填充方式」。
+这一份只讲一件事：**从手指按下到面板停稳，这条链路上每一步发生了什么**，
+以及为什么它可以「跟手」并且「有来有去」。
+
+取证方式与上一份相同：androguard 直读 dalvik 指令。
+类名被 R8 压短，但字符串常量、方法引用名、浮点常量的 IEEE754 位全部保留。
+每条标证据等级：[DEX] = 字节码直读；[推断] = 结构合理推得。
+
+本份修正上一份的 3 个错误，见 §10。
+
+
+=====================================================================
+1. 结论：三段，不是一段
+=====================================================================
+
+一次「打开全屏」的手感由三段不同的机制拼起来：
+
+  第一段  手指还在屏幕上
+          进度 = 手指位移的线性函数，**没有任何动画包装**。
+          往回拖，进度就原路往回走。这就是「有来有去」。
+
+  第二段  手指抬起
+          交给 Material 的 BottomSheetBehavior 自己 settle。
+          YT 没有重写这段，只是加了一个速度阈值判断。
+
+  第三段  不是拖出来的（点 mini 条、点箭头、程序调用）
+          `ValueAnimator` 固定 **300ms**，
+          插值器是一条 **201 点的查找表**，
+          这条表等价于 `cubic-bezier(0.4, 0, 0.2, 1)`（见 §5）。
+
+关键点：第一段里没有任何缓动函数，所以「跟手」不需要调参 ——
+进度是手指位置的纯函数，反过来也一样。第二、三段才有曲线。
+
+另外还有一条**与进度无关**的动画：
+面板整体 `translationY` 的进出场，300ms + `AccelerateDecelerateInterpolator`，
+只在面板整体显隐时用（见 §6）。
+
+
+=====================================================================
+2. 进度字段的真实语义
+=====================================================================
+
+`WatchWhileLayout` 用两个字段描述当前形态： [DEX]
+
+    Lhui;  bH      // 状态枚举（12 值，见上一份 §3）
+    F      bI      // 进度
+
+构造函数里 `bI` 的初值是 **1.0f**： [DEX]
+
+    const/high16  v1, 1065353216      // 0x3F800000 = 1.0f
+    iput          v1, v3, ->bI F
+
+（上一份写「初值 0」是错的。）
+
+写入只有一个入口： [DEX]
+
+    WatchWhileLayout.I(Lhui state, float progress)
+        bH = state
+        bI = progress
+
+调用点给出的值：
+
+    I(MAXIMIZED_NOW_PLAYING,   0f)      // 全屏
+    I(MINIMIZED,               0f)      // mini
+    I(HALF_EXPANDED,           q())     // 半展开
+    I(ADDITIONAL_VIEW,         1.0f)    // 附加视图（队列等）
+
+所以 **bI = 0 是「标准态」（全屏或 mini），bI 大是「非标准态」**。
+它不是「展开程度」，而是「偏离基准形态的量」。
+
+这个语义解释了 §7 里那个反直觉的两段式插值。
+
+
+=====================================================================
+3. 第一段：拖动链路
+=====================================================================
+
+3.1 回调
+---------------------------------------------------------------------
+`PlayerPageBehavior`（`BottomSheetBehavior` 的子类）没有重写 onSlide，
+它把回调注册成独立类 `Ljnp`： [DEX]
+
+    Ljnp;->a(Landroid/view/View; F)V    // onSlide(view, slideOffset)
+    Ljnp;->b(Landroid/view/View; I)V    // onStateChanged(view, newState)
+
+onSlide 的骨架： [DEX]
+
+    if (!wwl.am()) {                       // 不在最大化态
+        if (behavior.state != STATE_SETTLING) {
+            if (wwl.Z() && slideOffset != 1.0f) {
+                if (wwl.cc.r() && !wwl.bH.a()) {
+                    wwl.I(Lhui.j /* QUEUE_EXPANDING */, slideOffset);
+                }
+            }
+        }
+    }
+
+注意 `I(状态, slideOffset)` —— **slideOffset 原样当进度传进去**。
+
+`slideOffset` 是 Material 每帧算出来的滑动比例，
+它本身就是手指位置的线性函数。所以这一整段没有任何缓动。
+
+3.2 手势方向判定
+---------------------------------------------------------------------
+`PlayerPageBehavior.ac(MotionEvent e1, MotionEvent e2)I`： [DEX]
+
+    dx = e2.getRawX() - e1.getRawX()
+    dy = e2.getRawY() - e1.getRawY()
+    if (hypot(dx, dy) <= touchSlop) return 1;
+
+    angle = atan2(dy, dx)
+    if ( 0.785398 <= angle <=  2.356194) return 3;   //  45°~ 135° = 向下
+    if (-2.356194 <= angle <= -0.785398) return 2;   // -135°~-45° = 向上
+    return 1;
+
+角度常量：0.7853981633974483 = π/4，2.356194490192345 = 3π/4。
+
+3.3 速度追踪器
+---------------------------------------------------------------------
+`PlayerPageBehavior` 有一个 `Ltsl` 字段，构造是 `new Ltsl(context, 200, 1, 20)`： [DEX]
+
+    200 = snapVelocity
+    1   = 用 pagingTouchSlop 而不是普通 touchSlop
+    20  = minFlingVelocity
+
+`Ltsl` 是 AndroidX `ViewDragHelper` 的 fork，
+特征是有 `"snapVelocity cannot be less than 200"` 这条异常字符串。
+
+3.4 甩动直接关闭
+---------------------------------------------------------------------
+`PlayerPageBehavior.onTouchEvent` 尾部： [DEX]
+
+    dir = tracker.e(ev, 1)                 // 1/2/3，同 3.2
+    if (dir == 1) return false;
+
+    h = parent.getHeight()
+    f = 1.0f - this.z                      // z = mSlideOffset
+    if (child.getTop() >= (int)(h * f)) {
+        S(4)                               // setState(STATE_COLLAPSED)
+        tracker.c()                        // 清速度
+    }
+    return super.onTouchEvent(ev)
+
+即：**面板顶部已经低于「按 slideOffset 推算的理论位置」时，直接 setState(COLLAPSED)**，
+不等 settle。这是「一甩就关」。
+
+
+=====================================================================
+4. 第二段：松手之后
+=====================================================================
+
+YT 没有重写 settle。松手后走 Material 的 `ViewDragHelper.smoothSlideViewTo`，
+由它按当前速度决定吸附到哪个状态。
+
+在 `onStateChanged` 里做状态与进度的收尾： [DEX]
+
+    if (wwl.am()) {                        // 最大化态
+        if (!wwl.cc.s()) {
+            if (!wwl.bS.a().contains(wwl.bH)) {
+                wwl.I(MAXIMIZED_NOW_PLAYING, 0f);
+            }
+        }
+    } else {
+        wwl.T();
+        if (behavior.state != STATE_SETTLING) {
+            switch (newState) {
+                case 4 /* COLLAPSED */:
+                case 6 /* HALF_EXPANDED */:
+                    if (wwl.X()) wwl.I(HALF_EXPANDED, wwl.q());
+                    break;
+                case 3 /* EXPANDED */:
+                    if (wwl.cc.r() && !wwl.bH.a()) {
+                        if (wwl.bK.orElse(newState) == newState)
+                            wwl.I(MAXIMIZED_NOW_PLAYING, 0f);
+                    } else {
+                        wwl.I(ADDITIONAL_VIEW, 1.0f);
+                    }
+                    break;
+            }
+        }
+    }
+
+`as()` 是另一个按状态重置进度的 packed-switch： [DEX]
+
+    case 2  MAXIMIZED_NOW_PLAYING                -> bI = 0f
+    case 7  FULLSCREEN                           -> bI = 0f
+    case 3  HALF_EXPANDED                        -> bI = q()
+    case 6  DOCKED_..._BELOW_PLAYER              -> bI = q()
+    case 8  SLIDING_VERTICALLY                   -> bH = MINIMIZED; bI = 0f
+    case 9  QUEUE_EXPANDING                      -> bH = MAXIMIZED_NOW_PLAYING; bI = 0f
+    case 10 DOCKED_..._EXPANDING                 -> bH = MAXIMIZED_NOW_PLAYING; bI = 0f
+    case 11 SLIDING_HORIZONTALLY                 -> bH = DISMISSED; bI = 0f
+    case 0,1,4,5                                 -> bI = 0f
+
+
+=====================================================================
+5. 第三段：程序化开关的 300ms 曲线
+=====================================================================
+
+5.1 动画对象
+---------------------------------------------------------------------
+`WatchWhileLayout` 构造里建了一个 ValueAnimator： [DEX]
+
+    bT = new ValueAnimator()
+    // 在 E() 里配置：
+    bT.setDuration(300)
+    bT.setInterpolator(new Lbjo())
+    bT.addUpdateListener(new Lgcn(this, 1))
+
+5.2 更新回调
+---------------------------------------------------------------------
+`Lgcn` 是按 `$cid` 分发的合并 lambda 类。属于 WatchWhileLayout 的分支： [DEX]
+
+    float v = ((Float) animator.getAnimatedValue()).floatValue();
+    WatchWhileLayout wwl = (WatchWhileLayout) this.a;
+    Lkwi kwi = (Lkwi) wwl.p.is();
+    kwi.b.kp(Float.valueOf(v));      // 发布到进度流
+    wwl.requestLayout();
+
+所以第三段的产物和第一段完全一样：一个 0~1 的 float，
+写进同一条流，触发同一次 requestLayout。**下游代码分不出是拖出来的还是动画出来的。**
+
+5.3 插值器是一条 201 点表
+---------------------------------------------------------------------
+`Lbjo` 只有一个字段 `[F a` 和一个方法 `getInterpolation(F)F`： [DEX]
+
+    <clinit>:
+        a = new float[201];
+        fill-array-data ...
+
+    getInterpolation(F)F:
+        return Lazp;->c(Lbjo;->a [F, x)
+
+`Lazp;->c([F F)F` 是按 200 等分查表 + 线性插值。
+
+把 201 个点解出来（IEEE754 小端 float）：
+
+    i=0    t=0.000  y=0.000000
+    i=10   t=0.050  y=0.005800
+    i=20   t=0.100  y=0.025900
+    i=30   t=0.150  y=0.066000
+    i=40   t=0.200  y=0.133900
+    i=50   t=0.250  y=0.236600
+    i=60   t=0.300  y=0.367300
+    i=70   t=0.350  y=0.500000
+    i=80   t=0.400  y=0.613600
+    i=90   t=0.450  y=0.704300
+    i=100  t=0.500  y=0.775600
+    i=110  t=0.550  y=0.831700
+    i=120  t=0.600  y=0.876000
+    i=130  t=0.650  y=0.910900
+    i=140  t=0.700  y=0.938200
+    i=150  t=0.750  y=0.959400
+    i=160  t=0.800  y=0.975300
+    i=170  t=0.850  y=0.986700
+    i=180  t=0.900  y=0.994400
+    i=190  t=0.950  y=0.998600
+    i=200  t=1.000  y=1.000000
+
+对全部 201 点做最小二乘拟合，最优解是：
+
+    cubic-bezier(0.4, 0.0, 0.2, 1.0)      RMSE = 0.00018
+
+这是 Material Design 的 **standard easing**。
+也就是说：YT 没有在运行时解贝塞尔，而是把这条曲线**预计算成 201 个采样点**
+塞进 dex，运行时只做一次数组查找 + 线性插值。
+
+曲线特征（用于判断是不是这条）：
+  · y(0.35) = 0.5，但**不对称**：y(0.05)+y(0.65) = 0.9167，不是 1
+  · 起步极慢（t=0.05 时只走了 0.58%）
+  · 收尾极慢（t=0.95 时已走完 99.86%）
+
+
+=====================================================================
+6. 面板整体进出：另一条 300ms，另一条曲线
+=====================================================================
+
+这一段和进度无关，管的是「面板整体从屏幕外推上来 / 推下去」。
+
+6.1 对象
+---------------------------------------------------------------------
+    ck = new ObjectAnimator()
+    ck.setTarget(av)                       // av = 被 BottomSheetBehavior 控制的那个 View
+    ck.setPropertyName("translationY")
+    ck.setDuration(300)
+    ck.setInterpolator(new AccelerateDecelerateInterpolator())
+
+注意用的是 Android 自带的 `AccelerateDecelerateInterpolator`（cos 曲线），
+不是 §5 那条查找表。**同一屏里两条不同的 300ms 曲线并存。**
+
+6.2 驱动方法
+---------------------------------------------------------------------
+`WatchWhileLayout.ap(boolean hide)`： [DEX]
+
+    if (av == null || aL == null) return;
+    if (ck.isRunning()) ck.cancel();
+
+    int E = aL.E();                        // BottomSheetBehavior.getExpandedOffset()
+
+    if (hide) {
+        ck.setFloatValues(0f, (float) E);  // 0 -> +E，往下推走
+    } else {
+        if (av.getVisibility() != 0) {
+            ck.setFloatValues((float) E, 0f);// +E -> 0，从下推回
+        } else {
+            return;                        // 已经可见，什么都不做
+        }
+    }
+
+    ck.removeAllListeners();
+    ck.addListener(new Ljnq(this, hide));
+    ck.start();
+
+6.3 监听器
+---------------------------------------------------------------------
+    Ljnq.onAnimationStart:  if (!hide) av.setVisibility(VISIBLE)
+    Ljnq.onAnimationEnd:    if ( hide) av.setVisibility(GONE)
+
+即：**显示时先可见再动，隐藏时先动完再不可见**。
+所以不会出现「已经看不见了但还在占位」的那一帧。
+
+6.4 裁剪
+---------------------------------------------------------------------
+`WatchWhileLayout.av()`（方法名与字段 `av` 重名，是两个东西）： [DEX]
+
+    if (experiment(118, 45823962) && av != null) {
+        if (experiment(276, 45858210) && ah() && ak != null && ak.getBottom() > 0) {
+            av.setClipBounds(new Rect(0, 0, av.getWidth(), ak.getBottom()));
+        } else {
+            av.setClipBounds(null);
+        }
+    }
+
+面板内容被裁剪到 mini player 底部以上。这就是「面板升起来时，
+下面的内容不会盖住 mini player」的原因。
+
+
+=====================================================================
+7. 卡片几何：一个五元组，两段插值
+=====================================================================
+
+7.1 封面不是 ImageView 直接变形，是 CardView
+---------------------------------------------------------------------
+`WatchWhileLayout` 的字段 `aG` 是 `androidx.cardview.widget.CardView`，
+资源 id 来自自定义属性 `ad`。 [DEX]
+
+真正的图片 `AutoCropImageView` 在它里面（上一份 §7 讲的是图片在卡片内部怎么填）。
+
+**卡片的尺寸/位置/圆角由 CardView 负责，图片的缩放矩阵由 AutoCropImageView 负责。**
+两层各管一段，这就是为什么「长大」过程里图片不会变形。
+
+7.2 五元组 Ljmz
+---------------------------------------------------------------------
+`Ljmz` 的构造是 `<init>(I I F F F)V`，字段名与顺序： [DEX]
+
+    a = int    height
+    b = int    width
+    c = float  topMargin
+    d = float  leftMargin
+    e = float  cornerRadius
+
+7.3 插值函数 H
+---------------------------------------------------------------------
+`Ljna.H(Ljmz from, Ljmz to, float t)`： [DEX]
+
+    // 尺寸：走 LayoutParams
+    h = lerp(from.a, to.a, t)
+    w = lerp(from.b, to.b, t)
+    kqq.aP(aG, h, w)                       // 设 width/height
+
+    // 边距：走 MarginLayoutParams
+    top  = lerp(from.c, to.c, t)
+    left = lerp(from.d, to.d, t)
+    kqq.aQ(aG, top, left)
+
+    // 圆角
+    r = lerp(from.e, to.e, t)
+    aG.b(r)                                // CardView.setRadius
+
+**五个量全部线性插值，没有各自的缓动。**
+所以「卡片长大」和「卡片移动」和「圆角收放」是同一个 t，视觉上是同步的。
+
+7.4 两段式
+---------------------------------------------------------------------
+`Ljna.p(float progress)` 里构造了**两组**几何，然后按 `q()` 分两段插值： [DEX]
+
+    float q = wwl.q();                     // 临界进度
+
+    if (progress <= q) {
+        H(g0, g1, progress / q);           // 前半段：g0 -> g1
+    } else {
+        H(g1, g2, wwl.r(progress));        // 后半段：g1 -> g2
+    }
+
+    // r(input) = clamp((input - q) / (1 - q), 0, 1)
+
+所以卡片形态在 `q()` 处是**连续**的（两段共用 g1），但**速度可能不连续**。
+这是「拖动时前半段和后半段手感不同」的来源。
+
+7.5 单段式（另一条实验路径）
+---------------------------------------------------------------------
+同一个方法里还有一条分支： [DEX]
+
+    float t = (float) Math.pow(progress, 2.0);   // double pow，指数 2.0
+    H(g0, D(), 1.0f - t);
+
+`1 - p²`：p=0 时 t=1（完全取 D()），p=1 时 t=0（完全取 g0）。
+平方曲线让卡片在进度前段变化更快、后段更慢。
+
+两条路径由实验开关决定，静态分析分不出哪条在真机生效。
+
+7.6 全屏几何 D()
+---------------------------------------------------------------------
+`Ljna.D()` 返回全屏态的 Ljmz，字段来源： [DEX]
+
+    height = max(wwl.bl, (int)(wwl.bn * config / 100f))
+    width  = 由 d() 与 wwl.bm 插值
+    topMargin  = -wwl.bn * k
+    leftMargin = -wwl.bo * k
+    radius     = wwl.bh * (1 - k) + ...
+
+其中 `config` 来自 `Lvyi;->c(I J J)J`（实验 7，默认值 100），
+除以常量 **100.0f**（0x42C80000）—— 是一个百分比配置。
+
+`k` 是同一个 `1 - p²` 里算出来的插值系数（寄存器 v4）。
+
+7.7 圆角来源
+---------------------------------------------------------------------
+`Ljna.C()I`： [DEX]
+
+    if (experiment(118, 45823962)) return wwl.bk;
+    else                          return wwl.bj;
+
+`bj` / `bk` 是自定义属性读出来的 `getDimensionPixelSize`，不是 dimens 资源。
+所以**具体 dp 值在 layout XML 里，静态分析拿不到**（资源文件名被混淆）。
+
+
+=====================================================================
+8. 逐元素的 alpha 曲线
+=====================================================================
+
+`Ljna.p(F)` 的后半段几乎全是 alpha。用到的常量：
+
+    0.035   (0x3D0F5C29)   快阈值
+    0.965   (0x3F770A3D)   0.965 = 1 - 0.035
+    0.95    (0x3F733333)
+    0.05    (0x3D4CCCCD)
+    0.65    (0x3F266666)
+    0.42    (0x3ED70A3D)
+
+8.1 mini 侧的元素
+---------------------------------------------------------------------
+    alpha = clamp((bI - 0.035) / 0.965, 0, 1)
+
+bI = 1（mini）→ 1.0；bI = 0（全屏）→ 0。
+**所以这一条是「mini 元素随 bI 增大而变亮」，不是随 bI 减小。**
+
+8.2 TabLayout
+---------------------------------------------------------------------
+    a = (bI - 0.035) / 0.965
+    tab.setAlpha(max(a, 0))
+    if (bI > 0.035) tab.setVisibility(8)   // GONE
+
+bI = 0（全屏）→ 可见；bI 一旦超过 **3.5%** → 立刻 GONE。
+**这是全屏播放器里最激进的一条：稍微一拖，底部 tab 就没了。**
+
+8.3 面板背景
+---------------------------------------------------------------------
+    if (q() && bI != 1.0f) {
+        a = max(bI - q(), 0) / (1.0f - q());
+    } else {
+        a = bI;
+    }
+    background.setAlpha((int)(a * 255))
+
+8.4 面板本体
+---------------------------------------------------------------------
+    v = (bI 属于 {MINIMIZED, DISMISSED, SLIDING_HORIZONTALLY}) ? 0f : ...
+    ag.setAlpha(clamp(v, 0, 1))
+
+8.5 一个线性区
+---------------------------------------------------------------------
+    if (Y() && aL.c) a = 1.0f - bI / v19;
+    else if (bI 属于 {SLIDING_VERTICALLY}) a = 1.0f - min(bI, v24) / v24;
+    else a = 1.0f;
+
+
+=====================================================================
+9. 面板高度插值
+=====================================================================
+
+`Ljna.l(int width, int height)`： [DEX]
+
+    kqq.aP(az, width, height);             // 某个 View 吃满
+
+    if (this.q()) {                        // 处于过渡态
+        if (wwl.bI <= wwl.q()) {
+            E    = aM.E();                 // expandedOffset
+            avail = height - wwl.x() - ak.getMeasuredHeight();
+            h = (int)(E + (avail - E) * wwl.bI);
+        } else {
+            h = (int)(height * 0.42f);     // 0x3ED70A3D
+        }
+    } else {
+        h = height - wwl.x() - ak.getMeasuredHeight();
+    }
+    kqq.aP(ag, width, h);
+    ag.setPadding(0, 0, 0, 0);
+
+三个高度：
+
+    E                        展开态偏移（贴顶）
+    avail                    屏高 - 顶部区 - mini 高度
+    0.42 * height            半展开
+
+`q()` 本身： [DEX]
+
+    if (aL.c) {
+        f = p(s(), u());
+        if (f > 0) return f;
+    }
+    h1 = av.getMeasuredHeight() - aM.E();
+    h2 = v();
+    if (h1 == h2) return 0.42f;
+    x = h1 - (int)(av.getMeasuredHeight() * 0.58f);   // 0x3F147AE2
+    return (float)(h1 - x) / (float)(h1 - h2);
+
+`0.58` 是分子上的高度比例。`h1 == h2` 时退化为 **0.42**。
+
+`r(float input)F` 是反函数： [DEX]
+
+    cur = q();
+    return clamp((input - cur) / (1.0f - cur), 0f, 1f);
+
+
+=====================================================================
+10. 对上一份的修正
+=====================================================================
+
+1. `bI` 初值是 **1.0f**，不是 0。（上一份 §3 末）
+
+2. 「**没有 ValueAnimator**」这个说法不完整。
+   封面/卡片这一路确实没有动画包装，但 `WatchWhileLayout` 里有：
+     · `bT` ValueAnimator 300ms + 201 点查找表  → 驱动进度本身
+     · `ck` ObjectAnimator 300ms + AccelerateDecelerate → 驱动面板 translationY
+   所以「无动画」只对拖动路径成立，程序化路径是有动画的。
+
+3. `0 / 1 端点的归属` 这一条现在可以给出更强的判断：
+   `bI = 0` 对应「标准态」（全屏或 mini 都是 0），`bI = 1` 对应「附加视图」。
+   它不是「展开程度」，是「偏离基准的量」。
+   具体哪个端点是全屏，取决于 `H()` 里 g0/g1/g2 的构造顺序，
+   静态分析仍然没有闭环（见 §11）。
+
+
+=====================================================================
+11. 没能确定的部分
+=====================================================================
+
+1. **g0 / g1 / g2 的具体数值**。
+   `p(F)` 里第一组 Ljmz 用 `av.getMeasuredWidth()`、`jna->i/j/k/l/m`、
+   `wwl.bl/bn/bi/aP` 拼出来，这些字段的赋值点在 `m(I)` 里且高度依赖运行时测量。
+   静态拿不到具体像素。
+
+2. **`q()` 的实际数值**。
+   公式是 `0.58 * panelH / (h1 - h2)`，退化值 0.42。
+   在 844dp 屏、64dp mini 的假设下算出来约 0.6，但没有实测。
+
+3. **两条几何路径哪条生效**。
+   `q()` 分段的路径 vs `1 - p²` 的路径，由实验开关（118 / 95）决定，
+   dex 里只能看到两条都存在，看不到服务端下发的值。
+
+4. **`bT` 的 `start()` 调用点**。
+   只在 `E()` 里看到配置和 `addUpdateListener`，
+   没有在 `WatchWhileLayout` 的任何方法里找到 `bT.start()`。
+   可能在别的类通过 getter 访问，也可能是死代码。
+
+5. **`Lbjo` 为什么用 201 点而不是运行时算**。
+   推测是避免每帧解贝塞尔，但没有直接证据。
+
+6. **`0.42` 与 `0.65` 的关系**。
+   `0.42` 是半展开高度比例，`0.65` 是 mini player 高度比例（`0.65 * width`）。
+   两者都在 `Ljna` 里，但没有找到把它们联系起来的代码。
+
+7. **横屏 / 大屏**。
+   `WatchWhileLayout` 有两个 `PlayerPageBehavior`（aL、aM），
+   `Ljna` 里多处用 `aL` 判断、`aM` 取尺寸。
+   横屏可能是另一套几何，没展开看。
+
+
+=====================================================================
+12. 类名映射（本份用到的）
+=====================================================================
+
+  com/google/android/apps/youtube/music/watchpage/ui/WatchWhileLayout
+      bH = 状态枚举，bI = 进度，aG = 封面 CardView，av = 被 behavior 拖的 View
+      ap(Z) = 面板整体 translationY 进出
+      I(Lhui;F) = 唯一的「状态+进度」写入口
+      q()F = 临界进度，r(F)F = 它的反函数
+  com/google/android/apps/youtube/music/watchpage/ui/PlayerPageBehavior
+      ac(MotionEvent,MotionEvent)I = 方向判定
+      onTouchEvent 尾部 = 甩动直接 COLLAPSED
+  Ljnp   BottomSheetCallback 实现
+  Ljna   WatchWhileLayout 的布局管理器
+      p(F) = 进度总入口（几何 + alpha）
+      H(Ljmz,Ljmz,F) = 卡片五元组插值
+      l(II) = 面板高度插值
+      D() = 全屏几何，C() = 圆角
+  Ljmz   卡片几何五元组 (height, width, topMargin, leftMargin, radius)
+  Lbjo   201 点插值器，等价 cubic-bezier(0.4, 0, 0.2, 1)
+  Lgcn   合并 lambda，$cid=1 分支把 animatedValue 发布到进度流
+  Ljnq   ObjectAnimator 监听器，负责 VISIBLE/GONE 的时机
+  Ltsl   ViewDragHelper 的 fork（snapVelocity=200）
+  Lkqq;->aP(View,I,I)  设 LayoutParams 的 w/h
+  Lkqq;->aQ(View,I,I)  设 MarginLayoutParams 的 left/top
+  Ltyj;->ad(F,F,F)     clamp
+  Lagek;->M(F,F,F)     clamp
+  Lazp;->c([F,F)F      数组查表插值
+  Lvyi;->l(I,J,Z)Z     实验开关读取

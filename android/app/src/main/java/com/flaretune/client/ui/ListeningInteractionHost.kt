@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -37,6 +38,11 @@ internal data class ListeningInteractions(
     val clearHistory: () -> Unit,
     val clearQueue: () -> Unit,
     val feedback: (String) -> Unit = {},
+    val pendingPlaylistMultiSelect: State<Pair<String, Long>?> = mutableStateOf(null),
+    val requestPlaylistMultiSelect: (PlaylistSummary) -> Unit = {},
+    val clearPendingPlaylistMultiSelect: () -> Unit = {},
+    val batchAddToPlaylists: (List<Song>, () -> Unit) -> Unit = { songs, _ -> addToPlaylists(songs) },
+    val removeSongsFromPlaylist: (List<Song>, () -> Unit) -> Unit = { _, _ -> },
 )
 internal val LocalListeningInteractions = staticCompositionLocalOf<ListeningInteractions?> { null }
 
@@ -46,7 +52,7 @@ internal fun listeningArtistNames(raw: String): List<String> = raw
     .map(String::trim).filter { Regex("[\\p{L}\\p{N}]").containsMatchIn(it) }
     .distinctBy { it.lowercase(Locale.ROOT) }
 
-private enum class ListeningConfirmation { DELETE_PLAYLIST, CLEAR_HISTORY, CLEAR_QUEUE, REMOVE_SONG }
+private enum class ListeningConfirmation { DELETE_PLAYLIST, CLEAR_HISTORY, CLEAR_QUEUE, REMOVE_SONG, REMOVE_SONGS }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -71,13 +77,23 @@ internal fun ListeningInteractionHost(
     var confirm by remember { mutableStateOf<ListeningConfirmation?>(null) }
     var confirmingPlaylist by remember { mutableStateOf<PlaylistSummary?>(null) }
     var confirmingSong by remember { mutableStateOf<Song?>(null) }
+    var confirmingSongs by remember { mutableStateOf<List<Song>>(emptyList()) }
+    var onBatchRemoveSuccess by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var onBatchAddSuccess by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val pendingPlaylistMultiSelectState = remember { mutableStateOf<Pair<String, Long>?>(null) }
+    var multiSelectNonce by remember { mutableLongStateOf(0L) }
     var artistChoices by remember { mutableStateOf<List<Artist>>(emptyList()) }
     var artistsOpen by remember { mutableStateOf(false) }
     var albumsOpen by remember { mutableStateOf(false) }
-    var statsOpen by remember { mutableStateOf(false) }
     var submittedVersion by remember { mutableStateOf<Long?>(null) }
+    var keepSheetOpenAfterMutation by remember { mutableStateOf(false) }
     var pendingFeedback by remember { mutableStateOf<String?>(null) }
     var coverTarget by remember { mutableStateOf<Pair<String, PlaylistSummary>?>(null) }
+    val songActionsDismiss = remember { FlareSheetDismissHandle() }
+    val targetDismiss = remember { FlareSheetDismissHandle() }
+    val orderDismiss = remember { FlareSheetDismissHandle() }
+    val playlistOptionsDismiss = remember { FlareSheetDismissHandle() }
+    val pickerDismiss = remember { FlareSheetDismissHandle() }
     val latestState by rememberUpdatedState(state)
     val owner = state.instanceUrl + "\n" + state.username
 
@@ -85,15 +101,42 @@ internal fun ListeningInteractionHost(
         song = null; targetSongs = null; playlistOptions = null; formOpen = false
         formPlaylist = null; initialIds = emptyList(); orderPlaylist = null; waitingOrderId = null
         pickerTarget = null; waitingPickerId = null; confirm = null; confirmingPlaylist = null; confirmingSong = null
-        submittedVersion = null
+        confirmingSongs = emptyList(); onBatchRemoveSuccess = null; onBatchAddSuccess = null
+        submittedVersion = null; keepSheetOpenAfterMutation = false; pendingFeedback = null
         actions.closePlaylistSongPicker()
     }
-    fun submit(work: () -> Unit) {
+    fun closeEditorsAnimated() {
+        val activeHandle = when {
+            song != null -> songActionsDismiss
+            targetSongs != null -> targetDismiss
+            orderPlaylist != null -> orderDismiss
+            playlistOptions != null -> playlistOptionsDismiss
+            pickerTarget != null -> pickerDismiss
+            else -> null
+        }
+        if (activeHandle?.dismissWithAction != null) {
+            activeHandle.dismiss { closeEditors() }
+        } else {
+            closeEditors()
+        }
+    }
+    fun submit(
+        keepSheetOpen: Boolean = false,
+        feedback: String? = null,
+        work: () -> Unit,
+    ) {
         if (latestState.libraryMutationBusy) return
         submittedVersion = latestState.libraryMutationVersion
+        keepSheetOpenAfterMutation = keepSheetOpen
+        pendingFeedback = feedback
         work()
     }
-    fun beginIntent() { actions.dismissLibraryMutationNotice(); submittedVersion = null; pendingFeedback = null }
+    fun beginIntent() {
+        actions.dismissLibraryMutationNotice()
+        submittedVersion = null
+        keepSheetOpenAfterMutation = false
+        pendingFeedback = null
+    }
     fun openOrderEditor(target: PlaylistSummary) {
         beginIntent()
         val current = latestState
@@ -126,14 +169,23 @@ internal fun ListeningInteractionHost(
     }
     LaunchedEffect(state.screen, owner) {
         closeEditors(); coverTarget = null; artistChoices = emptyList()
-        artistsOpen = false; albumsOpen = false; statsOpen = false
+        artistsOpen = false; albumsOpen = false
     }
     LaunchedEffect(state.libraryMutationVersion) {
         val previous = submittedVersion
         if (previous != null && state.libraryMutationVersion > previous) {
             val feedbackText = pendingFeedback
+            val keepOpen = keepSheetOpenAfterMutation
             pendingFeedback = null
-            closeEditors()
+            keepSheetOpenAfterMutation = false
+            submittedVersion = null
+            if (!keepOpen) {
+                closeEditorsAnimated()
+            }
+            onBatchRemoveSuccess?.invoke()
+            onBatchRemoveSuccess = null
+            onBatchAddSuccess?.invoke()
+            onBatchAddSuccess = null
             if (feedbackText != null) onFeedback(feedbackText)
         }
     }
@@ -157,16 +209,40 @@ internal fun ListeningInteractionHost(
         ListeningInteractions(
             song = { beginIntent(); song = it },
             createPlaylist = { ids -> beginIntent(); initialIds = ids; formPlaylist = null; formOpen = true },
-            addToPlaylists = { songs -> beginIntent(); targetSongs = songs.distinctBy { it.id } },
+            addToPlaylists = { songs -> beginIntent(); onBatchAddSuccess = null; targetSongs = songs.distinctBy { it.id } },
+            batchAddToPlaylists = { songs, onAdded ->
+                if (songs.isNotEmpty() && !latestState.libraryMutationBusy) {
+                    beginIntent()
+                    onBatchAddSuccess = onAdded
+                    targetSongs = songs.distinctBy { it.id }
+                }
+            },
             playlist = { beginIntent(); playlistOptions = it },
             orderPlaylist = ::openOrderEditor,
             addSongs = ::openSongPicker,
             artists = { artistsOpen = true; actions.refreshArtists() },
             albums = { query -> albumsOpen = true; actions.searchAlbums(query) },
-            statistics = { statsOpen = true; actions.refreshPlayStats() },
+            statistics = { actions.refreshPlayStats() },
             clearHistory = { confirm = ListeningConfirmation.CLEAR_HISTORY },
             clearQueue = { confirm = ListeningConfirmation.CLEAR_QUEUE },
             feedback = { message -> latestFeedback(message) },
+            pendingPlaylistMultiSelect = pendingPlaylistMultiSelectState,
+            requestPlaylistMultiSelect = { target ->
+                onNavigateToContent()
+                if (latestState.selectedPlaylist?.id != target.id) {
+                    actions.openPlaylist(target)
+                }
+                pendingPlaylistMultiSelectState.value = target.id to (++multiSelectNonce)
+            },
+            clearPendingPlaylistMultiSelect = { pendingPlaylistMultiSelectState.value = null },
+            removeSongsFromPlaylist = { songsToRemove, onRemoved ->
+                if (songsToRemove.isNotEmpty() && !latestState.libraryMutationBusy) {
+                    beginIntent()
+                    confirmingSongs = songsToRemove
+                    onBatchRemoveSuccess = onRemoved
+                    confirm = ListeningConfirmation.REMOVE_SONGS
+                }
+            },
         )
     }
     CompositionLocalProvider(LocalListeningInteractions provides interactions) { content() }
@@ -187,42 +263,70 @@ internal fun ListeningInteractionHost(
         )
         val playNextFeedback = stringResource(R.string.ft_feedback_play_next)
         val enqueuedFeedback = stringResource(R.string.ft_feedback_enqueued)
+        val context = LocalContext.current
+        val copiedFeedback = stringResource(R.string.ft_feedback_song_info_copied)
         SongActionsSheet(
             song = selected, favorite = isFavorite,
             busy = state.libraryMutationBusy, notice = state.libraryMutationNotice,
             onToggleFavorite = {
-                pendingFeedback = favoriteFeedback
-                submit { actions.toggleFavorite(selected) }
+                submit(keepSheetOpen = true, feedback = favoriteFeedback) { actions.toggleFavorite(selected) }
             },
             onPlayNext = {
                 actions.playNext(selected)
-                song = null
                 onFeedback(playNextFeedback)
+                songActionsDismiss.dismiss { song = null }
             },
             onEnqueue = {
                 actions.enqueue(listOf(selected))
-                song = null
                 onFeedback(enqueuedFeedback)
+                songActionsDismiss.dismiss { song = null }
             },
-            onAddToPlaylist = { song = null; targetSongs = listOf(selected); beginIntent() },
-            onArtist = {
-                song = null
-                if (relatedArtists.size == 1) {
-                    onNavigateToContent()
-                    actions.openArtist(relatedArtists.single())
-                } else if (relatedArtists.isNotEmpty()) artistChoices = relatedArtists
-            },
-            onAlbum = {
-                song = null
-                relatedAlbum?.let {
-                    onNavigateToContent()
-                    actions.openAlbum(it)
+            onAddToPlaylist = {
+                songActionsDismiss.dismiss {
+                    song = null
+                    targetSongs = listOf(selected)
+                    beginIntent()
                 }
             },
+            onArtist = {
+                songActionsDismiss.dismiss {
+                    song = null
+                    if (relatedArtists.size == 1) {
+                        onNavigateToContent()
+                        actions.openArtist(relatedArtists.single())
+                    } else if (relatedArtists.isNotEmpty()) {
+                        artistChoices = relatedArtists
+                    }
+                }
+            },
+            onAlbum = {
+                songActionsDismiss.dismiss {
+                    song = null
+                    relatedAlbum?.let {
+                        onNavigateToContent()
+                        actions.openAlbum(it)
+                    }
+                }
+            },
+            onDismiss = { if (!state.libraryMutationBusy) song = null },
+            onRemoveFromPlaylist = if (canRemove) {
+                {
+                    songActionsDismiss.dismiss {
+                        confirmingSong = selected
+                        song = null
+                        beginIntent()
+                        confirm = ListeningConfirmation.REMOVE_SONG
+                    }
+                }
+            } else null,
             artistAvailable = relatedArtists.isNotEmpty(),
             albumAvailable = relatedAlbum != null,
-            onDismiss = { if (!state.libraryMutationBusy) song = null },
-            onRemoveFromPlaylist = if (canRemove) {{ confirmingSong = selected; song = null; confirm = ListeningConfirmation.REMOVE_SONG }} else null,
+            onCopyInfo = {
+                copySongInfoToClipboard(context, selected)
+                onFeedback(copiedFeedback)
+                songActionsDismiss.dismiss { song = null }
+            },
+            dismissHandle = songActionsDismiss,
         )
     }
     targetSongs?.let { selected ->
@@ -230,9 +334,18 @@ internal fun ListeningInteractionHost(
             songCount = selected.size, playlists = state.playlists, busy = state.libraryMutationBusy,
             notice = state.libraryMutationNotice, conflict = state.libraryMutationConflict,
             onSubmit = { ids -> submit { actions.addPlaylistSongs(ids, selected.map { it.id }) } },
-            onCreate = { initialIds = selected.map { it.id }; targetSongs = null; formPlaylist = null; formOpen = true; beginIntent() },
-            onDismiss = { if (!state.libraryMutationBusy) targetSongs = null },
+            onCreate = {
+                targetDismiss.dismiss {
+                    initialIds = selected.map { it.id }
+                    targetSongs = null
+                    formPlaylist = null
+                    formOpen = true
+                    beginIntent()
+                }
+            },
+            onDismiss = { if (!state.libraryMutationBusy) { targetSongs = null; onBatchAddSuccess = null } },
             results = state.libraryMutationResults,
+            dismissHandle = targetDismiss,
         )
     }
     if (formOpen) PlaylistDraftDialog(
@@ -244,7 +357,7 @@ internal fun ListeningInteractionHost(
                 if (target == null) actions.createPlaylist(name, description, initialIds)
                 else actions.updatePlaylist(target, name, description)
             }
-        }, onDismiss = { if (!state.libraryMutationBusy) formOpen = false },
+        }, onDismiss = { if (!state.libraryMutationBusy) { formOpen = false; onBatchAddSuccess = null } },
     )
     orderPlaylist?.let { target ->
         PlaylistOrderSheet(
@@ -253,64 +366,97 @@ internal fun ListeningInteractionHost(
             notice = state.libraryMutationNotice, conflict = state.libraryMutationConflict,
             onSubmit = { ids -> submit { actions.replacePlaylistOrder(ids) } },
             onDismiss = { if (!state.libraryMutationBusy) { orderPlaylist = null; if (state.libraryMutationConflict) actions.refreshPlaylist() } },
+            dismissHandle = orderDismiss,
         )
     }
     playlistOptions?.let { target ->
-        FlareModalSheet(onDismissRequest = { playlistOptions = null }) {
-            val absorbBottom = rememberAbsorbBottomOverscroll()
-            Column(Modifier.fillMaxWidth().navigationBarsPadding().nestedScroll(absorbBottom).verticalScroll(rememberScrollState())) {
-                FlareSheetHeader(
-                    title = target.name,
-                    subtitle = stringResource(R.string.ft_library_song_count, target.songCount),
-                    onClose = { playlistOptions = null },
-                )
-                ListeningMenuRow(stringResource(R.string.ft_listening_play_playlist), "playlist_menu_play") {
-                    actions.playPlaylist(target); playlistOptions = null
-                }
-                ListeningMenuRow(stringResource(R.string.ft_listening_shuffle_playlist), "playlist_menu_shuffle") {
-                    actions.playPlaylist(target, true); playlistOptions = null
-                }
-                ListeningMenuRow(stringResource(R.string.ft_listening_add_songs), "playlist_menu_add") {
-                    playlistOptions = null; openSongPicker(target)
-                }
-                ListeningMenuRow(stringResource(R.string.ft_listening_edit_order), "playlist_menu_order") {
+        val latestTarget = state.playlists.firstOrNull { it.id == target.id }
+            ?: state.selectedPlaylist?.takeIf { it.id == target.id }
+            ?: target
+        PlaylistActionsSheet(
+            playlist = latestTarget,
+            loader = imageLoader,
+            busy = state.libraryMutationBusy,
+            onPlayAll = {
+                actions.playPlaylist(latestTarget)
+                playlistOptionsDismiss.dismiss { playlistOptions = null }
+            },
+            onShuffle = {
+                actions.playPlaylist(latestTarget, true)
+                playlistOptionsDismiss.dismiss { playlistOptions = null }
+            },
+            onEnqueue = {
+                actions.enqueuePlaylist(latestTarget)
+                playlistOptionsDismiss.dismiss { playlistOptions = null }
+            },
+            onAddSongs = {
+                playlistOptionsDismiss.dismiss {
                     playlistOptions = null
-                    openOrderEditor(target)
+                    openSongPicker(latestTarget)
                 }
-                if (target.kind != "favorite") {
-                    ListeningMenuRow(stringResource(R.string.ft_listening_edit_playlist), "playlist_menu_edit") {
-                        formPlaylist = target; formOpen = true; playlistOptions = null
-                    }
-                    ListeningMenuRow(stringResource(R.string.ft_listening_change_cover), "playlist_menu_cover") {
-                        coverTarget = owner to target; playlistOptions = null
-                        coverPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                    }
-                    if (target.customCoverUrl != null) ListeningMenuRow(stringResource(R.string.ft_listening_reset_cover), "playlist_menu_reset_cover") {
-                        submit { actions.clearPlaylistCover(target) }
-                    }
-                    ListeningMenuRow(stringResource(R.string.ft_listening_delete_playlist), "playlist_menu_delete") {
-                        confirmingPlaylist = target; playlistOptions = null; confirm = ListeningConfirmation.DELETE_PLAYLIST
+            },
+            onMultiSelect = {
+                playlistOptionsDismiss.dismiss {
+                    playlistOptions = null
+                    interactions.requestPlaylistMultiSelect(latestTarget)
+                }
+            },
+            onEditOrder = {
+                playlistOptionsDismiss.dismiss {
+                    playlistOptions = null
+                    openOrderEditor(latestTarget)
+                }
+            },
+            onEditInfo = if (latestTarget.kind != "favorite") {
+                {
+                    playlistOptionsDismiss.dismiss {
+                        formPlaylist = latestTarget
+                        formOpen = true
+                        playlistOptions = null
                     }
                 }
-                Spacer(Modifier.height(16.dp))
-            }
-        }
+            } else null,
+            onChangeCover = if (latestTarget.kind != "favorite") {
+                {
+                    coverTarget = owner to latestTarget
+                    coverPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    playlistOptionsDismiss.dismiss { playlistOptions = null }
+                }
+            } else null,
+            onResetCover = if (latestTarget.kind != "favorite" && latestTarget.customCoverUrl != null) {
+                { submit { actions.clearPlaylistCover(latestTarget) } }
+            } else null,
+            onDelete = if (latestTarget.kind != "favorite") {
+                {
+                    playlistOptionsDismiss.dismiss {
+                        confirmingPlaylist = latestTarget
+                        playlistOptions = null
+                        confirm = ListeningConfirmation.DELETE_PLAYLIST
+                    }
+                }
+            } else null,
+            onDismiss = { if (!state.libraryMutationBusy) playlistOptions = null },
+            dismissHandle = playlistOptionsDismiss,
+        )
     }
     pickerTarget?.let { target ->
         PlaylistSongPickerSheet(state, actions, imageLoader,
             onSubmit = { ids -> submit { actions.addPlaylistSongs(listOf(target.id), ids) } },
             onDismiss = { if (!state.libraryMutationBusy) { pickerTarget = null; actions.closePlaylistSongPicker() } },
+            dismissHandle = pickerDismiss,
         )
     }
     confirm?.let { operation ->
+        val removedFeedbackText = stringResource(R.string.ft_feedback_removed_playlist_songs)
         val title = stringResource(when (operation) {
             ListeningConfirmation.DELETE_PLAYLIST -> R.string.ft_listening_delete_playlist
             ListeningConfirmation.CLEAR_HISTORY -> R.string.ft_listening_clear_history
             ListeningConfirmation.CLEAR_QUEUE -> R.string.ft_listening_clear_queue
             ListeningConfirmation.REMOVE_SONG -> R.string.ft_listening_remove_song
+            ListeningConfirmation.REMOVE_SONGS -> R.string.ft_listening_remove_song
         })
         AlertDialog(
-            onDismissRequest = { if (!state.libraryMutationBusy) confirm = null },
+            onDismissRequest = { if (!state.libraryMutationBusy) { confirm = null; onBatchRemoveSuccess = null } },
             title = { Text(title) }, text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     Text(when (operation) {
@@ -318,15 +464,19 @@ internal fun ListeningInteractionHost(
                         ListeningConfirmation.CLEAR_HISTORY -> stringResource(R.string.ft_listening_clear_history_message)
                         ListeningConfirmation.CLEAR_QUEUE -> stringResource(R.string.ft_listening_clear_queue_message)
                         ListeningConfirmation.REMOVE_SONG -> stringResource(R.string.ft_listening_remove_message, confirmingSong?.title.orEmpty())
+                        ListeningConfirmation.REMOVE_SONGS -> stringResource(R.string.ft_listening_remove_songs_message, confirmingSongs.size)
                     })
                     state.libraryMutationNotice?.let { Notice(it) }
                 }
-            }, dismissButton = { TextButton(onClick = { confirm = null }, enabled = !state.libraryMutationBusy) { Text(stringResource(R.string.ft_library_cancel)) } },
+            }, dismissButton = { TextButton(onClick = { confirm = null; onBatchRemoveSuccess = null }, enabled = !state.libraryMutationBusy) { Text(stringResource(R.string.ft_library_cancel)) } },
             confirmButton = {
                 TextButton(enabled = !state.libraryMutationBusy, modifier = Modifier.testTag("listening_confirm"), onClick = {
                     when (operation) {
                         ListeningConfirmation.DELETE_PLAYLIST -> confirmingPlaylist?.let { target -> submit { actions.deletePlaylist(target) } }
                         ListeningConfirmation.REMOVE_SONG -> confirmingSong?.let { selected -> submit { actions.removePlaylistSongs(listOf(selected.id)) } }
+                        ListeningConfirmation.REMOVE_SONGS -> if (confirmingSongs.isNotEmpty()) {
+                            submit(feedback = removedFeedbackText) { actions.removePlaylistSongs(confirmingSongs.map { it.id }) }
+                        }
                         ListeningConfirmation.CLEAR_HISTORY -> { actions.clearHistory(); confirm = null }
                         ListeningConfirmation.CLEAR_QUEUE -> { actions.clearQueue(); confirm = null }
                     }
@@ -335,14 +485,18 @@ internal fun ListeningInteractionHost(
         )
     }
     if (artistChoices.isNotEmpty()) FlareModalSheet(onDismissRequest = { artistChoices = emptyList() }) {
+        val sheetDismiss = LocalFlareSheetDismiss.current
         val absorbBottom = rememberAbsorbBottomOverscroll()
         Column(Modifier.fillMaxWidth().navigationBarsPadding().nestedScroll(absorbBottom).verticalScroll(rememberScrollState())) {
             FlareSheetHeader(title = stringResource(R.string.ft_listening_artists), onClose = { artistChoices = emptyList() })
             artistChoices.forEach { artist ->
                 ListeningMenuRow(artist.name, "artist_chooser_" + (artist.id ?: artist.name)) {
-                    artistChoices = emptyList()
-                    onNavigateToContent()
-                    actions.openArtist(artist)
+                    val finishOpen = {
+                        artistChoices = emptyList()
+                        onNavigateToContent()
+                        actions.openArtist(artist)
+                    }
+                    sheetDismiss?.invoke(finishOpen) ?: finishOpen()
                 }
             }
             Spacer(Modifier.height(16.dp))
@@ -350,7 +504,6 @@ internal fun ListeningInteractionHost(
     }
     if (artistsOpen) ArtistBrowseSheet(state, actions, imageLoader) { artistsOpen = false }
     if (albumsOpen) ListeningAlbumSearchSheet(state, actions, imageLoader) { albumsOpen = false }
-    if (statsOpen) ListeningStatsSheet(state, actions, imageLoader) { statsOpen = false }
 }
 
 @Composable
@@ -365,9 +518,15 @@ internal fun ListeningMenuRow(label: String, tag: String, enabled: Boolean = tru
 private fun PlaylistSongPickerSheet(
     state: ClientUiState, actions: ClientActions, loader: ImageLoader?,
     onSubmit: (List<String>) -> Unit, onDismiss: () -> Unit,
+    dismissHandle: FlareSheetDismissHandle? = null,
 ) {
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
-    FlareModalSheet(onDismissRequest = onDismiss, sheetGesturesEnabled = !state.libraryMutationBusy) {
+    FlareModalSheet(
+        onDismissRequest = onDismiss,
+        sheetGesturesEnabled = !state.libraryMutationBusy,
+        dismissHandle = dismissHandle,
+    ) {
+        val sheetDismiss = LocalFlareSheetDismiss.current
         val absorbBottom = rememberAbsorbBottomOverscroll()
         Column(Modifier.fillMaxWidth().fillMaxHeight(.90f).navigationBarsPadding().nestedScroll(absorbBottom).testTag("playlist_song_picker")) {
             FlareSheetHeader(
@@ -411,7 +570,10 @@ private fun PlaylistSongPickerSheet(
             }
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.ft_listening_selected_count, selected.size), Modifier.weight(1f))
-                TextButton(onClick = onDismiss, enabled = !state.libraryMutationBusy) { Text(stringResource(R.string.ft_library_cancel)) }
+                TextButton(
+                    onClick = { sheetDismiss?.invoke(onDismiss) ?: onDismiss() },
+                    enabled = !state.libraryMutationBusy,
+                ) { Text(stringResource(R.string.ft_library_cancel)) }
                 Button(onClick = { onSubmit(selected.toList()) }, enabled = selected.isNotEmpty() && !state.libraryMutationBusy && !state.libraryMutationConflict,
                     modifier = Modifier.testTag("playlist_picker_submit")) { Text(stringResource(R.string.ft_listening_add_songs)) }
             }

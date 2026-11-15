@@ -5,6 +5,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.SimpleBasePlayer.State
 import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 
@@ -16,6 +17,8 @@ import com.google.common.util.concurrent.ListenableFuture
  */
 @androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 internal class PersistentTransportPlayer(player: Player) : ForwardingSimpleBasePlayer(player) {
+    internal val delegateExoPlayer: ExoPlayer? get() = getPlayer() as? ExoPlayer
+
     override fun getState(): State {
         val state = super.getState()
         val delegate = getPlayer()

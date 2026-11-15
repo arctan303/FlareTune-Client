@@ -33,6 +33,7 @@ interface MusicApi {
     fun browseAlbums(query: String = "", offset: Int = 0, language: String = "all", artist: String? = null): AlbumPage = throw ApiFailure(Failure.REQUEST)
     fun artistPhotos(name: String): ArtistPhotos = throw ApiFailure(Failure.REQUEST)
     fun languageCounts(): Map<String, Int> = throw ApiFailure(Failure.REQUEST)
+    fun languageCounts(includeUntagged: Boolean): Map<String, Int> = languageCounts()
     fun randomSongs(limit: Int = 20, exclude: List<String> = emptyList()): List<Song> = throw ApiFailure(Failure.REQUEST)
     fun spotlightArtist(exclude: List<String> = emptyList()): SpotlightArtist? = throw ApiFailure(Failure.REQUEST)
     fun playStats(limit: Int = 20, summaryOnly: Boolean = false): PlayStats = throw ApiFailure(Failure.REQUEST)
@@ -43,6 +44,9 @@ interface MusicApi {
     fun imageSlot(purpose: String, targetId: String): ImageSlot = throw ApiFailure(Failure.REQUEST)
     fun uploadPlaylistCover(bytes: ByteArray): UserImage = throw ApiFailure(Failure.REQUEST)
     fun setPlaylistCover(id: String, imageId: String?, revision: Long): ImageSlot = throw ApiFailure(Failure.REQUEST)
+    fun uploadAvatar(bytes: ByteArray): UserImage = throw ApiFailure(Failure.REQUEST)
+    fun setAvatar(imageId: String?, revision: Long): ImageSlot = throw ApiFailure(Failure.REQUEST)
+    fun updateDisplayName(displayName: String): Account = throw ApiFailure(Failure.REQUEST)
     fun discardUserImage(id: String): Unit = throw ApiFailure(Failure.REQUEST)
 }
 

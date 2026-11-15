@@ -10,6 +10,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
+import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
 import coil.ImageLoader
 import com.flaretune.client.data.ActiveConnection
@@ -40,13 +41,32 @@ class AndroidPlaybackGateway(private val context: Context, private val runtime: 
     override val state = MutableStateFlow(PlaybackSnapshot())
     private val livePositionMs = MutableStateFlow(0L)
     override val positionMsFlow: StateFlow<Long> = livePositionMs
+    override val sleepTimerFlow: StateFlow<SleepTimerState> get() = runtime.sleepTimer.state
+    override fun setSleepTimer(minutes: Int) {
+        if (controller != null && runtime.connection?.network?.isActive == true) runtime.sleepTimer.setSleepTimer(minutes)
+    }
+    override fun setSleepTimerEndOfTrack() {
+        if (controller?.currentMediaItem != null) runtime.sleepTimer.setSleepTimerEndOfTrack()
+    }
+    override fun setSleepTimerFinishCurrentTrack(enabled: Boolean) {
+        val timer = runtime.sleepTimer
+        val timedActive = timer.state.value.mode == SleepTimerMode.TIMED
+        if (timedActive || !enabled || controller?.currentMediaItem != null) {
+            timer.setSleepTimerFinishCurrentTrack(enabled)
+        }
+    }
+    override fun cancelSleepTimer() { runtime.sleepTimer.cancel() }
     override val imageLoader: ImageLoader? get() = runtime.imageLoader
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val visible = MutableStateFlow(false)
     private var future: ListenableFuture<MediaController>? = null
     private var controller: MediaController? = null
     private val listener = object : Player.Listener {
-        override fun onEvents(player: Player, events: Player.Events) { update(player) }
+        override fun onEvents(player: Player, events: Player.Events) {
+            // A temporary service fade is not a user gain preference and must not flood ClientUiState.
+            if (runtime.sleepTimer.isFading && events.size() == 1 && events.contains(Player.EVENT_VOLUME_CHANGED)) return
+            update(player)
+        }
     }
     init {
         scope.launch {
@@ -96,7 +116,8 @@ class AndroidPlaybackGateway(private val context: Context, private val runtime: 
         update(connected)
     }
     private fun update(player: Player) {
-        val snapshot = player.playbackSnapshot()
+        val actual = player.playbackSnapshot()
+        val snapshot = runtime.sleepTimer.displayedVolume?.let { actual.copy(volume = it) } ?: actual
         state.value = snapshot
         livePositionMs.value = snapshot.positionMs
     }
@@ -108,14 +129,26 @@ class AndroidPlaybackGateway(private val context: Context, private val runtime: 
         if (songs.isEmpty() || index !in songs.indices) return
         controller?.run { shuffleModeEnabled = shuffle; setMediaItems(songs.map { it.item() }, index, 0); prepare(); play() }
     }
+    override fun playSingleAsNext(song: Song): Boolean {
+        if (!song.canPlay) return false
+        val currentController = controller ?: return false
+        val command = SessionCommand(PLAYBACK_PLAY_SINGLE_NEXT, Bundle.EMPTY)
+        if (currentController.availableSessionCommands.contains(command)) {
+            currentController.sendCustomCommand(command, song.toSingleNextBundle())
+            return true
+        }
+        return playSingleAsNext(currentController, song.item())
+    }
     override fun enqueue(songs: List<Song>, next: Boolean) {
         controller?.let { enqueuePlayerSongs(it, songs.filter { song -> song.canPlay }.map { song -> song.item() }, next) }
     }
     override fun clearQueue() {
+        runtime.sleepTimer.cancel()
         controller?.run { stop(); clearMediaItems() }
         runtime.queueRepository?.save(PlaybackSnapshot())
         livePositionMs.value = 0L
         state.value = state.value.copy(current = null, queue = emptyList(), currentIndex = -1,
+            previousQueueIndex = null, nextQueueIndex = null,
             playing = false, buffering = false, positionMs = 0, durationMs = 0, failed = false)
     }
     override fun setVolume(volume: Float) { if (volume.isFinite()) controller?.volume = volume.coerceIn(0f, 1f) }
@@ -150,6 +183,8 @@ class AndroidPlaybackGateway(private val context: Context, private val runtime: 
     }
     override fun retry() { controller?.run { prepare(); play() } }
     override fun stopAndClear() {
+        runtime.sleepTimer.cancel()
+        runtime.detachLocalData()
         controller?.run { stop(); clearMediaItems() }
         disconnect()
         runtime.clear()

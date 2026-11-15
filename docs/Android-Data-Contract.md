@@ -104,7 +104,7 @@ CONTINUE-LISTENING-20261113：继续收听按近期/收藏/累计/搜索4/3/3/2�
 
 历史由实际Media3 Service的current+isPlaying事件记录；整队列、暂停/恢复、拖动或仅恢复暂停队列不记录为已经听过。最近播放倒序、同songId去重、最多200条；再次真正切回该曲会更新位置。VM销毁后服务播放仍可记录，单纯页面存活不作为记录条件。
 
-`HistoryEntry`仅有id/title/artist/album/durationSeconds/language/playedAt；按规范化origin+accountId的SHA-256分键存储，v1 JSON≤512KiB。绝不保存audioUrl/coverUrl/Cookie/CSRF/resultRef或临时签名链接。退出/换实例/换账号清旧存储，并通过generation和串行IO拒绝旧读写复活。
+`HistoryEntry`仅有id/title/artist/album/durationSeconds/language/playedAt；按规范化origin+accountId的SHA-256分键存储，v1 JSON≤512KiB。绝不保存audioUrl/coverUrl/Cookie/CSRF/resultRef或临时签名链接。切号/退出以detach撤销旧内存绑定并保留该身份磁盘历史；generation和串行IO拒绝旧读写发布到新账号。显式历史清理仍删除当前身份记录。此规则由2026-11-13多账号请求替代原切号删除旧存储。
 
 UI可能先得到audioUrl为空的安全占位Song；不能直接把它交给自行创建的播放器。playHistorySong始终用当前会话解析单曲；后台hydrate解析只改善当前界面元数据，不代替点击时的新验证。≤80字符ID批量解析每批≤200且序列化UTF-8≤60KiB；81..256字符ID最多4并发单曲读取。缺失项跳过，错误通过historyNotice显示。
 
@@ -125,7 +125,7 @@ SavedPlaybackQueue(entries, currentIndex, positionMs = 0, shuffle = false, repea
 - 冷启动先核验当前会话，再重新解析媒体，恢复队列与模式，**保持暂停**；用户点击播放后才出声。若缺失曲目，保留剩余出现顺序；当前曲目缺失则取后继可用项（没有后继取末项）从0播放位置恢复，并给queueNotice提示。
 - 已有真实queue或新的播放/队列编辑动作优先，迟到restore不得覆盖。恢复不从历史伪造，旧dev.2从未保存的队列无法事后还原。
 - queueRestoring覆盖读盘/解析/设置的恢复阶段；queueNotice区分持久化失败与部分恢复。正常保存后清存储失败提示，但不能抹掉仍有效的缺曲提示。VM重建立即消费Application仓库已有notice，并只收当前有效身份的后续notice。
-- 空queue保存清本身份文件但保持绑定；退出clear立即退绑定/清状态，再串行删除旧文件。迟到load/write与A→B→A不得复活旧数据；删除失败身份先隔离，后续重试成功才允许读写。
+- 空queue保存清本身份文件但保持绑定；切号/退出detach立即退绑定/清状态并保留磁盘快照，必须先于Player清空；显式clear仍串行删除旧文件。迟到load/write与A→B→A不得复活旧数据；删除失败身份先隔离，后续重试成功才允许读写。
 - 仅空播放器的失败恢复使用retryQueueRestore；播放中的STORAGE_FAILED是保存故障提示，不应以重载旧文件覆盖正在播放的用户队列。
 
 ## 7. 分类与错误
@@ -208,3 +208,27 @@ Song 新增默认兼容的 source、artists:List<SongArtist>、artistId、albumI
 ## 系统媒体切歌边界（2026-11-13）
 
 用户明确非空队列的上一首/下一首不能因首尾边界消失。系统会话使用与底层Player保持事件一致的转发适配，持续公布可处理的标准切歌命令；手动上一曲沿用previousTrack，下一曲按原Timeline/随机/循环处理，无下一项时不擅自绕回。空队列撤回命令，直播不伪造seek。软件图标尚未选定；本轮仅提供成对SVG候选，品牌资源不随按钮修复部署。详细实现、验证和开发包边界见[本轮任务](tasks/android-system-transport-20261113.md)。
+
+
+## 多账号与设置底层接口（2026-11-13）
+
+本批只修改数据/会话/播放/VM及单元测试，页面布局样式和侧边栏/设置页接线由下一棒完成。
+
+- SessionStore的readAccounts/writeAccounts原子读写SavedAccountsSnapshot。所有账号信息和Cookie整体AES-GCM加密（沿用AndroidKeyStore旧alias与AAD），不含密码/CSRF。encrypted_session首次读取迁移为暂定origin|记录，验活后补全真实accountId及规范键，不掉有效会话；移除单条不删除共享密钥。
+- ClientUiState.savedAccounts只含accountKey/origin/accountId/username/displayName/active/needsReauth，不含Cookie。beginAddAccount/cancelAddAccount支持取消返回；switchAccount验活目标，清旧播放/活跃内存/图片内存、取消休眠并更新navigationIdentity，恢复目标账号历史/队列并加载统计/歌单库。过期只将目标标needsReauth并预填连接表单。logout只移除当前凭据回CONNECT；removeSavedAccount移除当前时按最近使用顺序尝试其他有效账号。
+- PlaybackRuntime在清空Player前detach仓库，持久队列不被旧Service销毁的空快照覆盖；图片diskCache以规范origin/accountId的SHA-256分目录，旧共享目录不再复用；Runtime每个身份只创建并复用一个DiskCache，避免A→B→A产生多个journal持有者。显式clearImageCache只清当前账号图片缓存，反馈imageCacheClearResult（CLEARING/CLEARED/FAILED/UNAVAILABLE）。
+- PlaybackGateway.sleepTimerFlow / ClientViewModel.sleepTimerFlow为独立StateFlow<SleepTimerState>，只含mode与endElapsedRealtimeMs；setSleepTimer(minutes)、setSleepTimerEndOfTrack、cancelSleepTimer经ClientActions暴露。Service调度+限时唤醒锁，不依赖Composable；结束淡出pause并恢复gain，自动OFF。手动跳曲/替换列表取消曲终休眠。
+- keepScreenOnEnabled默认true，通过setKeepScreenOnEnabled持久化至playback_display_v1，失败保留原选择；本批不修改全屏播放器现有keepScreenOn接线。
+- 验证、R2审查及硬件边界见[多账号与休眠任务](tasks/android-accounts-sleep-timer-20261113.md)。Keystore硬件、真实锁屏精度与OEM后台策略仍需设备验证，JVM测试不替代真机证据。
+
+## 第二轮体验与队列保护契约（2026-11-15 已实现与审查）
+
+对应任务计划见 [第二轮体验与队列优化规划](tasks/android-ux-round2-20261115.md)，下列契约已完成 Batch A / B / C 接线并通过单测、UI 测试及独立审查（A-1 / B-1 / C-1）：
+
+- **队列相邻预览索引与防闪烁同步（Batch A）**：`PlaybackSnapshot` 需支持在随机/循环模式下仍稳定提供可用前后曲目预览索引（或由 `QueuePlaybackOperations` 解析真实的队列前一项/下一项，而不受 `<= 3000ms` 播放进度阈值屏蔽）；`QueuePanel` 拖拽落点提交时维持乐观条目顺序与稳定唯一键（含重复曲目唯一出现序号），待播放器回调到达且同源确认后再收敛，避免重置列表与视觉闪烁；首次打开队列时定位并居中滚动至 `currentIndex`。
+- **单曲插播与队列快照历史（Batch B）**：
+  - 新增显式语义动作 `playSingleAsNext(song)`（插播到当前曲目下一首并立即切播，保留原有队列上下游），供搜索结果单曲点击、播放历史单曲点击及首页“来自你的曲库”单曲点击调用；列表/歌单/专辑/继续收听/随机推荐/“播放全部”按钮继续调用 `playSongs` 整队替换并播放。
+  - 按规范 `HistoryIdentity`（`origin + "|" + accountId`）持久化四类最近记录：播放单曲（现有 `PlayHistoryPage` 底座）、访问过的歌手、播放过的专辑/歌单，以及**队列替换前快照**（仅当当前队列非空且即将被整队替换/切换播放时捕获，固定容量滚动淘汰如 15–20 条），提供一键恢复历史队列动作（`restoreQueueSnapshot(snapshotId)`）。
+- **首页“来自你的曲库”按语种比例取最新与歌单排序/批量选择（Batch C）**：
+  - `FlareTune` 服务端 `/api/songs?counts=language` 及 `/api/songs?language=...` 扩展对未打标语种（`language IS NULL OR TRIM(language) = ''`）的计数与筛选支持（`untagged`）；客户端首页按各语种（含未打标）曲库占比分配展示名额，并在每个语种桶内按入库最新顺序（`sort=desc`）拉取合并，兼容未升级服务端做降级合并。
+  - 歌单库（`PlaylistSortMode`：自定义排序 / 最近更新 / 名称 / 曲目数）与歌单内歌曲排序（`PlaylistSongSortMode`：自定义 / 标题 / 歌手 / 最近加入及升序降序快捷键）持久化至本机轻量存储；歌单详情、搜索结果、全部歌曲与专辑详情接入统一多选态（`selectedSongIds`）与批量底部操作（下一首播放、加入队列、加入歌单、批量移除）。

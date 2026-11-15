@@ -6,6 +6,7 @@ import androidx.media3.common.Player
 import com.flaretune.client.model.Song
 import com.flaretune.client.playback.item
 import com.flaretune.client.playback.movePlayerQueueItem
+import com.flaretune.client.playback.playSingleAsNext
 import com.flaretune.client.playback.playbackSnapshot
 import com.flaretune.client.playback.previousTrack
 import com.flaretune.client.playback.removePlayerQueueItem
@@ -103,6 +104,37 @@ class QueuePlaybackOperationsTest {
         assertTrue(snapshot.queue.isEmpty())
     }
 
+    @Test fun playSingleAsNextOnEmptyPlayerSetsSingleItemAndStartsPlayback() {
+        val fixture = PlayerCalls(items = emptyList(), currentIndex = -1, playbackState = Player.STATE_IDLE)
+        val single = track("single").item()
+        assertTrue(playSingleAsNext(fixture.player, single))
+        assertEquals(listOf("setMediaItems", "prepare", "play"), fixture.mutations.map { it.name })
+        assertEquals(listOf(single), fixture.mutations[0].arguments[0])
+        assertEquals(0, fixture.mutations[0].arguments[1])
+        assertEquals(0L, fixture.mutations[0].arguments[2])
+    }
+
+    @Test fun playSingleAsNextInsertsAfterCurrentIndexSeeksAndPreservesQueue() {
+        val queue = listOf(track("a").item(), track("b").item(), track("c").item())
+        val fixture = PlayerCalls(items = queue, currentIndex = 1, playbackState = Player.STATE_READY)
+        val inserted = track("next-hit").item()
+        assertTrue(playSingleAsNext(fixture.player, inserted))
+        assertEquals(listOf("addMediaItem", "seekToDefaultPosition", "play"), fixture.mutations.map { it.name })
+        assertEquals(2, fixture.mutations[0].arguments[0])
+        assertSame(inserted, fixture.mutations[0].arguments[1])
+        assertEquals(2, fixture.mutations[1].arguments[0])
+        assertFalse(fixture.mutations.any { it.name == "setMediaItems" })
+    }
+
+    @Test fun playSingleAsNextPreparesWhenNonEmptyPlayerIsIdleOrEnded() {
+        val queue = listOf(track("a").item(), track("b").item())
+        val fixture = PlayerCalls(items = queue, currentIndex = 0, playbackState = Player.STATE_ENDED)
+        val inserted = track("resumed").item()
+        assertTrue(playSingleAsNext(fixture.player, inserted))
+        assertEquals(listOf("addMediaItem", "seekToDefaultPosition", "prepare", "play"), fixture.mutations.map { it.name })
+        assertEquals(1, fixture.mutations[0].arguments[0])
+    }
+
     private fun track(id: String) = Song(id, id, "Singer", "Album", 20.0,
         "https://music.example/media/$id.flac", "https://music.example/media/$id.jpg")
 
@@ -116,6 +148,7 @@ class QueuePlaybackOperationsTest {
         items: List<MediaItem>? = null,
         currentIndex: Int = 0,
         duration: Long = 20_000,
+        private val playbackState: Int = Player.STATE_READY,
     ) {
         val calls = mutableListOf<Call>()
         val mutations get() = calls.filterNot { it.name.startsWith("get") || it.name.startsWith("is") || it.name.startsWith("has") }
@@ -138,7 +171,7 @@ class QueuePlaybackOperationsTest {
                         "getRepeatMode" -> Player.REPEAT_MODE_ALL
                         "getVolume" -> .6f
                         "isPlaying", "getPlayWhenReady" -> true
-                        "getPlaybackState" -> Player.STATE_READY
+                        "getPlaybackState" -> playbackState
                         else -> when (method.returnType) {
                             java.lang.Boolean.TYPE -> false
                             java.lang.Integer.TYPE -> 0

@@ -560,6 +560,72 @@ class LyricsCoordinatorTest {
         assertEquals(LyricTranslationStatus.PENDING, coordinator.state.value.translationState)
         assertEquals(ClientNotice.INVALID_RESPONSE, coordinator.state.value.notice)
     }
+
+    @Test fun initialFailedTranslationWithSupportedRefPollsBoundedAndActivatesWhenReady() = runTest {
+        val original = listOf(LyricLine("hello", timeSeconds = 1.0))
+        val translated = listOf(LyricLine("hello", translation = "你好", timeSeconds = 1.0))
+        val api = LyricsFakeApi().apply {
+            read = { _, _ ->
+                if (reads.size < 3) {
+                    lyricDoc(
+                        ref = "ref-grace-${reads.size}",
+                        lines = original,
+                        translationState = LyricTranslationStatus.FAILED,
+                        supported = true,
+                    )
+                } else {
+                    lyricDoc(
+                        ref = "ref-grace-ready",
+                        lines = translated,
+                        translationState = LyricTranslationStatus.READY,
+                        supported = true,
+                        translationLanguage = "zh-CN",
+                        translationTargetLanguage = "zh-CN",
+                    )
+                }
+            }
+        }
+        val coordinator = LyricsCoordinator(this, StandardTestDispatcher(testScheduler), 1_000, 6)
+        coordinator.activate(LyricsFakeConnections(api).current, song)
+        runCurrent()
+        assertEquals(1, api.reads.size)
+        assertTrue(coordinator.state.value.polling)
+        assertEquals(LyricTranslationStatus.FAILED, coordinator.state.value.translationState)
+
+        advanceTimeBy(1_000); runCurrent()
+        assertEquals(2, api.reads.size)
+        assertTrue(coordinator.state.value.polling)
+
+        advanceTimeBy(1_000); runCurrent()
+        assertEquals(listOf(null, "ref-grace-1", "ref-grace-2"), api.reads.map { it.second })
+        assertTrue(api.translations.isEmpty())
+        assertFalse(coordinator.state.value.polling)
+        assertEquals(LyricTranslationStatus.READY, coordinator.state.value.translationState)
+        assertEquals("你好", coordinator.state.value.lines.first().translation)
+    }
+
+    @Test fun initialFailedGracePollStopsAtBoundedBudgetAndSettlesToFailed() = runTest {
+        val original = listOf(LyricLine("hello", timeSeconds = 1.0))
+        val api = LyricsFakeApi().apply {
+            read = { _, _ ->
+                lyricDoc(
+                    ref = "ref-stuck",
+                    lines = original,
+                    translationState = LyricTranslationStatus.FAILED,
+                    supported = true,
+                )
+            }
+        }
+        val coordinator = LyricsCoordinator(this, StandardTestDispatcher(testScheduler), 1_000, 6)
+        coordinator.activate(LyricsFakeConnections(api).current, song)
+        advanceUntilIdle()
+        // Initial read + bounded minOf(maxPollAttempts, 4) grace reads = 5 total GET reads.
+        assertEquals(5, api.reads.size)
+        assertTrue(api.translations.isEmpty())
+        assertFalse(coordinator.state.value.polling)
+        assertEquals(LyricStatus.READY, coordinator.state.value.status)
+        assertEquals(LyricTranslationStatus.FAILED, coordinator.state.value.translationState)
+    }
 }
 
 private fun lyricDoc(

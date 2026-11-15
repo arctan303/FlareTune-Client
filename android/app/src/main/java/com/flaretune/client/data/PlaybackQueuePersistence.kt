@@ -246,6 +246,18 @@ class PlaybackQueueRepository(
         }
     }
 
+    /** Revoke ownership before the old Player emits its empty teardown snapshot. */
+    fun detach() {
+        synchronized(lock) {
+            identity = null
+            generation++
+            mutableState.value = null
+            mutableLoaded.value = false
+            mutableNotice.value = null
+            enqueue(Command.Clear(generation, null))
+        }
+    }
+
     fun clear() {
         synchronized(lock) {
             val previous = identity

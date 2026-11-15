@@ -1,9 +1,13 @@
 package com.flaretune.client.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -12,6 +16,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import coil.ImageLoader
+import com.flaretune.client.data.sortPlaylistEntries
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -26,6 +32,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
@@ -54,6 +61,21 @@ import com.flaretune.client.model.PlaylistTargetResult
 import com.flaretune.client.model.Song
 import com.flaretune.client.ui.theme.FlareTokens
 
+/** Formats "Title - Artist" (or just title if artist is blank) for one-click song sharing/copying. */
+internal fun formatSongCopyText(song: Song): String {
+    val title = song.title.trim()
+    val artist = song.artist.trim()
+    return if (artist.isNotEmpty()) "$title - $artist" else title
+}
+
+/** Copies formatted song metadata to the Android system clipboard. */
+internal fun copySongInfoToClipboard(context: Context, song: Song): String {
+    val text = formatSongCopyText(song)
+    val clipboard = context.getSystemService(ClipboardManager::class.java)
+    clipboard?.setPrimaryClip(ClipData.newPlainText(song.title, text))
+    return text
+}
+
 /** Pure UI: the owner performs mutations, supplies busy/errors, and closes on success. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -72,6 +94,8 @@ fun SongActionsSheet(
     onRemoveFromPlaylist: (() -> Unit)? = null,
     artistAvailable: Boolean = song.artist.isNotBlank(),
     albumAvailable: Boolean = song.album.isNotBlank(),
+    onCopyInfo: (() -> Unit)? = null,
+    dismissHandle: FlareSheetDismissHandle? = null,
 ) {
     val subtitle = remember(song.artist, song.durationSeconds) {
         listOfNotNull(
@@ -79,7 +103,7 @@ fun SongActionsSheet(
             song.durationSeconds.takeIf { it > 0 }?.let { formatTime((it * 1000).toLong()) },
         ).joinToString(" · ")
     }
-    LibrarySheet(busy, onDismiss, "song_actions_sheet") {
+    LibrarySheet(busy, onDismiss, "song_actions_sheet", dismissHandle = dismissHandle) {
         Row(
             Modifier.fillMaxWidth().padding(bottom = FlareTokens.SpaceXs),
             verticalAlignment = Alignment.CenterVertically,
@@ -103,10 +127,11 @@ fun SongActionsSheet(
                     )
                 }
             }
+            val sheetDismiss = LocalFlareSheetDismiss.current
             ActionIcon(
                 icon = ClientIcons.Close,
                 description = stringResource(R.string.ft_close),
-                onClick = onDismiss,
+                onClick = { sheetDismiss?.invoke(onDismiss) ?: onDismiss() },
                 enabled = !busy,
                 modifier = Modifier.testTag("song_actions_close"),
             )
@@ -136,7 +161,7 @@ fun SongActionsSheet(
             )
             SongQuickActionTile(
                 label = stringResource(if (favorite) R.string.ft_library_quick_favorited else R.string.ft_library_quick_favorite),
-                icon = if (favorite) ClientIcons.Heart else ClientIcons.HeartOutlined,
+                icon = if (favorite) ClientIcons.StarFilled else ClientIcons.Star,
                 enabled = !busy,
                 selected = favorite,
                 stateText = stringResource(if (favorite) R.string.ft_library_unfavorite else R.string.ft_library_favorite),
@@ -151,6 +176,20 @@ fun SongActionsSheet(
         onRemoveFromPlaylist?.let {
             LibraryActionRow(R.string.ft_library_remove_song, ClientIcons.Trash, !busy, "song_action_remove", it)
         }
+        val context = LocalContext.current
+        LibraryActionRow(
+            R.string.ft_library_copy_song_info,
+            ClientIcons.Copy,
+            !busy,
+            "song_action_copy_info",
+            onClick = {
+                if (onCopyInfo != null) {
+                    onCopyInfo()
+                } else {
+                    copySongInfoToClipboard(context, song)
+                }
+            },
+        )
         LibraryBusy(busy)
     }
 }
@@ -303,6 +342,7 @@ fun PlaylistTargetSheet(
     onCreate: () -> Unit,
     onDismiss: () -> Unit,
     results: List<PlaylistTargetResult> = emptyList(),
+    dismissHandle: FlareSheetDismissHandle? = null,
 ) {
     val choices = playlists.distinctBy { it.id }
     val byId = choices.associateBy { it.id }
@@ -324,7 +364,7 @@ fun PlaylistTargetSheet(
     val pendingIds = choices.filter { it.id in pendingSelection }.map { it.id }
     val valid = validSongCount && pendingIds.isNotEmpty() && selected.size <= maxTargets && pendingSelection.all { it in byId }
     val visibleResults = (acknowledgements.values + results).associateBy { it.playlistId }.values
-    LibrarySheet(busy, onDismiss, "playlist_target_sheet") {
+    LibrarySheet(busy, onDismiss, "playlist_target_sheet", dismissHandle = dismissHandle) {
         Text(stringResource(R.string.ft_library_choose_playlists), style = MaterialTheme.typography.titleLarge)
         Text(stringResource(R.string.ft_library_target_count, selected.size, maxTargets), color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (!validSongCount) Text(stringResource(R.string.ft_library_invalid_song_count), color = MaterialTheme.colorScheme.error)
@@ -613,6 +653,172 @@ fun PlaylistOrderDialog(
 }
 
 @Composable
+internal fun PlaylistActionsSheet(
+    playlist: PlaylistSummary,
+    loader: ImageLoader?,
+    busy: Boolean,
+    onPlayAll: () -> Unit,
+    onShuffle: () -> Unit,
+    onEnqueue: () -> Unit,
+    onAddSongs: () -> Unit,
+    onMultiSelect: () -> Unit,
+    onEditOrder: () -> Unit,
+    onEditInfo: (() -> Unit)? = null,
+    onChangeCover: (() -> Unit)? = null,
+    onResetCover: (() -> Unit)? = null,
+    onDelete: (() -> Unit)? = null,
+    onDismiss: () -> Unit,
+    dismissHandle: FlareSheetDismissHandle? = null,
+) {
+    val isFav = playlist.kind == "favorite"
+    val previewCovers = remember(playlist) { playlist.previewCovers }
+    val subtitle = remember(playlist.songCount, playlist.description) {
+        playlist.description.takeIf { it.isNotBlank() }
+    }
+    LibrarySheet(busy, onDismiss, "playlist_actions_sheet", dismissHandle = dismissHandle) {
+        Row(
+            Modifier.fillMaxWidth().padding(bottom = FlareTokens.SpaceXs),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(FlareTokens.SpaceMd),
+        ) {
+            PlaylistCoverArt(
+                name = playlist.name,
+                customCoverUrl = playlist.customCoverUrl,
+                previewCovers = previewCovers,
+                isFavorite = isFav,
+                loader = loader,
+                fallbackIcon = if (isFav) ClientIcons.Heart else ClientIcons.Music,
+                modifier = Modifier.size(56.dp),
+                radius = 10.dp,
+            )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    playlist.name,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    listOfNotNull(
+                        stringResource(R.string.ft_library_song_count, playlist.songCount),
+                        subtitle,
+                    ).joinToString(" · "),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            val sheetDismiss = LocalFlareSheetDismiss.current
+            ActionIcon(
+                icon = ClientIcons.Close,
+                description = stringResource(R.string.ft_close),
+                onClick = { sheetDismiss?.invoke(onDismiss) ?: onDismiss() },
+                enabled = !busy,
+                modifier = Modifier.testTag("playlist_actions_close"),
+            )
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+        val hasSongs = playlist.songCount > 0
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = FlareTokens.SpaceXs),
+            horizontalArrangement = Arrangement.spacedBy(FlareTokens.SpaceMd),
+            verticalAlignment = Alignment.Top,
+        ) {
+            SongQuickActionTile(
+                label = stringResource(R.string.ft_quick_play_all),
+                icon = ClientIcons.Play,
+                enabled = !busy && hasSongs,
+                tag = "playlist_menu_play",
+                onClick = onPlayAll,
+                modifier = Modifier.weight(1f),
+            )
+            SongQuickActionTile(
+                label = stringResource(R.string.ft_quick_shuffle),
+                icon = ClientIcons.Shuffle,
+                enabled = !busy && hasSongs,
+                tag = "playlist_menu_shuffle",
+                onClick = onShuffle,
+                modifier = Modifier.weight(1f),
+            )
+            SongQuickActionTile(
+                label = stringResource(R.string.ft_quick_enqueue),
+                icon = ClientIcons.Queue,
+                enabled = !busy && hasSongs,
+                tag = "playlist_menu_enqueue",
+                onClick = onEnqueue,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+        LibraryActionRow(R.string.ft_listening_add_songs, ClientIcons.Plus, !busy, "playlist_menu_add", onAddSongs)
+        LibraryActionRow(R.string.ft_multiselect_manage, ClientIcons.Check, !busy && hasSongs, "playlist_menu_multiselect", onMultiSelect)
+        LibraryActionRow(R.string.ft_listening_edit_order, ClientIcons.DragHandle, !busy && playlist.songCount > 1, "playlist_menu_order", onEditOrder)
+        if (!isFav) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+            onEditInfo?.let {
+                LibraryActionRow(R.string.ft_listening_edit_playlist, ClientIcons.Edit, !busy, "playlist_menu_edit", it)
+            }
+            onChangeCover?.let {
+                LibraryActionRow(R.string.ft_listening_change_cover, ClientIcons.Background, !busy, "playlist_menu_cover", it)
+            }
+            onResetCover?.let {
+                LibraryActionRow(R.string.ft_listening_reset_cover, ClientIcons.Refresh, !busy, "playlist_menu_reset_cover", it)
+            }
+            onDelete?.let {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                LibraryActionRow(R.string.ft_listening_delete_playlist, ClientIcons.Trash, !busy, "playlist_menu_delete", it, destructive = true)
+            }
+        }
+        LibraryBusy(busy)
+    }
+}
+
+@Composable
+private fun PlaylistOrderQuickSortRow(
+    controller: PlaylistOrderController,
+    modifier: Modifier = Modifier,
+) {
+    val enabled = controller.canEdit && controller.draggedId == null && controller.draft.size > 1
+    fun applyDraftSort(next: List<PlaylistSong>) {
+        if (next.map { it.song.id } == controller.draft.map { it.song.id }) return
+        controller.draft.clear()
+        controller.draft.addAll(next)
+    }
+    Row(
+        modifier = modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(FlareTokens.SpaceSm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedButton(
+            onClick = { applyDraftSort(sortPlaylistEntries(controller.draft.toList(), PlaylistSongSortMode.TITLE)) },
+            enabled = enabled,
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("playlist_order_quick_title"),
+        ) { Text(stringResource(R.string.ft_quick_sort_by_title), maxLines = 1) }
+        OutlinedButton(
+            onClick = { applyDraftSort(sortPlaylistEntries(controller.draft.toList(), PlaylistSongSortMode.ARTIST)) },
+            enabled = enabled,
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("playlist_order_quick_artist"),
+        ) { Text(stringResource(R.string.ft_quick_sort_by_artist), maxLines = 1) }
+        OutlinedButton(
+            onClick = { applyDraftSort(sortPlaylistEntries(controller.draft.toList(), PlaylistSongSortMode.DURATION)) },
+            enabled = enabled,
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("playlist_order_quick_duration"),
+        ) { Text(stringResource(R.string.ft_quick_sort_by_duration), maxLines = 1) }
+        OutlinedButton(
+            onClick = { applyDraftSort(controller.draft.toList().asReversed()) },
+            enabled = enabled,
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("playlist_order_quick_reverse"),
+        ) { Text(stringResource(R.string.ft_quick_sort_reverse), maxLines = 1) }
+    }
+}
+
+@Composable
 internal fun PlaylistOrderSheet(
     playlist: PlaylistSummary,
     entries: List<PlaylistSong>,
@@ -621,13 +827,16 @@ internal fun PlaylistOrderSheet(
     conflict: Boolean,
     onSubmit: (List<String>) -> Unit,
     onDismiss: () -> Unit,
+    dismissHandle: FlareSheetDismissHandle? = null,
 ) {
     val controller = rememberPlaylistOrderController(playlist, entries, busy, conflict)
     FlareModalSheet(
         onDismissRequest = { if (!busy) onDismiss() },
         sheetGesturesEnabled = !busy && controller.draggedId == null,
+        dismissHandle = dismissHandle,
         modifier = Modifier.testTag("playlist_order_dialog"),
     ) {
+        val sheetDismiss = LocalFlareSheetDismiss.current
         val absorbBottom = rememberAbsorbBottomOverscroll()
         Column(
             Modifier.fillMaxWidth().heightIn(max = 680.dp).navigationBarsPadding().nestedScroll(absorbBottom),
@@ -637,6 +846,10 @@ internal fun PlaylistOrderSheet(
                 subtitle = stringResource(R.string.ft_library_song_count, controller.draft.size),
                 onClose = onDismiss,
                 closeEnabled = !busy,
+            )
+            PlaylistOrderQuickSortRow(
+                controller = controller,
+                modifier = Modifier.padding(horizontal = FlareTokens.SpaceXl, vertical = FlareTokens.SpaceXs),
             )
             PlaylistOrderListContent(
                 controller = controller,
@@ -650,7 +863,7 @@ internal fun PlaylistOrderSheet(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 TextButton(
-                    onClick = onDismiss,
+                    onClick = { sheetDismiss?.invoke(onDismiss) ?: onDismiss() },
                     enabled = !busy,
                     modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("playlist_order_cancel"),
                 ) { Text(stringResource(R.string.ft_library_cancel)) }
@@ -665,10 +878,17 @@ internal fun PlaylistOrderSheet(
 }
 
 @Composable
-private fun LibrarySheet(busy: Boolean, onDismiss: () -> Unit, tag: String, content: @Composable ColumnScope.() -> Unit) {
+private fun LibrarySheet(
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    tag: String,
+    dismissHandle: FlareSheetDismissHandle? = null,
+    content: @Composable ColumnScope.() -> Unit,
+) {
     FlareModalSheet(
         onDismissRequest = { if (!busy) onDismiss() },
         sheetGesturesEnabled = !busy,
+        dismissHandle = dismissHandle,
         modifier = Modifier.testTag(tag),
     ) {
         val absorbBottom = rememberAbsorbBottomOverscroll()
@@ -681,7 +901,14 @@ private fun LibrarySheet(busy: Boolean, onDismiss: () -> Unit, tag: String, cont
 }
 
 @Composable
-private fun LibraryActionRow(label: Int, icon: ImageVector, enabled: Boolean, tag: String, onClick: () -> Unit) {
+private fun LibraryActionRow(
+    label: Int,
+    icon: ImageVector,
+    enabled: Boolean,
+    tag: String,
+    onClick: () -> Unit,
+    destructive: Boolean = false,
+) {
     Row(
         Modifier.fillMaxWidth().heightIn(min = FlareTokens.TouchTargetMin)
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick).testTag(tag)
@@ -689,7 +916,8 @@ private fun LibraryActionRow(label: Int, icon: ImageVector, enabled: Boolean, ta
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(FlareTokens.SpaceBase),
     ) {
-        val color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 1f else .38f)
+        val baseColor = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+        val color = baseColor.copy(alpha = if (enabled) 1f else .38f)
         Icon(icon, null, Modifier.size(24.dp), tint = color)
         Text(stringResource(label), style = MaterialTheme.typography.bodyLarge, color = color, modifier = Modifier.weight(1f))
     }
@@ -697,7 +925,12 @@ private fun LibraryActionRow(label: Int, icon: ImageVector, enabled: Boolean, ta
 
 @Composable
 private fun LibraryCloseButton(enabled: Boolean, tag: String, onClick: () -> Unit) {
-    TextButton(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth().heightIn(min = FlareTokens.TouchTargetMin).testTag(tag)) {
+    val sheetDismiss = LocalFlareSheetDismiss.current
+    TextButton(
+        onClick = { sheetDismiss?.invoke(onClick) ?: onClick() },
+        enabled = enabled,
+        modifier = Modifier.fillMaxWidth().heightIn(min = FlareTokens.TouchTargetMin).testTag(tag),
+    ) {
         Text(stringResource(R.string.ft_library_cancel))
     }
 }

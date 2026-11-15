@@ -4,6 +4,7 @@ import coil.ImageLoader
 import com.flaretune.client.data.ActiveConnection
 import com.flaretune.client.model.Song
 import com.flaretune.client.ui.PlaybackSnapshot
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -12,12 +13,23 @@ import kotlinx.coroutines.flow.map
 interface PlaybackGateway {
     val state: StateFlow<PlaybackSnapshot>
     val positionMsFlow: Flow<Long> get() = state.map { it.positionMs }.distinctUntilChanged()
+    val sleepTimerFlow: StateFlow<SleepTimerState> get() = inactiveSleepTimer
+    fun setSleepTimer(minutes: Int) {}
+    fun setSleepTimerEndOfTrack() {}
+    fun setSleepTimerFinishCurrentTrack(enabled: Boolean) {
+        if (enabled) setSleepTimerEndOfTrack() else cancelSleepTimer()
+    }
+    fun cancelSleepTimer() {}
     val imageLoader: ImageLoader?
     suspend fun connect(connection: ActiveConnection)
     fun play(songs: List<Song>, index: Int)
     fun play(songs: List<Song>, index: Int, shuffle: Boolean) {
         play(songs, index)
         if (state.value.shuffle != shuffle) toggleShuffle()
+    }
+    fun playSingleAsNext(song: Song): Boolean {
+        play(listOf(song), 0)
+        return true
     }
     fun enqueue(songs: List<Song>, next: Boolean = false) {}
     fun clearQueue() {}
@@ -46,3 +58,5 @@ interface PlaybackGateway {
     fun setUiVisible(visible: Boolean) {}
     fun release()
 }
+
+private val inactiveSleepTimer: StateFlow<SleepTimerState> = MutableStateFlow(SleepTimerState())

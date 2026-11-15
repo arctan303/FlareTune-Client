@@ -10,6 +10,8 @@ FlareTune 官方音乐客户端，专注于音乐播放体验。
 
 ## 当前状态
 
+本地底层候选（基线 `61522e4`，未安装/未发布）已补齐多账号加密存储与隔离热切换、后台休眠独立Flow、常亮偏好和真实图片缓存清理反馈。当前 **459/459 单测、Lint 0错误 / 71警告 / 1提示，R2独立审查通过**。本批不改页面布局样式，侧边栏/设置页与常亮开关页面接线留下一棒；接口与验证边界见[多账号与休眠任务](docs/tasks/android-accounts-sleep-timer-20261113.md)及[数据合同](docs/Android-Data-Contract.md)。下文dev.9仍指此前已部署开发包。
+
 当前已部署开发包为 **0.1.0-dev.9 / versionCode 9**（dev.8基线＋本轮系统切歌修复；共同目录另有Gemini在途页面改造，不纳入此APK），Kotlin + Jetpack Compose + Media3，工程位于 `android/`。本轮补齐Web普通听歌能力及可用基础UI，沿用相同宿主接口和现有Spotify主界面/Apple播放器方向，供Gemini继续迭代视觉。
 
 - 收藏/取消收藏、创建/改名/简介/删除个人歌单、单首或多首加入歌单、移除歌曲、完整成员拖动/上下排序、歌单封面与资料库排列。
@@ -32,6 +34,7 @@ FlareTune 官方音乐客户端，专注于音乐播放体验。
 - [当前有效设计范围](docs/Design-Brief.md)
 - [首版需求与范围](docs/Product-Spec.md)
 - [本轮界面实现、验证与待验事项](docs/tasks/android-listening-ui-20261112.md)
+- [第二轮体验与队列优化规划](docs/tasks/android-ux-round2-20261115.md)
 - [第一轮功能基础](docs/tasks/android-listening-foundation-20261112.md)
 
 ## 设计研究

@@ -7,11 +7,12 @@
     <string name="ft_library_add_to_playlist">Add to playlist</string>
     <string name="ft_library_quick_next">Play next</string>
     <string name="ft_library_quick_playlist">Add to playlist</string>
-    <string name="ft_library_quick_favorite">Favorite</string>
+    <string name="ft_library_quick_favorite">Add to favorites</string>
     <string name="ft_library_quick_favorited">Favorited</string>
     <string name="ft_library_view_artist">View artist</string>
     <string name="ft_library_view_album">View album</string>
     <string name="ft_library_remove_song">Remove from this playlist</string>
+    <string name="ft_library_copy_song_info">Copy song info</string>
     <string name="ft_library_create_playlist">Create playlist</string>
     <string name="ft_library_edit_playlist">Edit playlist</string>
     <string name="ft_library_playlist_name">Name</string>

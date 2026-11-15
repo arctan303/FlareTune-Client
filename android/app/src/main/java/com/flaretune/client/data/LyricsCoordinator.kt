@@ -204,6 +204,8 @@ class LyricsCoordinator(
         var translate = initialTranslation
         var recoveredReference = false
         var pollAttempts = 0
+        var failedGraceAttempts = 0
+        val maxFailedGraceChecks = minOf(maxPollAttempts, 4)
         while (true) {
             if (!synchronized(lock) { currentLocked(ticket, active, songId) }) return
             val document = try {
@@ -255,7 +257,7 @@ class LyricsCoordinator(
                     } else {
                         val previous = mutableState.value
                         val translationOperation = initialTranslation ||
-                            (reference != null && previous.translationState == LyricTranslationStatus.PENDING)
+                            (reference != null && (previous.translationState == LyricTranslationStatus.PENDING || previous.polling))
                         val keepOriginal = translationOperation && !invalidReference &&
                             previous.status == LyricStatus.READY && previous.lines.isNotEmpty() &&
                             failure?.failure != Failure.FORBIDDEN &&
@@ -273,7 +275,14 @@ class LyricsCoordinator(
             val nextReference = document.resultRef?.takeIf { it.isNotBlank() }
             val pending = !document.instrumental &&
                 document.translationState == LyricTranslationStatus.PENDING
-            val pollAgain = pending && nextReference != null && pollAttempts < maxPollAttempts
+            val pendingPoll = pending && nextReference != null && pollAttempts < maxPollAttempts
+            val initialFailedGracePoll = !initialTranslation &&
+                !document.instrumental &&
+                document.translationSupported &&
+                document.translationState == LyricTranslationStatus.FAILED &&
+                nextReference != null &&
+                failedGraceAttempts < maxFailedGraceChecks
+            val pollAgain = pendingPoll || initialFailedGracePoll
             synchronized(lock) {
                 if (!currentLocked(ticket, active, songId)) return
                 if (document.instrumental) {
@@ -297,7 +306,7 @@ class LyricsCoordinator(
             }
             if (!pollAgain) return
             delay(pollIntervalMs)
-            pollAttempts++
+            if (initialFailedGracePoll) failedGraceAttempts++ else pollAttempts++
             reference = nextReference
             translate = false
         }

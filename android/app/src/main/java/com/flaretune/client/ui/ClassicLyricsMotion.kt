@@ -104,7 +104,8 @@ internal object LyricMotionSpecs {
 }
 
 /**
- * Four-tier lyric depth presentation modeled after Musiver (`opacity`, `scale`, `blur`, `verticalOffset`).
+ * Four-tier lyric depth presentation (`opacity`, `scale`, `verticalOffset`), keeping blur disabled
+ * so scrolling and player transitions avoid per-line offscreen Gaussian blur shaders.
  */
 internal fun resolveLyricPresentation(
     index: Int,
@@ -141,19 +142,19 @@ internal fun resolveLyricPresentation(
         1 -> LyricLinePresentation(
             opacity = if (isPast) 0.34f else 0.44f,
             scale = 0.985f,
-            blurRadius = 0.5.dp,
+            blurRadius = 0.dp,
             verticalOffset = (2f * sign).dp,
         )
         2 -> LyricLinePresentation(
             opacity = if (isPast) 0.25f else 0.32f,
             scale = 0.965f,
-            blurRadius = 1.2.dp,
+            blurRadius = 0.dp,
             verticalOffset = (5f * sign).dp,
         )
         else -> LyricLinePresentation(
             opacity = if (isPast) 0.18f else 0.22f,
             scale = 0.935f,
-            blurRadius = 2.2.dp,
+            blurRadius = 0.dp,
             verticalOffset = (16f * sign).dp,
         )
     }

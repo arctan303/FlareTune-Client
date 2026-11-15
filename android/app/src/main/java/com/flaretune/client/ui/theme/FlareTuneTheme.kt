@@ -9,18 +9,24 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.flaretune.client.R
+import com.flaretune.client.data.AppThemeMode
+
+internal val LocalIsDarkTheme = staticCompositionLocalOf { false }
+
+@Composable
+internal fun isFlareDarkTheme(): Boolean = LocalIsDarkTheme.current
 
 /**
  * Shared visual tokens for FlareTune Client.
@@ -78,7 +84,7 @@ object FlareTokens {
 @Composable
 fun Modifier.floatingDockSurface(
     shape: Shape = RoundedCornerShape(FlareTokens.RadiusDock),
-    dark: Boolean = isSystemInDarkTheme(),
+    dark: Boolean = isFlareDarkTheme(),
     elevation: Dp = 14.dp,
 ): Modifier {
     val fill = if (dark) Color(0xFF1F2024) else Color(0xFFF6F6F8)
@@ -107,42 +113,67 @@ private val FlareTypography = Typography(
     labelMedium = TextStyle(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium),
 )
 
+private val LightColors = lightColorScheme(
+    primary = Color(0xFF18783D),
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFF4F4F5),
+    onPrimaryContainer = Color(0xFF18181B),
+    secondary = Color(0xFF52525B),
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFF4F4F5),
+    onSecondaryContainer = Color(0xFF18181B),
+    tertiary = Color(0xFF52525B),
+    onTertiary = Color(0xFFFFFFFF),
+    tertiaryContainer = Color(0xFFF4F4F5),
+    onTertiaryContainer = Color(0xFF18181B),
+    background = Color(0xFFFFFFFF),
+    onBackground = Color(0xFF18181B),
+    surface = Color(0xFFFFFFFF),
+    onSurface = Color(0xFF18181B),
+    surfaceVariant = Color(0xFFF0F0F0),
+    onSurfaceVariant = Color(0xFF52525B),
+    surfaceContainer = Color(0xFFF4F4F5),
+    outline = Color(0xFFD4D4D8),
+)
+
+private val DarkColors = darkColorScheme(
+    primary = Color(0xFF65D46E),
+    onPrimary = Color(0xFF07140B),
+    primaryContainer = Color(0xFF1F1F1F),
+    onPrimaryContainer = Color(0xFFFAFAFA),
+    secondary = Color(0xFFB3B3B3),
+    onSecondary = Color(0xFF121212),
+    secondaryContainer = Color(0xFF1F1F1F),
+    onSecondaryContainer = Color(0xFFFAFAFA),
+    tertiary = Color(0xFFB3B3B3),
+    onTertiary = Color(0xFF121212),
+    tertiaryContainer = Color(0xFF1F1F1F),
+    onTertiaryContainer = Color(0xFFFAFAFA),
+    background = Color(0xFF121212),
+    onBackground = Color(0xFFFAFAFA),
+    surface = Color(0xFF121212),
+    onSurface = Color(0xFFFAFAFA),
+    surfaceVariant = Color(0xFF282828),
+    onSurfaceVariant = Color(0xFFB3B3B3),
+    surfaceContainer = Color(0xFF1F1F1F),
+    outline = Color(0xFF3F3F46),
+)
+
 @Composable
-fun FlareTuneTheme(content: @Composable () -> Unit) {
-    val background = colorResource(R.color.page_background)
-    val foreground = colorResource(R.color.text_primary)
-    val secondary = colorResource(R.color.text_secondary)
-    val surface = colorResource(R.color.surface_background)
-    val elevated = colorResource(R.color.elevated_background)
-    val primary = colorResource(R.color.accent_primary)
-    val onPrimary = colorResource(R.color.accent_foreground)
-    val outline = colorResource(R.color.outline_color)
-    val colors = if (isSystemInDarkTheme()) {
-        darkColorScheme(
-            primary = primary, onPrimary = onPrimary,
-            primaryContainer = elevated, onPrimaryContainer = foreground,
-            secondary = secondary, onSecondary = background,
-            secondaryContainer = elevated, onSecondaryContainer = foreground,
-            tertiary = secondary, onTertiary = background,
-            tertiaryContainer = elevated, onTertiaryContainer = foreground,
-            background = background, onBackground = foreground,
-            surface = background, onSurface = foreground,
-            surfaceVariant = surface, onSurfaceVariant = secondary,
-            surfaceContainer = elevated, outline = outline,
-        )
-    } else {
-        lightColorScheme(
-            primary = primary, onPrimary = onPrimary,
-            primaryContainer = elevated, onPrimaryContainer = foreground,
-            secondary = secondary, onSecondary = background,
-            secondaryContainer = elevated, onSecondaryContainer = foreground,
-            tertiary = secondary, onTertiary = background,
-            tertiaryContainer = elevated, onTertiaryContainer = foreground,
-            background = background, onBackground = foreground,
-            surface = background, onSurface = foreground,
-            surfaceVariant = surface, onSurfaceVariant = secondary,
-            surfaceContainer = elevated, outline = outline,
+fun FlareTuneTheme(
+    themeMode: AppThemeMode = AppThemeMode.SYSTEM,
+    content: @Composable () -> Unit,
+) {
+    val dark = when (themeMode) {
+        AppThemeMode.SYSTEM -> isSystemInDarkTheme()
+        AppThemeMode.LIGHT -> false
+        AppThemeMode.DARK -> true
+    }
+    CompositionLocalProvider(LocalIsDarkTheme provides dark) {
+        MaterialTheme(
+            colorScheme = if (dark) DarkColors else LightColors,
+            typography = FlareTypography,
+            content = content,
         )
     }
-    MaterialTheme(colorScheme = colors, typography = FlareTypography, content = content)
 }

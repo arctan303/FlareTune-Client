@@ -13,6 +13,8 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -44,12 +46,21 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -59,12 +70,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import coil.ImageLoader
 import coil.compose.AsyncImage
 import com.flaretune.client.R
 import com.flaretune.client.data.SearchEntity
+import com.flaretune.client.data.sortPlaylistEntries
+import com.flaretune.client.data.sortPlaylists
 import com.flaretune.client.model.*
+import com.flaretune.client.ui.theme.FlareTokens
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import java.text.DateFormat
 import java.util.Date
 
@@ -84,6 +100,7 @@ private fun ListeningRetry(notice: ClientNotice?, retry: () -> Unit, tag: String
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ListeningSectionHeader(
     title: String,
@@ -92,29 +109,53 @@ private fun ListeningSectionHeader(
     actionTag: String? = null,
     trailing: (@Composable () -> Unit)? = null,
 ) {
-    Row(
-        Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 18.dp, bottom = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            title,
-            Modifier.weight(1f),
-            style = MaterialTheme.typography.headlineMedium.copy(fontSize = 23.sp, fontWeight = FontWeight.Bold),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        if (trailing != null) {
-            trailing()
-        }
+    val stackActions = LocalDensity.current.fontScale >= 1.35f && (trailing != null || (onAction != null && actionLabel != null))
+    val seeAllButton: @Composable () -> Unit = {
         if (onAction != null && actionLabel != null) {
             TextButton(
                 onClick = onAction,
                 colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
-                modifier = if (actionTag != null) Modifier.testTag(actionTag) else Modifier,
+                modifier = (if (actionTag != null) Modifier.testTag(actionTag) else Modifier).heightIn(min = 48.dp),
             ) {
                 Text(actionLabel, style = MaterialTheme.typography.labelLarge)
                 Icon(ClientIcons.ChevronRight, null, Modifier.size(16.dp))
             }
+        }
+    }
+    if (stackActions) {
+        Column(
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 18.dp, bottom = 6.dp),
+        ) {
+            Text(
+                title,
+                Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.headlineMedium.copy(fontSize = 23.sp, fontWeight = FontWeight.Bold),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            FlowRow(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                trailing?.invoke()
+                seeAllButton()
+            }
+        }
+    } else {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 18.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                title,
+                Modifier.weight(1f),
+                style = MaterialTheme.typography.headlineMedium.copy(fontSize = 23.sp, fontWeight = FontWeight.Bold),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            trailing?.invoke()
+            seeAllButton()
         }
     }
 }
@@ -177,7 +218,6 @@ private fun ListeningArtistTile(artist: Artist, loader: ImageLoader?, onClick: (
         )
         Column(Modifier.weight(1f)) {
             Text(artist.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(knownArtistCounts(artist), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Icon(ClientIcons.ChevronRight, null)
     }
@@ -215,14 +255,6 @@ internal fun ListeningArtistCard(artist: Artist, loader: ImageLoader?, modifier:
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center,
         )
-        Text(
-            knownArtistCounts(artist),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-        )
     }
 }
 
@@ -233,6 +265,7 @@ internal fun ArtistBrowseSheet(state: ClientUiState, actions: ClientActions, loa
         close()
     }
     FlareModalSheet(onDismissRequest = closeAndReset) {
+        val sheetDismiss = LocalFlareSheetDismiss.current
         val absorbBottom = rememberAbsorbBottomOverscroll()
         Column(Modifier.fillMaxWidth().fillMaxHeight(.9f).navigationBarsPadding().nestedScroll(absorbBottom).testTag("artists_sheet")) {
             FlareSheetHeader(
@@ -251,7 +284,12 @@ internal fun ArtistBrowseSheet(state: ClientUiState, actions: ClientActions, loa
             ListeningRetry(state.artistsNotice, { actions.refreshArtists(state.artistQuery) })
             LazyColumn(Modifier.weight(1f)) {
                 if (!state.artistsLoading && state.artists.isEmpty()) item { Text(stringResource(R.string.ft_listening_empty_artists), Modifier.padding(24.dp)) }
-                items(state.artists, key = { it.id ?: ("local:" + it.name) }) { artist -> ListeningArtistTile(artist, loader) { actions.openArtist(artist); closeAndReset() } }
+                items(state.artists, key = { it.id ?: ("local:" + it.name) }) { artist ->
+                    ListeningArtistTile(artist, loader) {
+                        val finishOpen = { actions.openArtist(artist); closeAndReset() }
+                        sheetDismiss?.invoke(finishOpen) ?: finishOpen()
+                    }
+                }
                 if (state.artistsHasMore) item { TextButton(onClick = actions::loadMoreArtists, enabled = !state.artistsLoadingMore, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.ft_load_more)) } }
             }
         }
@@ -261,6 +299,7 @@ internal fun ArtistBrowseSheet(state: ClientUiState, actions: ClientActions, loa
 @Composable
 internal fun ListeningAlbumSearchSheet(state: ClientUiState, actions: ClientActions, loader: ImageLoader?, close: () -> Unit) {
     FlareModalSheet(onDismissRequest = close) {
+        val sheetDismiss = LocalFlareSheetDismiss.current
         val absorbBottom = rememberAbsorbBottomOverscroll()
         Column(Modifier.fillMaxWidth().fillMaxHeight(.9f).navigationBarsPadding().nestedScroll(absorbBottom).testTag("album_search_sheet")) {
             FlareSheetHeader(
@@ -279,7 +318,12 @@ internal fun ListeningAlbumSearchSheet(state: ClientUiState, actions: ClientActi
             ListeningRetry(state.albumSearchNotice, { actions.searchAlbums(state.albumSearchQuery) })
             LazyColumn(Modifier.weight(1f)) {
                 if (!state.albumSearchLoading && state.searchAlbums.isEmpty()) item { Text(stringResource(R.string.ft_listening_empty_albums), Modifier.padding(24.dp)) }
-                items(state.searchAlbums, key = { it.id }) { album -> ListeningAlbumTile(album, loader) { actions.openAlbum(album); close() } }
+                items(state.searchAlbums, key = { it.id }) { album ->
+                    ListeningAlbumTile(album, loader) {
+                        val finishOpen = { actions.openAlbum(album); close() }
+                        sheetDismiss?.invoke(finishOpen) ?: finishOpen()
+                    }
+                }
                 if (state.albumSearchHasMore) item { TextButton(onClick = actions::loadMoreSearchAlbums, enabled = !state.albumSearchLoadingMore, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.ft_load_more)) } }
             }
         }
@@ -306,8 +350,6 @@ internal fun ListeningArtistPage(state: ClientUiState, actions: ClientActions, l
         ?: artist.coverUrl
         ?: state.artistSongs.firstOrNull { !it.coverUrl.isNullOrBlank() }?.coverUrl
         ?: state.artistAlbums.firstOrNull { !it.coverUrl.isNullOrBlank() }?.coverUrl
-
-    val countSummary = knownArtistCounts(artist)
 
     Box(Modifier.fillMaxSize().background(bgColor).testTag("artist_detail")) {
         Column(Modifier.fillMaxSize()) {
@@ -428,12 +470,6 @@ internal fun ListeningArtistPage(state: ClientUiState, actions: ClientActions, l
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
                                     )
-                                    Spacer(Modifier.height(4.dp))
-                                    Text(
-                                        countSummary,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = Color.White.copy(alpha = 0.78f),
-                                    )
                                     Spacer(Modifier.height(14.dp))
                                     Row(
                                         Modifier.horizontalScroll(rememberScrollState()),
@@ -446,24 +482,34 @@ internal fun ListeningArtistPage(state: ClientUiState, actions: ClientActions, l
                                             shape = CircleShape,
                                             colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
                                             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
-                                            modifier = Modifier.testTag("artist_play"),
+                                            modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("artist_play"),
                                         ) {
                                             Icon(ClientIcons.Play, null, Modifier.size(18.dp))
                                             Spacer(Modifier.width(6.dp))
                                             Text(stringResource(R.string.ft_play))
                                         }
                                         FilledTonalButton(
+                                            onClick = { actions.playSongs(state.artistSongs, 0, shuffle = true) },
+                                            enabled = state.artistSongs.isNotEmpty(),
+                                            shape = CircleShape,
+                                            modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("artist_shuffle"),
+                                        ) {
+                                            Icon(ClientIcons.Shuffle, null, Modifier.size(18.dp))
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(stringResource(R.string.ft_quick_shuffle))
+                                        }
+                                        FilledTonalButton(
                                             onClick = { actions.enqueue(state.artistSongs) },
                                             enabled = state.artistSongs.isNotEmpty(),
                                             shape = CircleShape,
-                                            modifier = Modifier.testTag("artist_enqueue"),
+                                            modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("artist_enqueue"),
                                         ) {
                                             Text(stringResource(R.string.ft_listening_enqueue))
                                         }
                                         if (interaction != null && state.artistSongs.isNotEmpty()) {
                                             FilledTonalIconButton(
                                                 onClick = { interaction.addToPlaylists(state.artistSongs) },
-                                                modifier = Modifier.size(40.dp),
+                                                modifier = Modifier.size(FlareTokens.TouchTargetMin).testTag("artist_add_to_playlist"),
                                             ) {
                                                 Icon(ClientIcons.Plus, stringResource(R.string.ft_listening_add_to_playlist), Modifier.size(20.dp))
                                             }
@@ -567,35 +613,122 @@ internal fun ListeningArtistPage(state: ClientUiState, actions: ClientActions, l
 }
 
 @Composable
-internal fun ListeningStatsSheet(state: ClientUiState, actions: ClientActions, loader: ImageLoader?, close: () -> Unit) {
+internal fun ListeningStatsPage(
+    state: ClientUiState,
+    actions: ClientActions,
+    loader: ImageLoader?,
+    topInset: Dp,
+    bottomInset: Dp,
+    onBack: () -> Unit,
+) {
     var artistsTab by remember { mutableStateOf(false) }
     val ranked = state.playStats?.songs.orEmpty()
-    val artists = ranked.flatMap { rankedSong -> listeningArtistNames(rankedSong.song.artist).map { it to rankedSong.playCount } }
-        .groupBy({ it.first }, { it.second }).mapValues { it.value.sum() }.entries.sortedByDescending { it.value }
-    FlareModalSheet(onDismissRequest = close) {
-        val absorbBottom = rememberAbsorbBottomOverscroll()
-        Column(Modifier.fillMaxWidth().fillMaxHeight(.9f).navigationBarsPadding().nestedScroll(absorbBottom).testTag("listening_stats")) {
-            FlareSheetHeader(
-                title = stringResource(R.string.ft_listening_statistics),
-                onClose = close,
+    val artists = remember(ranked) {
+        ranked.flatMap { rankedSong -> listeningArtistNames(rankedSong.song.artist).map { it to rankedSong.playCount } }
+            .groupBy({ it.first }, { it.second })
+            .mapValues { it.value.sum() }
+            .entries
+            .sortedByDescending { it.value }
+    }
+    Column(
+        Modifier.fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(top = topInset)
+            .testTag("listening_stats"),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ActionIcon(
+                icon = ClientIcons.ChevronLeft,
+                description = stringResource(R.string.ft_back),
+                onClick = onBack,
+                modifier = Modifier.testTag("stats_close"),
             )
-            Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                FilterChip(!artistsTab, { artistsTab = false }, label = { Text(stringResource(R.string.ft_songs)) })
-                FilterChip(artistsTab, { artistsTab = true }, label = { Text(stringResource(R.string.ft_listening_artists)) })
+            Text(
+                text = stringResource(R.string.ft_listening_statistics),
+                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                style = MaterialTheme.typography.headlineMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            ActionIcon(
+                icon = ClientIcons.Refresh,
+                description = stringResource(R.string.ft_refresh),
+                onClick = actions::refreshPlayStats,
+                enabled = !state.statsLoading,
+                modifier = Modifier.testTag("stats_refresh"),
+            )
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            FilterChip(
+                selected = !artistsTab,
+                onClick = { artistsTab = false },
+                label = { Text(stringResource(R.string.ft_songs)) },
+                modifier = Modifier.testTag("stats_tab_songs"),
+            )
+            FilterChip(
+                selected = artistsTab,
+                onClick = { artistsTab = true },
+                label = { Text(stringResource(R.string.ft_listening_artists)) },
+                modifier = Modifier.testTag("stats_tab_artists"),
+            )
+        }
+        if (state.statsLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
+        ListeningRetry(state.statsNotice, actions::refreshPlayStats)
+        LazyColumn(
+            Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(bottom = bottomInset + 24.dp),
+        ) {
+            val empty = if (artistsTab) artists.isEmpty() else ranked.isEmpty()
+            if (!state.statsLoading && empty) {
+                item {
+                    Text(
+                        stringResource(R.string.ft_listening_empty_stats),
+                        Modifier.padding(24.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-            if (state.statsLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
-            ListeningRetry(state.statsNotice, actions::refreshPlayStats)
-            LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 24.dp)) {
-                if (!state.statsLoading && ranked.isEmpty()) item { Text(stringResource(R.string.ft_listening_empty_stats), Modifier.padding(24.dp)) }
-                if (artistsTab) items(artists, key = { it.key }) { artist ->
-                    Row(Modifier.fillMaxWidth().clickable { actions.openArtist(Artist(artist.key)); close() }.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (artistsTab) {
+                items(artists, key = { it.key }) { artist ->
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .clickable { actions.openArtist(Artist(artist.key)) }
+                            .padding(horizontal = 20.dp, vertical = 14.dp)
+                            .testTag("stats_artist_${artist.key}"),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(artist.key, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                        Text(stringResource(R.string.ft_listening_play_count, artist.value), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            stringResource(R.string.ft_listening_play_count, artist.value),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
-                } else itemsIndexed(ranked, key = { _, row -> row.song.id }) { index, row ->
-                    Column {
-                        SongRow(row.song, loader, row.song.id == state.playback.current?.id, state.playback.playing, row.song.id == state.playback.current?.id && state.playback.buffering) { actions.playSongs(ranked.map { it.song }, index) }
-                        Text(stringResource(R.string.ft_listening_play_count, row.playCount), Modifier.padding(start = 76.dp, bottom = 8.dp), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else {
+                itemsIndexed(ranked, key = { _, row -> row.song.id }) { index, row ->
+                    Column(Modifier.testTag("stats_song_${row.song.id}")) {
+                        SongRow(
+                            song = row.song,
+                            imageLoader = loader,
+                            current = row.song.id == state.playback.current?.id,
+                            playing = state.playback.playing,
+                            buffering = row.song.id == state.playback.current?.id && state.playback.buffering,
+                        ) {
+                            actions.playSongs(ranked.map { it.song }, index)
+                        }
+                        Text(
+                            stringResource(R.string.ft_listening_play_count, row.playCount),
+                            Modifier.padding(start = 76.dp, bottom = 8.dp),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }
@@ -634,15 +767,22 @@ internal fun ListeningSearchPage(
             }
         }
     }
+    val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     val searchFocusRequester = remember { FocusRequester() }
+    val multiSelect = rememberSongMultiSelectState()
+    var batchBarHeight by remember { mutableStateOf(0.dp) }
+    LaunchedEffect(submittedQuery) { multiSelect.exit() }
+    LaunchedEffect(state.songs) { multiSelect.prune(state.songs.map { it.id }.toSet()) }
     BackHandler(enabled = sectionDetail != "overview") { sectionDetail = "overview" }
+    BackHandler(enabled = multiSelect.active) { multiSelect.exit() }
 
     fun submitSearch(target: String = query) {
         val cleaned = target.trim()
         query = target
         submittedQuery = cleaned
         sectionDetail = "overview"
+        focusManager.clearFocus()
         keyboard?.hide()
         actions.search(cleaned)
         if (cleaned.isNotBlank()) {
@@ -700,8 +840,18 @@ internal fun ListeningSearchPage(
         topInset = topInset,
         modifier = Modifier.fillMaxSize().testTag("search_page"),
         headerContent = {
-            AccountAvatar(state, actions)
-            Surface(
+            if (multiSelect.active) {
+                MultiSelectTopBar(
+                    selectedCount = multiSelect.selectedIds.size,
+                    allSelected = multiSelect.allSelected(state.songs.map { it.id }),
+                    tagPrefix = "search",
+                    onSelectAllToggle = { multiSelect.toggleSelectAll(state.songs.map { it.id }) },
+                    onExit = multiSelect::exit,
+                    modifier = Modifier.weight(1f),
+                )
+            } else {
+                AccountAvatar(state, actions)
+                Surface(
                 shape = CircleShape,
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 modifier = Modifier.weight(1f)
@@ -773,6 +923,7 @@ internal fun ListeningSearchPage(
                         }
                     }
                 }
+            }
             }
         },
     ) { topClearance ->
@@ -867,7 +1018,9 @@ internal fun ListeningSearchPage(
                                                     songCoverLookup[entry.id]
                                                 },
                                                 loader = loader,
-                                                onOpen = { actions.openRecentSearch(entry) },
+                                                onOpen = {
+                                                    actions.openRecentSearch(entry)
+                                                },
                                                 onRemove = { actions.removeRecentSearch(entry) },
                                             )
                                         }
@@ -932,16 +1085,49 @@ internal fun ListeningSearchPage(
                             SearchSubviewBackBar(
                                 label = stringResource(R.string.ft_songs),
                                 onBack = { sectionDetail = "overview" },
+                                trailing = if (state.songs.isNotEmpty()) {
+                                    {
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            TextButton(
+                                                onClick = { if (multiSelect.active) multiSelect.exit() else multiSelect.enter() },
+                                                modifier = Modifier.heightIn(min = 48.dp).testTag("search_detail_multiselect"),
+                                            ) {
+                                                Text(stringResource(if (multiSelect.active) R.string.ft_exit_multiselect else R.string.ft_multiselect))
+                                            }
+                                            TextButton(
+                                                onClick = { actions.playSongs(state.songs, 0) },
+                                                modifier = Modifier.heightIn(min = 48.dp).testTag("search_detail_play_all"),
+                                            ) {
+                                                Icon(ClientIcons.Play, null, Modifier.size(16.dp))
+                                                Spacer(Modifier.width(4.dp))
+                                                Text(stringResource(R.string.ft_play_all))
+                                            }
+                                        }
+                                    }
+                                } else null,
                             )
-                            LazyColumn(state = songsDetailListState, modifier = Modifier.weight(1f).fillMaxWidth().testTag("catalog_list"), contentPadding = PaddingValues(bottom = bottomInset)) {
+                            LazyColumn(
+                                state = songsDetailListState,
+                                modifier = Modifier.weight(1f).fillMaxWidth().testTag("catalog_list"),
+                                contentPadding = PaddingValues(bottom = bottomInset + if (multiSelect.active) maxOf(76.dp, batchBarHeight + 24.dp) else 0.dp),
+                            ) {
                                 if (!state.loading && state.songs.isEmpty()) {
                                     item { Text(stringResource(R.string.ft_empty_search), Modifier.padding(24.dp)) }
                                 }
-                                itemsIndexed(state.songs, key = { _, song -> song.id }) { index, song ->
+                                itemsIndexed(state.songs, key = { _, song -> song.id }) { _, song ->
                                     SongRow(
                                         song, loader, song.id == state.playback.current?.id, state.playback.playing, state.playback.buffering,
+                                        selectionActive = multiSelect.active,
+                                        selected = song.id in multiSelect.selectedIds,
+                                        onLongClick = { multiSelect.enter(song.id) },
                                         modifier = Modifier.testTag("song_" + song.id),
-                                    ) { actions.playSongs(state.songs, index) }
+                                    ) {
+                                        if (multiSelect.active) multiSelect.toggle(song.id)
+                                        else actions.playSingleAsNext(song, fromSearch = true)
+                                    }
                                 }
                                 if (state.hasMore) item {
                                     TextButton(onClick = actions::loadMore, enabled = !state.loadingMore, modifier = Modifier.fillMaxWidth()) {
@@ -994,7 +1180,7 @@ internal fun ListeningSearchPage(
                         LazyColumn(
                             state = overviewListState,
                             modifier = Modifier.fillMaxSize().testTag("catalog_list"),
-                            contentPadding = PaddingValues(top = topClearance + 2.dp, bottom = bottomInset),
+                            contentPadding = PaddingValues(top = topClearance + 2.dp, bottom = bottomInset + if (multiSelect.active) maxOf(76.dp, batchBarHeight + 24.dp) else 0.dp),
                         ) {
                             if (visibleNotice != null) {
                                 item(key = "search-overview-notice") {
@@ -1036,13 +1222,24 @@ internal fun ListeningSearchPage(
                                         actionLabel = if (state.songs.size > 16 || state.hasMore) stringResource(R.string.ft_see_all) else null,
                                         onAction = if (state.songs.isNotEmpty()) {{ sectionDetail = "songs" }} else null,
                                         trailing = {
-                                            TextButton(
-                                                onClick = { actions.playSongs(state.songs, 0) },
-                                                modifier = Modifier.testTag("search_play_all"),
+                                            Row(
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
                                             ) {
-                                                Icon(ClientIcons.Play, null, Modifier.size(16.dp))
-                                                Spacer(Modifier.width(4.dp))
-                                                Text(stringResource(R.string.ft_play_all))
+                                                TextButton(
+                                                    onClick = { if (multiSelect.active) multiSelect.exit() else multiSelect.enter() },
+                                                    modifier = Modifier.heightIn(min = 48.dp).testTag("search_overview_multiselect"),
+                                                ) {
+                                                    Text(stringResource(if (multiSelect.active) R.string.ft_exit_multiselect else R.string.ft_multiselect))
+                                                }
+                                                TextButton(
+                                                    onClick = { actions.playSongs(state.songs, 0) },
+                                                    modifier = Modifier.heightIn(min = 48.dp).testTag("search_play_all"),
+                                                ) {
+                                                    Icon(ClientIcons.Play, null, Modifier.size(16.dp))
+                                                    Spacer(Modifier.width(4.dp))
+                                                    Text(stringResource(R.string.ft_play_all))
+                                                }
                                             }
                                         },
                                     )
@@ -1054,7 +1251,13 @@ internal fun ListeningSearchPage(
                                         loader = loader,
                                         limit = 16,
                                         tagPrefix = "song_",
-                                    ) { _, index -> actions.playSongs(state.songs, index) }
+                                        selectionActive = multiSelect.active,
+                                        selectedIds = multiSelect.selectedIds,
+                                        onLongSelect = { multiSelect.enter(it.id) },
+                                    ) { song, _ ->
+                                        if (multiSelect.active) multiSelect.toggle(song.id)
+                                        else actions.playSingleAsNext(song, fromSearch = true)
+                                    }
                                 }
                             }
                             if (state.searchAlbums.isNotEmpty()) {
@@ -1083,27 +1286,73 @@ internal fun ListeningSearchPage(
             if (anyLoading) {
                 LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = topClearance))
             }
+            BatchSongActionBar(
+                visible = multiSelect.active,
+                selectedSongs = multiSelect.selectedSongs(state.songs),
+                state = state,
+                actions = actions,
+                canRemoveFromPlaylist = false,
+                bottomInset = bottomInset,
+                onBarHeightChanged = { batchBarHeight = it },
+                onExitMultiSelect = multiSelect::exit,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SearchSubviewBackBar(label: String, onBack: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        TextButton(onClick = onBack) {
-            Icon(ClientIcons.ChevronLeft, null, Modifier.size(18.dp))
-            Spacer(Modifier.width(4.dp))
-            Text(stringResource(R.string.ft_back))
+private fun SearchSubviewBackBar(
+    label: String,
+    onBack: () -> Unit,
+    trailing: @Composable (() -> Unit)? = null,
+) {
+    val stack = LocalDensity.current.fontScale >= 1.35f && trailing != null
+    if (stack) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onBack, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Icon(ClientIcons.ChevronLeft, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(stringResource(R.string.ft_back))
+                }
+                Text(
+                    label,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(start = 6.dp),
+                )
+            }
+                FlowRow(
+                Modifier.fillMaxWidth().padding(start = 8.dp),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                trailing()
+            }
         }
-        Text(
-            label,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(start = 6.dp),
-        )
+    } else {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(onClick = onBack, modifier = Modifier.heightIn(min = 48.dp)) {
+                Icon(ClientIcons.ChevronLeft, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text(stringResource(R.string.ft_back))
+            }
+            Text(
+                label,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).padding(start = 6.dp),
+            )
+            trailing?.invoke()
+        }
     }
 }
 
@@ -1287,8 +1536,13 @@ internal fun ListeningLibraryOverview(
         listState.animateScrollToItem(0)
         gridState.animateScrollToItem(0)
     }
-    val positions = state.playlistShelf?.items?.mapIndexed { index, item -> item.id to index }?.toMap().orEmpty()
-    val playlists = state.playlists.sortedBy { positions[it.id] ?: Int.MAX_VALUE }
+    val customPlaylists = remember(state.playlists, state.playlistShelf) {
+        sortPlaylists(state.playlists, PlaylistSortMode.CUSTOM, state.playlistShelf)
+    }
+    val playlists = remember(state.playlists, state.playlistSortMode, state.playlistShelf) {
+        sortPlaylists(state.playlists, state.playlistSortMode, state.playlistShelf)
+    }
+    var sortMenuOpen by remember { mutableStateOf(false) }
     val libraryEntries = buildList {
         if (playlists.none { it.kind == "favorite" }) {
             add(
@@ -1330,7 +1584,7 @@ internal fun ListeningLibraryOverview(
         headerContent = {
             AccountAvatar(state, actions)
             LazyRow(
-                Modifier.weight(1f),
+                Modifier.weight(1f).testTag("library_header_pills"),
                 contentPadding = PaddingValues(horizontal = 2.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1407,6 +1661,66 @@ internal fun ListeningLibraryOverview(
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (orderEnabled) 1f else 0.42f),
                                 maxLines = 1,
                             )
+                        }
+                    }
+                }
+                item(key = "library_sort_pill") {
+                    val sortLabel = stringResource(
+                        when (state.playlistSortMode) {
+                            PlaylistSortMode.CUSTOM -> R.string.ft_playlist_sort_custom
+                            PlaylistSortMode.RECENTLY_UPDATED -> R.string.ft_playlist_sort_recent
+                            PlaylistSortMode.NAME -> R.string.ft_playlist_sort_name
+                            PlaylistSortMode.TRACK_COUNT -> R.string.ft_playlist_sort_count
+                        },
+                    )
+                    Box {
+                        Box(
+                            Modifier.heightIn(min = 48.dp)
+                                .clickable(role = Role.Button) { sortMenuOpen = true }
+                                .testTag("library_sort_button"),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Row(
+                                Modifier.heightIn(min = 32.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Text(
+                                    stringResource(R.string.ft_sort_label) + ": " + sortLabel,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                )
+                                Icon(ClientIcons.ChevronDown, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSurface)
+                            }
+                        }
+                        DropdownMenu(
+                            expanded = sortMenuOpen,
+                            onDismissRequest = { sortMenuOpen = false },
+                        ) {
+                            val options = listOf(
+                                PlaylistSortMode.CUSTOM to R.string.ft_playlist_sort_custom,
+                                PlaylistSortMode.RECENTLY_UPDATED to R.string.ft_playlist_sort_recent,
+                                PlaylistSortMode.NAME to R.string.ft_playlist_sort_name,
+                                PlaylistSortMode.TRACK_COUNT to R.string.ft_playlist_sort_count,
+                            )
+                            options.forEach { (mode, labelRes) ->
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(labelRes)) },
+                                    trailingIcon = if (state.playlistSortMode == mode) {
+                                        { Icon(ClientIcons.Check, null, Modifier.size(18.dp)) }
+                                    } else null,
+                                    onClick = {
+                                        actions.selectPlaylistSort(mode)
+                                        sortMenuOpen = false
+                                    },
+                                    modifier = Modifier.heightIn(min = 48.dp).testTag("library_sort_option_${mode.name}"),
+                                )
+                            }
                         }
                     }
                 }
@@ -1487,7 +1801,7 @@ internal fun ListeningLibraryOverview(
             }
         }
     }
-    if (editShelf) ListeningShelfOrderSheet(state, actions, playlists) { editShelf = false }
+    if (editShelf) ListeningShelfOrderSheet(state, actions, customPlaylists) { editShelf = false }
 }
 
 @Composable
@@ -1626,15 +1940,72 @@ private fun ListeningShelfOrderSheet(
     val baseRevision = remember { state.playlistShelf?.revision }
     var draft by remember { mutableStateOf(original) }
     var submitted by remember { mutableStateOf<Long?>(null) }
+    val dismissHandle = remember { FlareSheetDismissHandle() }
     val stale = state.playlistShelf?.revision != baseRevision || playlists.map { it.id }.toSet() != original.toSet() || state.libraryMutationConflict
-    LaunchedEffect(state.libraryMutationVersion) { if (submitted != null && state.libraryMutationVersion > submitted!!) close() }
+    var draggedId by remember { mutableStateOf<String?>(null) }
+    var dragCenterY by remember { mutableFloatStateOf(0f) }
+    val listState = rememberLazyListState()
+    val haptic = LocalHapticFeedback.current
+    val density = LocalDensity.current
+    val edgeThresholdPx = remember(density) { with(density) { 56.dp.toPx() } }
+    val maxScrollStepPx = remember(density) { with(density) { 14.dp.toPx() } }
+    var listHeightPx by remember { mutableFloatStateOf(0f) }
+    val playlistById = remember(playlists) { playlists.associateBy { it.id } }
+    val canEdit = !state.libraryMutationBusy && !stale
+
+    fun reorderDragged(id: String, direction: Int) {
+        if (direction == 0) return
+        val visible = listState.layoutInfo.visibleItemsInfo
+        var current = draft.indexOf(id)
+        while (current >= 0 && current + direction in draft.indices) {
+            val next = current + direction
+            val nextInfo = visible.firstOrNull { it.key == draft[next] } ?: break
+            val threshold = if (direction > 0) nextInfo.offset + nextInfo.size * 0.35f else nextInfo.offset + nextInfo.size * 0.65f
+            if ((direction > 0 && dragCenterY < threshold) || (direction < 0 && dragCenterY > threshold)) break
+            draft = draft.toMutableList().apply { add(next, removeAt(current)) }
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            current = next
+        }
+    }
+
+    LaunchedEffect(draggedId) {
+        val activeId = draggedId ?: return@LaunchedEffect
+        while (isActive && draggedId == activeId) {
+            val pointerY = dragCenterY
+            val delta = when {
+                listHeightPx <= 0f -> 0f
+                pointerY < edgeThresholdPx && listState.canScrollBackward -> {
+                    val ratio = ((edgeThresholdPx - pointerY) / edgeThresholdPx).coerceIn(0.2f, 1f)
+                    -maxScrollStepPx * ratio
+                }
+                pointerY > listHeightPx - edgeThresholdPx && listState.canScrollForward -> {
+                    val ratio = ((pointerY - (listHeightPx - edgeThresholdPx)) / edgeThresholdPx).coerceIn(0.2f, 1f)
+                    maxScrollStepPx * ratio
+                }
+                else -> 0f
+            }
+            if (delta != 0f) {
+                listState.scrollBy(delta)
+                reorderDragged(activeId, if (delta > 0f) 1 else -1)
+            }
+            delay(16L)
+        }
+    }
+
+    LaunchedEffect(state.libraryMutationVersion) {
+        if (submitted != null && state.libraryMutationVersion > submitted!!) {
+            dismissHandle.dismiss(close)
+        }
+    }
 
     FlareModalSheet(
         onDismissRequest = { if (!state.libraryMutationBusy) close() },
-        sheetGesturesEnabled = !state.libraryMutationBusy,
+        sheetGesturesEnabled = !state.libraryMutationBusy && draggedId == null,
+        dismissHandle = dismissHandle,
     ) {
+        val sheetDismiss = LocalFlareSheetDismiss.current
         val absorbBottom = rememberAbsorbBottomOverscroll()
-        Column(Modifier.fillMaxWidth().heightIn(max = 620.dp).navigationBarsPadding().nestedScroll(absorbBottom)) {
+        Column(Modifier.fillMaxWidth().heightIn(max = 640.dp).navigationBarsPadding().nestedScroll(absorbBottom)) {
             FlareSheetHeader(
                 title = stringResource(R.string.ft_listening_shelf_order),
                 subtitle = stringResource(R.string.ft_listening_tracks_count, draft.size),
@@ -1645,28 +2016,102 @@ private fun ListeningShelfOrderSheet(
                 if (stale) Text(stringResource(R.string.ft_listening_order_conflict), color = MaterialTheme.colorScheme.error)
                 state.libraryMutationNotice?.let { Notice(it) }
             }
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val quickEnabled = canEdit && draggedId == null && draft.size > 1
+                fun applyQuickSort(mode: PlaylistSortMode) {
+                    val currentItems = draft.mapNotNull { playlistById[it] }
+                    draft = sortPlaylists(currentItems, mode, state.playlistShelf).map { it.id }
+                }
+                OutlinedButton(
+                    onClick = { applyQuickSort(PlaylistSortMode.NAME) },
+                    enabled = quickEnabled,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("shelf_quick_name"),
+                ) { Text(stringResource(R.string.ft_quick_sort_by_name), maxLines = 1) }
+                OutlinedButton(
+                    onClick = { applyQuickSort(PlaylistSortMode.TRACK_COUNT) },
+                    enabled = quickEnabled,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("shelf_quick_count"),
+                ) { Text(stringResource(R.string.ft_quick_sort_by_count), maxLines = 1) }
+                OutlinedButton(
+                    onClick = { applyQuickSort(PlaylistSortMode.RECENTLY_UPDATED) },
+                    enabled = quickEnabled,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("shelf_quick_recent"),
+                ) { Text(stringResource(R.string.ft_quick_sort_by_recent), maxLines = 1) }
+            }
             LazyColumn(
-                Modifier.weight(1f, fill = false).fillMaxWidth().padding(horizontal = 20.dp).testTag("shelf_order_list"),
+                state = listState,
+                userScrollEnabled = draggedId == null,
+                modifier = Modifier.weight(1f, fill = false).fillMaxWidth().padding(horizontal = 20.dp)
+                    .onSizeChanged { listHeightPx = it.height.toFloat() }
+                    .testTag("shelf_order_list"),
             ) {
                 itemsIndexed(draft, key = { _, id -> id }) { index, id ->
-                    val name = playlists.firstOrNull { it.id == id }?.name.orEmpty()
-                    Row(
-                        Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(name, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        TextButton(
-                            enabled = index > 0 && !state.libraryMutationBusy && !stale,
-                            modifier = Modifier.testTag("shelf_up_" + id),
-                            onClick = { draft = draft.toMutableList().apply { add(index - 1, removeAt(index)) } },
-                        ) { Text(stringResource(R.string.ft_listening_up)) }
-                        TextButton(
-                            enabled = index < draft.lastIndex && !state.libraryMutationBusy && !stale,
-                            modifier = Modifier.testTag("shelf_down_" + id),
-                            onClick = { draft = draft.toMutableList().apply { add(index + 1, removeAt(index)) } },
-                        ) { Text(stringResource(R.string.ft_listening_down)) }
+                    val name = playlistById[id]?.name.orEmpty()
+                    val dragging = draggedId == id
+                    val slotInfo = if (dragging) listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == id } else null
+                    Box(Modifier.fillMaxWidth().zIndex(if (dragging) 1f else 0f)) {
+                        Column(
+                            Modifier.fillMaxWidth().graphicsLayer {
+                                translationY = if (dragging && slotInfo != null) {
+                                    dragCenterY - (slotInfo.offset + slotInfo.size / 2f)
+                                } else 0f
+                            }.then(if (dragging) Modifier.background(MaterialTheme.colorScheme.surfaceContainer) else Modifier),
+                        ) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                val dragLabel = stringResource(R.string.ft_listening_drag_playlist, name)
+                                Box(
+                                    Modifier.size(FlareTokens.TouchTargetMin).testTag("shelf_drag_" + id)
+                                        .semantics { contentDescription = dragLabel; if (!canEdit) disabled() }
+                                        .pointerInput(id, canEdit) {
+                                            if (canEdit) detectDragGesturesAfterLongPress(
+                                                onDragStart = {
+                                                    val info = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == id }
+                                                        ?: return@detectDragGesturesAfterLongPress
+                                                    dragCenterY = info.offset + info.size / 2f
+                                                    draggedId = id
+                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                },
+                                                onDrag = { change, amount ->
+                                                    change.consume()
+                                                    if (draggedId == id) {
+                                                        dragCenterY += amount.y
+                                                        val direction = if (amount.y > 0f) 1 else if (amount.y < 0f) -1 else 0
+                                                        reorderDragged(id, direction)
+                                                    }
+                                                },
+                                                onDragEnd = { draggedId = null },
+                                                onDragCancel = { draggedId = null },
+                                            )
+                                        },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(ClientIcons.DragHandle, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Text(name, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                TextButton(
+                                    enabled = index > 0 && canEdit && draggedId == null,
+                                    modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("shelf_up_" + id),
+                                    onClick = { draft = draft.toMutableList().apply { add(index - 1, removeAt(index)) } },
+                                ) { Text(stringResource(R.string.ft_listening_up)) }
+                                TextButton(
+                                    enabled = index < draft.lastIndex && canEdit && draggedId == null,
+                                    modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("shelf_down_" + id),
+                                    onClick = { draft = draft.toMutableList().apply { add(index + 1, removeAt(index)) } },
+                                ) { Text(stringResource(R.string.ft_listening_down)) }
+                            }
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                        }
                     }
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                 }
             }
             Row(
@@ -1674,12 +2119,16 @@ private fun ListeningShelfOrderSheet(
                 horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                TextButton(onClick = close, enabled = !state.libraryMutationBusy) {
+                TextButton(
+                    onClick = { sheetDismiss?.invoke(close) ?: close() },
+                    enabled = !state.libraryMutationBusy,
+                    modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin),
+                ) {
                     Text(stringResource(R.string.ft_library_cancel))
                 }
                 Button(
-                    enabled = !state.libraryMutationBusy && !stale && draft != original,
-                    modifier = Modifier.testTag("shelf_order_save"),
+                    enabled = canEdit && draggedId == null && draft != original,
+                    modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("shelf_order_save"),
                     onClick = {
                         submitted = state.libraryMutationVersion
                         actions.replacePlaylistShelfOrder(draft)
@@ -1695,6 +2144,26 @@ internal fun ListeningPlaylistDetailPage(state: ClientUiState, actions: ClientAc
     val playlist = state.selectedPlaylist ?: return
     val interaction = LocalListeningInteractions.current
     val isFav = playlist.kind == "favorite"
+    val multiSelect = rememberSongMultiSelectState()
+    var sortMenuOpen by remember { mutableStateOf(false) }
+
+    val sortedEntries = remember(state.selectedPlaylistEntries, state.playlistSongSort) {
+        sortPlaylistEntries(state.selectedPlaylistEntries, state.playlistSongSort)
+    }
+    val playableSortedSongs = remember(sortedEntries) {
+        sortedEntries.mapNotNull { entry -> entry.song.takeIf { entry.canPlay } }
+    }
+    LaunchedEffect(playlist.id) { multiSelect.exit() }
+    LaunchedEffect(sortedEntries) { multiSelect.prune(sortedEntries.map { it.song.id }.toSet()) }
+    LaunchedEffect(interaction?.pendingPlaylistMultiSelect?.value, playlist.id) {
+        val pending = interaction?.pendingPlaylistMultiSelect?.value
+        if (pending != null && pending.first == playlist.id) {
+            multiSelect.enter()
+            interaction.clearPendingPlaylistMultiSelect()
+        }
+    }
+    BackHandler(enabled = multiSelect.active) { multiSelect.exit() }
+
     val previewCovers = remember(playlist, state.selectedPlaylistEntries) {
         playlist.previewCovers.ifEmpty {
             state.selectedPlaylistEntries.mapNotNull { it.song.coverUrl?.takeIf(String::isNotBlank) }.distinct().take(4)
@@ -1716,6 +2185,28 @@ internal fun ListeningPlaylistDetailPage(state: ClientUiState, actions: ClientAc
         testTag = "library_page",
         backTag = "library_playlist_back",
         onBack = actions::closePlaylist,
+        topBarOverride = if (multiSelect.active) {
+            {
+                MultiSelectTopBar(
+                    selectedCount = multiSelect.selectedIds.size,
+                    allSelected = multiSelect.allSelected(sortedEntries.map { it.song.id }),
+                    tagPrefix = "playlist",
+                    onSelectAllToggle = { multiSelect.toggleSelectAll(sortedEntries.map { it.song.id }) },
+                    onExit = multiSelect::exit,
+                )
+            }
+        } else null,
+        bottomOverlay = {
+            BatchSongActionBar(
+                visible = multiSelect.active,
+                selectedSongs = multiSelect.selectedSongs(sortedEntries.map { it.song }),
+                state = state,
+                actions = actions,
+                canRemoveFromPlaylist = !isFav,
+                bottomInset = bottomInset,
+                onExitMultiSelect = multiSelect::exit,
+            )
+        },
         headerExtraActions = {
             ActionIcon(
                 ClientIcons.More,
@@ -1731,11 +2222,17 @@ internal fun ListeningPlaylistDetailPage(state: ClientUiState, actions: ClientAc
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Button(
-                    onClick = { actions.playPlaylist(playlist) },
-                    enabled = state.playlistSongs.isNotEmpty() && !state.playlistLoading,
+                    onClick = {
+                        if (state.playlistSongSort == PlaylistSongSortMode.DEFAULT) {
+                            actions.playPlaylist(playlist)
+                        } else if (playableSortedSongs.isNotEmpty()) {
+                            actions.playSongs(playableSortedSongs, 0)
+                        }
+                    },
+                    enabled = playableSortedSongs.isNotEmpty() && !state.playlistLoading,
                     shape = CircleShape,
                     contentPadding = PaddingValues(horizontal = 22.dp, vertical = 12.dp),
-                    modifier = Modifier.testTag("playlist_play"),
+                    modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("playlist_play"),
                 ) {
                     Icon(ClientIcons.Play, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
@@ -1745,16 +2242,70 @@ internal fun ListeningPlaylistDetailPage(state: ClientUiState, actions: ClientAc
                     onClick = { interaction?.addSongs?.invoke(playlist) },
                     enabled = !state.libraryMutationBusy,
                     shape = CircleShape,
-                    modifier = Modifier.testTag("playlist_add_songs"),
+                    modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("playlist_add_songs"),
                 ) {
                     Text(stringResource(R.string.ft_listening_add_songs))
+                }
+                OutlinedButton(
+                    onClick = { if (multiSelect.active) multiSelect.exit() else multiSelect.enter() },
+                    enabled = sortedEntries.isNotEmpty() && !state.playlistLoading,
+                    shape = CircleShape,
+                    modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("playlist_multiselect"),
+                ) {
+                    Text(stringResource(if (multiSelect.active) R.string.ft_exit_multiselect else R.string.ft_multiselect))
                 }
                 TextButton(
                     onClick = { interaction?.orderPlaylist?.invoke(playlist) },
                     enabled = !state.playlistLoading && !state.libraryMutationBusy,
-                    modifier = Modifier.testTag("playlist_edit_order"),
+                    modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("playlist_edit_order"),
                 ) {
                     Text(stringResource(R.string.ft_listening_edit_order))
+                }
+                val sortLabel = stringResource(
+                    when (state.playlistSongSort) {
+                        PlaylistSongSortMode.DEFAULT -> R.string.ft_song_sort_default
+                        PlaylistSongSortMode.TITLE -> R.string.ft_song_sort_title
+                        PlaylistSongSortMode.ARTIST -> R.string.ft_song_sort_artist
+                        PlaylistSongSortMode.DURATION -> R.string.ft_song_sort_duration
+                        PlaylistSongSortMode.REVERSED -> R.string.ft_song_sort_reversed
+                    },
+                )
+                Box {
+                    OutlinedButton(
+                        onClick = { sortMenuOpen = true },
+                        enabled = !state.playlistLoading && sortedEntries.size > 1,
+                        shape = CircleShape,
+                        modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("playlist_sort_button"),
+                    ) {
+                        Text(sortLabel, maxLines = 1)
+                        Spacer(Modifier.width(4.dp))
+                        Icon(ClientIcons.ChevronDown, null, Modifier.size(16.dp))
+                    }
+                    DropdownMenu(
+                        expanded = sortMenuOpen,
+                        onDismissRequest = { sortMenuOpen = false },
+                    ) {
+                        val options = listOf(
+                            PlaylistSongSortMode.DEFAULT to R.string.ft_song_sort_default,
+                            PlaylistSongSortMode.TITLE to R.string.ft_song_sort_title,
+                            PlaylistSongSortMode.ARTIST to R.string.ft_song_sort_artist,
+                            PlaylistSongSortMode.DURATION to R.string.ft_song_sort_duration,
+                            PlaylistSongSortMode.REVERSED to R.string.ft_song_sort_reversed,
+                        )
+                        options.forEach { (mode, labelRes) ->
+                            DropdownMenuItem(
+                                text = { Text(stringResource(labelRes)) },
+                                trailingIcon = if (state.playlistSongSort == mode) {
+                                    { Icon(ClientIcons.Check, null, Modifier.size(18.dp)) }
+                                } else null,
+                                onClick = {
+                                    actions.selectPlaylistSongSort(mode)
+                                    sortMenuOpen = false
+                                },
+                                modifier = Modifier.heightIn(min = 48.dp).testTag("playlist_sort_option_${mode.name}"),
+                            )
+                        }
+                    }
                 }
             }
         },
@@ -1764,16 +2315,28 @@ internal fun ListeningPlaylistDetailPage(state: ClientUiState, actions: ClientAc
         onRetry = actions::refreshPlaylist,
         secondaryNotice = state.libraryMutationNotice,
         emptyMessage = stringResource(R.string.ft_listening_empty_playlist),
-        isEmpty = !state.playlistLoading && state.selectedPlaylistEntries.isEmpty(),
+        isEmpty = !state.playlistLoading && sortedEntries.isEmpty(),
         listTestTag = "playlist_detail_tracks",
     ) {
-        items(state.selectedPlaylistEntries, key = { it.song.id }) { entry ->
+        items(sortedEntries, key = { it.song.id }) { entry ->
             Column(Modifier.fillMaxWidth()) {
                 SongRow(
                     entry.song, loader, entry.song.id == state.playback.current?.id, state.playback.playing, state.playback.buffering,
                     modifier = Modifier.testTag("playlist_song_" + entry.song.id),
                     clickEnabled = entry.canPlay,
-                ) { actions.playSong(entry.song) }
+                    selectionActive = multiSelect.active,
+                    selected = entry.song.id in multiSelect.selectedIds,
+                    onLongClick = { multiSelect.enter(entry.song.id) },
+                ) {
+                    if (multiSelect.active) {
+                        multiSelect.toggle(entry.song.id)
+                    } else if (state.playlistSongSort == PlaylistSongSortMode.DEFAULT) {
+                        actions.playSong(entry.song)
+                    } else {
+                        val idx = playableSortedSongs.indexOfFirst { it.id == entry.song.id }
+                        if (idx >= 0) actions.playSongs(playableSortedSongs, idx)
+                    }
+                }
                 if (!entry.canPlay) {
                     Text(
                         stringResource(R.string.ft_listening_unplayable),

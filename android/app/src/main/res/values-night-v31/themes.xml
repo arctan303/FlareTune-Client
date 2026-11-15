@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.FlareTune" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/page_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowSplashScreenBackground">@color/page_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_splash_seed</item>
+    </style>
+</resources>

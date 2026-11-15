@@ -1,0 +1,437 @@
+YouTube Music · Android 9.45.51 (94551240) · com.google.android.apps.youtube.music
+底部导航栏（PivotBar）在播放器开 / 关过程中的动效
+
+=====================================================================
+0. 这份材料是什么
+=====================================================================
+
+对象：YouTube Music Android 9.45.51，真机 adb pull 的 base APK（85.6 MB，
+classes.dex ~ classes6.dex）。
+
+这一份只讲一件事：**底部导航栏（Home / Explore / Library 那一条）
+在全屏播放器被拖起、被拖回、被点开、被点关的整个过程中，做了什么**。
+
+它与下面两份是并列关系，不重复它们的内容：
+
+  gemini-brief-ytmusic-player-transition.txt    整体结构 / 12 态状态机 / 封面填充
+  gemini-brief-ytmusic-player-drag-motion.txt   拖动跟手 / 松手吸附 / 300ms 曲线 / 几何插值
+
+取证方式：androguard 直读 dalvik 指令。
+类名被 R8 压短，但字符串常量、方法引用名、资源 ID、浮点常量的 IEEE754 位全部保留。
+证据等级：[DEX] = 字节码直读；[推断] = 由结构合理推得；[未知] = 没取到。
+
+本文末尾 §7 修正上一份（drag-motion）里的 2 处结论。
+
+
+=====================================================================
+1. 结论：底部导航栏没有自己的动画
+=====================================================================
+
+一句话：**导航栏的位移是滑动偏移量的严格一次函数，没有任何缓动、没有独立时长、
+没有淡入淡出、没有缩放。它的「显隐」也不是渐变的，是在状态落定时一次性翻转的。**
+
+具体三条：
+
+  拖动中      translationY = 导航栏高度 × slideOffset        [DEX]
+              与手指 1:1，往回拖就原路回来。
+
+  落定到 mini  translationY = 0，并确保 VISIBLE              [DEX]
+
+  落定到全屏  setVisibility(GONE)，一次性                     [DEX]
+
+所以「开关过程中导航栏的动画」= 没有动画。
+它之所以看起来顺，是因为它跟面板共用同一个 slideOffset，
+面板怎么走它就怎么走，两者永远同步，不存在「谁先谁后」。
+
+反过来说，这也是一条可以直接抄的实现：**不要给导航栏单独写一条动画**，
+把它挂在面板的同一个进度上乘一个高度即可。
+
+导航栏这个类（`Lhid`）在整个 APK 里只对 TabLayout 做过三件事： [DEX]
+
+    setTranslationY(float)
+    setVisibility(int)
+    无 setAlpha / setScaleX / setScaleY / setTranslationZ
+
+这条「只有位移和显隐」是本文最硬的结论，因为它是把 `Lhid` 全类反汇编后逐条筛出来的。
+
+
+=====================================================================
+2. 链路：从 onSlide 到导航栏
+=====================================================================
+
+2.1 回调
+---------------------------------------------------------------------
+`Ljno` 是 `BottomSheetBehavior.BottomSheetCallback` 的子类（父类 `Lafcj`，
+方法签名 `a(View,F)` / `b(View,I)`，与 onSlide / onStateChanged 一一对应）。 [DEX]
+
+    // Ljno.a(View v, float slideOffset)   = onSlide
+    if (slideOffset > 0f) {
+        wwl.I(SLIDING_VERTICALLY, 1.0f - slideOffset);
+    } else if (slideOffset < 0f) {
+        wwl.I(SLIDING_HORIZONTALLY, 1.0f);
+        wwl.aM.S(4);                     // BottomSheetBehavior 强制回 STATE_COLLAPSED
+    }
+    // slideOffset == 0 时两个分支都不进，什么都不做
+
+注意这里传进去的是 **1 − slideOffset**，不是 slideOffset 本身。
+下一节会看到为什么。
+
+2.2 唯一的写入口
+---------------------------------------------------------------------
+    // WatchWhileLayout.I(Lhui state, float progress)   偏移 0 处
+    bH = state;          // 12 值状态枚举
+    bI = progress;       // 进度字段
+
+然后按 `bH.ordinal()` 做 packed-switch，12 个分支各自处理自己的东西。
+`Lhui.i`（ordinal 8）= **SLIDING_VERTICALLY**，拖动过程中的每一帧都走这个分支。
+
+2.3 分支体（偏移 718 ~ 878）
+---------------------------------------------------------------------
+反汇编直译，寄存器 v15 = 传入的 progress，v2 在方法入口被置成 1.0f 且中途没被改过：
+
+    v2 = 1.0f - progress;                       // sub-float/2addr v2, v15
+
+    g = (Lgbf) cd.a;                            // 外壳协调器
+    g.u(SLIDING_VERTICALLY);                    // 状态上报
+
+    g.bd.c(v2);                                 // Liuf：状态栏颜色，见 §5.1
+
+    TabLayout tl = g.bV.g;                      // g.bV = Lhid = 导航栏控制器
+    if (tl != null) {
+        tl.setTranslationY(tl.getHeight() * v2);
+    }
+    g.bV.o();                                   // 确保 VISIBLE
+
+    Ljfi jfi = (Ljfi) g.bC.is();                // g.bC = 顶部条控制器
+    ViewGroup d = jfi.d;                        // = @id/slim_bar_container
+    if (d != null) {
+        v2 = v2 * d.getHeight();
+        d.setTranslationY(v2);
+    }
+    if (jfi.b.q()) {                            // Laevd.q()：顶部条当前该不该在
+        if (jfi.d != null) jfi.d.setVisibility(VISIBLE);
+    }
+
+    g.p();                                      // 统一收尾刷新
+
+把 v2 代回去：
+
+    v2 = 1 − progress = 1 − (1 − slideOffset) = slideOffset
+
+    ⇒ 导航栏 translationY = 导航栏高度 × slideOffset
+
+这就是全部。**没有第二处写导航栏的位置**，在拖动阶段。
+
+
+=====================================================================
+3. 三个落定状态各写什么
+=====================================================================
+
+`Ljno.b(View, int)` 在状态变化时把状态翻译成 `I(state, progress)`，
+`I()` 里对应分支再落到导航栏上。
+
+3.1 落定到 MINIMIZED（mini player 态）   [DEX]
+---------------------------------------------------------------------
+    g.A();
+    g.u(MINIMIZED);
+    g.bd.c(0f);                  // 状态栏进度归零
+    ...
+    g.bV.n();                    // Lhid.n()  → TabLayout.setTranslationY(0f)
+    g.bV.o();                    // Lhid.o()  → if (!u()) setVisibility(VISIBLE)
+    g.p();
+
+`n()` 是「把位移清零」。`o()` 是「确保可见」。
+两者都只碰 translationY / visibility。
+
+3.2 落定到 FULLSCREEN（全屏）            [DEX]
+---------------------------------------------------------------------
+    ...
+    g.u(FULLSCREEN);
+    g.bV.f();                    // Lhid.f()  → TabLayout.setVisibility(GONE)
+    g.p();
+
+**一次性 GONE，没有过渡**。不是淡出，不是位移收尾，是直接摘掉。
+
+3.3 落定到 DISMISSED / 其他态
+---------------------------------------------------------------------
+`I()` 的其余分支不碰导航栏；`bI` 被写成 1.0f 或 q()，见 §7.1。
+
+3.4 Lhid 的三个方法全文              [DEX]
+---------------------------------------------------------------------
+    void f() { if (g != null) g.setVisibility(8); }        // GONE
+    void n() { if (g != null) g.setTranslationY(0f); }
+    void o() { if (!u() && g != null) g.setVisibility(0); } // VISIBLE
+
+    boolean u() {
+        // 实验开关 276 / 45858210 打开时，再看 Ljid.c() 给出的
+        // Optional<Lhil> 的 C() 是否为 true；否则返回 false
+    }
+
+`u()` 的意思是「导航栏当前是否应该被隐藏」（例如某个页面自己要求无底栏）。
+`o()` 因此不是无条件可见，而是「按业务该显示就显示」。
+
+
+=====================================================================
+4. 为什么是 1 − progress 而不是 progress
+=====================================================================
+
+这是整个机制里唯一反直觉的地方，值得单独说明。
+
+`I(state, progress)` 这个 progress 参数在整套代码里统一表示
+**「离全屏有多远」的补数**，而不是「展开了多少」：
+
+    slideOffset = 0（收起，mini）  →  progress = 1
+    slideOffset = 1（全屏）        →  progress = 0
+
+`bI` 就是这个补数，初值 1.0f（`const/high16 1065353216`，0x3F800000）。 [DEX]
+
+于是分支里写 `1.0f - progress` 是为了把它**转回 slideOffset**，
+再乘高度得到「往下推多少」：
+
+    progress = 1  →  v2 = 0  →  导航栏不位移（收起态，正常显示）
+    progress = 0  →  v2 = 1  →  导航栏下移一个自身高度（全屏态，刚好推出屏幕）
+
+「下移一个自身高度」这个量是刚好够的：导航栏贴在屏幕底部，
+下移自身高度后它的上沿正好落在屏幕下沿，完全不可见。
+
+所以代码里没有任何 clamp、没有 max/min、没有插值表 ——
+乘出来的值天然落在 [0, height]。
+
+
+=====================================================================
+5. 同一个分支里还动了两样东西（容易混进来）
+=====================================================================
+
+拖动时同一个分支还改了另外两个东西。它们**不是导航栏**，但经常被一起提到。
+
+5.1 系统状态栏颜色：Liuf
+---------------------------------------------------------------------
+    // Liuf.c(float f)
+    g = clamp(f, 0f, 1f);
+    d();
+
+    // Liuf.d()
+    if (!enabled) return;
+    int color;
+    if (g > 0f)              color = context.getColor(music_full_transparent); // 全透明
+    else if (b /*强制单色*/) color = a;
+    else                     color = ArgbEvaluator.evaluate(g, e, a);          // e → a
+    activity.getWindow().setStatusBarColor(color);
+
+    e = R.color.header_color
+    a = R.color.quantum_black_100
+    2131101973 = R.color.music_full_transparent
+
+调用点传的是 `v2`（= slideOffset）。所以：
+
+    slideOffset > 0（一开始拖）→  状态栏立刻变全透明
+    slideOffset = 0（收回）    →  恢复成 header_color 与 black 之间的插值
+
+注意 `g > 0` 这个判断是**大于零就直接全透明**，不是渐变。
+渐变分支只在 `g == 0` 时才走（那时 evaluate(0, e, a) = e）。
+
+5.2 顶部 slim 条容器：slim_bar_container
+---------------------------------------------------------------------
+`Ljfi.d` 是 `@id/slim_bar_container`（`MusicActivity.findViewById(2131430415)`
+→ 0x7F0B0C0F），由 `Lgbf.f()` 赋给 `Ljfi.d`。 [DEX]
+
+它拿到**和导航栏一模一样的公式**：`translationY = 自身高度 × slideOffset`。
+
+也就是说：播放器升起来的时候，底部导航栏往下退一个身位，
+顶部 slim 条也往下退一个身位。两个都朝下，量各自不同。
+
+另外 `Ljfi.b.q()`（= `Laevd.q()`，`return l == 0 || l == 1`）
+决定顶部条这一帧是否要确保 VISIBLE。
+
+5.3 顶部条的 LayoutTransition 与导航栏无关（重要）
+---------------------------------------------------------------------
+`Laevd`（顶部 slim 条控制器）里确实有 `LayoutTransition`：
+
+    // Laevd.a(boolean withListener)
+    LayoutTransition lt = new LayoutTransition();
+    lt.setStartDelay(1, 0);            // 1 = CHANGE_APPEARING，起始延迟 0
+    lt.setDuration(T);                 // T = resources.getInteger(0x010e0002)
+    if (withListener) lt.addTransitionListener(new Laevg());
+    return lt;
+
+    // Laevd.p(ViewGroup vg, SlimStatusBar bar)
+    if (vg == h) { if (!experiment(151, 45649805)) I.setAnimator(3, u(bar)); }
+    else if (vg == i) { J.setAnimator(3, u(bar)); }
+    // 3 = CHANGE_DISAPPEARING
+
+    // Laevd.u(SlimStatusBar bar)
+    PropertyValuesHolder.ofInt("top", bar.getTop(), bar.getBottom())
+    → ObjectAnimator.ofPropertyValuesHolder(bar, ...)
+
+    0x010e0002 是 android 框架的 integer，按 AOSP public.xml 的字母序
+    对应 config_shortAnimTime = 200ms。                        [推断]
+
+**这条 LayoutTransition 作用在顶部 slim 条（SlimStatusBar）上，
+不作用在底部导航栏上。** 导航栏那边一个 LayoutTransition 都没有。
+
+`Laevd` 的配色字段也印证了它管的是顶部条：
+`slim_status_bar_active_background_color` /
+`slim_status_bar_inactive_background_color` /
+`slim_status_bar_shimmer_background_color`，尺寸读 `dimen/slim_status_bar_padding`。
+
+
+=====================================================================
+6. 复刻需要的全部数值
+=====================================================================
+
+    // 拖动阶段（每帧）
+    nav.translationY   = nav.height * slideOffset
+    topbar.translationY= topbar.height * slideOffset
+    statusBarColor     = slideOffset > 0 ? TRANSPARENT : headerColor
+
+    // 落定
+    MINIMIZED : nav.translationY = 0;  nav.visibility = VISIBLE
+    FULLSCREEN: nav.visibility   = GONE
+    DISMISSED : （不碰导航栏）
+
+    // 常量
+    导航栏高度        = 运行时 TabLayout.getHeight()
+                        布局里是 layout_height="wrap_content"，
+                        由图标 + 文字 + 内边距撑开，代码里没有硬编码 dp
+    mini player 高度  = dimen/mini_player_height = 68dp
+                        （另有 floating_mini_player_height = 64dp，
+                          watch_while_mini_player_height_short_stack = 72dp）
+    导航栏 tab 数     = 3（FEmusic_home / FEmusic_explore 或 FEsearch / FEmusic_library_landing）
+    导航栏 TabLayout 的 tab 参数：
+        tabGravity = FILL(2)   tabMode = FIXED(0)
+        tabPaddingStart = tabPaddingEnd = dimen/tab_padding_horizontal
+        tabMinWidth     = dimen/remix_generic_button_size
+        tabTextAppearance = style/SentenceCaseTab
+
+    // 没有的东西（复刻时不要自己加）
+    导航栏没有 alpha 动画
+    导航栏没有 scale 动画
+    导航栏没有独立的 duration / interpolator
+    导航栏没有 LayoutTransition
+
+
+=====================================================================
+7. 对上一份（drag-motion）的修正
+=====================================================================
+
+7.1 bI 的语义
+---------------------------------------------------------------------
+上一份 §2 给的调用点表里写：
+
+    I(MAXIMIZED_NOW_PLAYING, 0f)
+    I(MINIMIZED,             0f)     ← 这一行不对
+    I(HALF_EXPANDED,         q())
+    I(ADDITIONAL_VIEW,        1.0f)
+
+`I(MINIMIZED, 0f)` 来自 `O(Lhui)` 这条路径。但落定态实际走的是
+`Ljno.b()` → `I()` 与 `as()`，这两处给 MINIMIZED 传的都是 **1.0f**： [DEX]
+
+    // as() 偏移 214 ~ 244
+    sget-object  v0, Lhui;->b      // MINIMIZED
+    iput-object  v0, ->bH
+    goto         +0bh              // → 偏移 244
+    iput         v2, ->bI          // v2 = 1065353216 = 1.0f
+
+    // Ljno.b() 偏移 56 ~ 60
+    sget-object  v7, Lhui;->b      // MINIMIZED
+    invoke-virtual I(MINIMIZED, v2)   // v2 = 1.0f
+
+同一份 `as()` 里 MAXIMIZED_NOW_PLAYING 给 0f，DISMISSED 与 MINIMIZED 给 1.0f，
+HALF_EXPANDED 给 q()。
+
+所以正确的说法是：
+
+    bI = 1 − slideOffset
+    1 = 收起（mini / dismissed），0 = 全屏
+
+上一份 §2 的结论「bI = 0 是标准态（全屏或 mini）」应改为
+「bI 是展开量的补数，0 只在全屏时出现」。
+上一份 §8 的 alpha 公式方向因此是对的（mini 元素随 bI 增大变亮），
+错的只是那张表里的 MINIMIZED 一行。
+
+7.2 上一份 §8.2 的那个 TabLayout
+---------------------------------------------------------------------
+上一份 §8.2 写的 `tab.setAlpha(...)` + `bI > 0.035 → GONE` 那段，
+取的是 `PlayerBottomSheet.d`（播放器面板自己的 `TabbedView`）里的 TabLayout。
+
+底部导航栏是另一条路径：`MusicActivity.onCreate` 里 `findViewById` 拿到
+TabLayout 后存进 `Lhid.g`。
+
+两者入口不同（`PlayerBottomSheet.d.b` vs `Lhid.g`），本文只讨论后者。
+是否同一个 View 实例本文没有证明。 [未知]
+
+
+=====================================================================
+8. 没能确定的部分
+=====================================================================
+
+1. 导航栏 TabLayout 的实际 dp 高度。
+   代码只取 `getHeight()`，布局是 `wrap_content`。
+   APK 里布局文件名被压成 `res/CnU.xml` / `res/ZP_.xml` 这种，
+   无法从名字定位到「主界面用的那一个」，也没在真机上量。
+   → 复刻时用 56dp 是估值，不是实测。
+
+2. `Lhid.u()` 里实验开关 276 / 45858210 与 `Ljid.c()` 的 `Optional<Lhil>.C()`
+   具体在什么业务条件下返回 true（即「什么时候该隐藏导航栏」）。
+   只确认了它影响 `o()` 是否执行 setVisibility(VISIBLE)。
+
+3. `Lgbf.p()` 的实现细节。它在本分支和几乎所有分支末尾都被调用，
+   从调用位置判断是统一收尾刷新，但没逐行读完。
+
+4. `Laevd.l`（决定 `q()` 返回值的小整数）的取值时机。
+   只确认 `q()` = `l == 0 || l == 1`。
+
+5. `0x010e0002 = config_shortAnimTime = 200ms` 是按 AOSP public.xml 字母序推的，
+   没有在设备上读到框架资源表。标 [推断]。
+
+6. 导航栏与播放器面板的 z 序（谁盖谁）。DEX 里只有 setTranslationY，
+   没有 setZ / bringToFront / elevation 相关调用，
+   但布局层级没能还原出来，所以「导航栏是被面板盖住还是自己滑出去」
+   只能从「下移一个自身高度刚好出屏」这个量反推。
+
+
+=====================================================================
+9. 类名映射
+=====================================================================
+
+    Lhui              状态枚举（12 值）
+                      a DISMISSED / b MINIMIZED / c MAXIMIZED_NOW_PLAYING
+                      d ..._HALF_EXPANDED / e ..._ADDITIONAL_VIEW
+                      f DOCKED_..._BELOW_MINI_PLAYER / g DOCKED_..._BELOW_PLAYER
+                      h FULLSCREEN / i SLIDING_VERTICALLY / j QUEUE_EXPANDING
+                      k DOCKED_..._EXPANDING / l SLIDING_HORIZONTALLY
+
+    Ljno              BottomSheetCallback（父类 Lafcj）
+                      a(View,F) = onSlide      b(View,I) = onStateChanged
+
+    Lgbf              外壳协调器（WatchWhileLayout.cd.a）
+                      bd  Liuf        状态栏颜色
+                      bV  Lhid        底部导航栏
+                      bC  Lauut→Ljfi  顶部 slim 条
+                      cf  ViewGroup   @id/slim_bar_container 的副本
+                      f()             把 cf 写进 Ljfi.d
+
+    Lhid              底部导航栏控制器
+                      g   TabLayout（MusicActivity.findViewById 得到）
+                      m() 建 3 个 tab
+                      f() GONE   n() translationY=0   o() VISIBLE(带条件)
+                      u() 「是否该隐藏」
+
+    Liuf              系统状态栏颜色
+                      a R.color.quantum_black_100     e R.color.header_color
+                      g 进度  d() 写 setStatusBarColor
+
+    Ljfi              顶部条协调器
+                      a Laevc   b Laevd   d ViewGroup(@id/slim_bar_container)
+
+    Laevd             顶部 slim 条控制器（LayoutTransition / 背景色 / padding）
+                      T  long，= resources.getInteger(0x010e0002)
+                      I / J  LayoutTransition      h / i  ViewGroup
+                      j / k  SlimStatusBar         l  int（q() 用）
+
+    WatchWhileLayout  根布局
+                      bH  Lhui  状态        bI  float  进度（= 1 − slideOffset）
+                      cd  Lhes  持有 Lgbf     aM  PlayerPageBehavior
+                      I(Lhui,F)  状态分发总入口
+                      as()       按状态重置 bI
+                      onLayout   把 r(bI) 发布进进度流

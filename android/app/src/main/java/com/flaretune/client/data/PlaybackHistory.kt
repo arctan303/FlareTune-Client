@@ -242,6 +242,17 @@ class PlaybackHistoryRepository(
         return completion.await()
     }
 
+    /** Account switch: revoke in-memory ownership without deleting this account's history. */
+    fun detach() {
+        synchronized(lock) {
+            identity = null
+            generation++
+            mutableState.value = emptyList()
+            mutableNotice.value = null
+            enqueue(Command.Clear(generation, null))
+        }
+    }
+
     /** Retires the binding immediately. A later bind is required to resume recording. */
     fun clear() {
         synchronized(lock) {

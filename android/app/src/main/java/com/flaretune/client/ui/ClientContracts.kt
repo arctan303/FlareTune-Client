@@ -6,8 +6,14 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.flaretune.client.model.*
+import com.flaretune.client.data.AppThemeMode
+import com.flaretune.client.data.PlayedCollectionType
 import com.flaretune.client.data.SearchEntity
+import com.flaretune.client.data.SavedAccountSummary
+import com.flaretune.client.playback.SleepTimerState
 import kotlinx.coroutines.flow.StateFlow
+
+enum class ImageCacheClearResult { CLEARING, CLEARED, FAILED, UNAVAILABLE }
 
 enum class ClientScreen { RESTORING, CONNECT, CHANGE_PASSWORD, LIBRARY }
 enum class LibraryTab { CATALOG, FAVORITES, ALBUMS }
@@ -25,6 +31,8 @@ data class PlaybackSnapshot(
     val repeatMode: Int = 0,
     val failed: Boolean = false,
     val volume: Float = 1f,
+    val previousQueueIndex: Int? = null,
+    val nextQueueIndex: Int? = null,
 )
 
 data class ClientUiState(
@@ -32,6 +40,16 @@ data class ClientUiState(
     val instanceUrl: String = "",
     val username: String = "",
     val accountName: String = "",
+    val avatarUrl: String? = null,
+    val avatarRevision: Long = 0L,
+    val profileBusy: Boolean = false,
+    val profileNotice: ClientNotice? = null,
+    val savedAccounts: List<SavedAccountSummary> = emptyList(),
+    val addingAccount: Boolean = false,
+    val splashNonce: Int = 0,
+    val keepScreenOnEnabled: Boolean = true,
+    val themeMode: AppThemeMode = AppThemeMode.SYSTEM,
+    val imageCacheClearResult: ImageCacheClearResult? = null,
     val busy: Boolean = false,
     val notice: ClientNotice? = null,
     val tab: LibraryTab = LibraryTab.CATALOG,
@@ -118,6 +136,10 @@ data class ClientUiState(
     val artistAlbumsHasMore: Boolean = false,
     val artistAlbumsNotice: ClientNotice? = null,
     val discoverySongs: List<Song> = emptyList(),
+    val homeLibrarySongs: List<Song> = emptyList(),
+    val homeLibraryLoading: Boolean = false,
+    val playlistSortMode: PlaylistSortMode = PlaylistSortMode.CUSTOM,
+    val playlistSongSort: PlaylistSongSortMode = PlaylistSongSortMode.DEFAULT,
     val continueListeningSongs: List<Song> = emptyList(),
     val homeHistoryPreviewSong: Song? = null,
     val spotlightArtist: SpotlightArtist? = null,
@@ -126,9 +148,77 @@ data class ClientUiState(
     val recentSearches: List<SearchEntity> = emptyList(),
     val recentSearchTerms: List<String> = emptyList(),
     val searchHistoryNotice: ClientNotice? = null,
+    val visitedArtists: List<VisitedArtist> = emptyList(),
+    val playedCollections: List<PlayedCollection> = emptyList(),
+    val queueSnapshots: List<QueueSnapshot> = emptyList(),
+    val playbackFeedback: PlaybackFeedbackEvent? = null,
 
 ) {
     val activeLyricIndex: Int get() = lyricState.activeLyricIndex
+}
+
+enum class PlaylistSortMode { CUSTOM, RECENTLY_UPDATED, NAME, TRACK_COUNT }
+
+enum class PlaylistSongSortMode { DEFAULT, TITLE, ARTIST, DURATION, REVERSED }
+
+enum class PlaybackFeedbackKind {
+    PLAYED_SINGLE_NEXT,
+    PLAYED_BATCH_NEXT,
+    ENQUEUED_BATCH,
+    FAVORITED_BATCH,
+    QUEUE_RESTORED,
+    QUEUE_RESTORED_PARTIAL,
+    TRACK_UNAVAILABLE,
+    QUEUE_RESTORE_UNAVAILABLE,
+}
+
+data class PlaybackFeedbackEvent(
+    val id: Long,
+    val kind: PlaybackFeedbackKind,
+    val omittedCount: Int = 0,
+)
+
+data class VisitedArtist(
+    val id: String? = null,
+    val name: String,
+    val source: String = "local",
+    val visitedAtMs: Long,
+    val coverUrl: String? = null,
+) {
+    val key: String
+        get() {
+            val cleanId = id?.trim()?.takeIf(String::isNotBlank)
+            return if (cleanId != null) "id:$cleanId"
+            else "name:${source.trim().lowercase()}:${name.trim().lowercase()}"
+        }
+
+    fun toArtist(): Artist = Artist(name = name, coverUrl = coverUrl, id = id)
+}
+
+data class PlayedCollection(
+    val type: PlayedCollectionType,
+    val id: String,
+    val title: String,
+    val subtitle: String = "",
+    val trackCount: Int = 0,
+    val source: String = "local",
+    val kind: String = "regular",
+    val playedAtMs: Long,
+    val coverUrl: String? = null,
+    val previewCovers: List<String> = emptyList(),
+) {
+    val key: String get() = "${type.name}:$id"
+}
+
+data class QueueSnapshot(
+    val id: String,
+    val capturedAtMs: Long,
+    val sourceLabel: String = "",
+    val sourceType: String = "",
+    val songs: List<Song>,
+    val currentIndex: Int,
+) {
+    val currentSong: Song? get() = songs.getOrNull(currentIndex)
 }
 
 interface ClientActions {
@@ -139,6 +229,21 @@ interface ClientActions {
     fun setVolume(volume: Float)
     fun login(instanceUrl: String, username: String, password: String)
     fun changePassword(currentPassword: String, newPassword: String)
+    fun beginAddAccount() {}
+    fun cancelAddAccount() {}
+    fun switchAccount(accountKey: String) {}
+    fun removeSavedAccount(accountKey: String) {}
+    fun setSleepTimer(minutes: Int) {}
+    fun setSleepTimerEndOfTrack() {}
+    fun setSleepTimerFinishCurrentTrack(enabled: Boolean) {}
+    fun cancelSleepTimer() {}
+    fun setKeepScreenOnEnabled(enabled: Boolean) {}
+    fun setThemeMode(mode: AppThemeMode) {}
+    fun clearImageCache() {}
+    fun updateDisplayName(displayName: String) {}
+    fun setAccountAvatar(sourceUri: String) {}
+    fun clearAccountAvatar() {}
+    fun dismissProfileNotice() {}
     fun logout()
     fun search(query: String)
     fun selectTab(tab: LibraryTab)
@@ -179,13 +284,30 @@ interface ClientActions {
     fun replacePlaylistOrder(songIds: List<String>) {}
     fun movePlaylistShelf(fromIndex: Int, toIndex: Int) {}
     fun replacePlaylistShelfOrder(ids: List<String>) {}
+    fun selectPlaylistSort(mode: PlaylistSortMode) {}
+    fun selectPlaylistSongSort(mode: PlaylistSongSortMode) {}
+    fun addFavorites(songs: List<Song>) {}
     fun playSongs(songs: List<Song>, startIndex: Int = 0, shuffle: Boolean = false) {}
+    fun playSingleAsNext(song: Song, fromSearch: Boolean = false) {}
+    fun setSecondaryOverlayActive(active: Boolean) {}
+    fun dismissPlaybackFeedback(eventId: Long) {}
     fun playPlaylist(playlist: PlaylistSummary, shuffle: Boolean = false) {}
+    fun enqueuePlaylist(playlist: PlaylistSummary) {}
     fun playNext(song: Song) {}
+    fun playNextSongs(songs: List<Song>) {}
     fun enqueue(songs: List<Song>) {}
     fun clearQueue() {}
     fun removeHistory(songId: String) {}
     fun clearHistory() {}
+    fun removeVisitedArtist(artistKey: String) {}
+    fun clearVisitedArtists() {}
+    fun removePlayedCollection(collectionKey: String) {}
+    fun clearPlayedCollections() {}
+    fun playPlayedCollection(collection: PlayedCollection) {}
+    fun openPlayedCollection(collection: PlayedCollection) {}
+    fun restoreQueueSnapshot(snapshotId: String) {}
+    fun removeQueueSnapshot(snapshotId: String) {}
+    fun clearQueueSnapshots() {}
     fun setPlaylistCover(playlist: PlaylistSummary, sourceUri: String) {}
     fun clearPlaylistCover(playlist: PlaylistSummary) {}
     fun searchPlaylistSongs(query: String) {}
@@ -232,4 +354,12 @@ internal val LocalPlaybackPositionMs = staticCompositionLocalOf<StateFlow<Long>?
 internal fun rememberPlaybackPositionMsState(fallbackPositionMs: Long): State<Long> {
     val flow = LocalPlaybackPositionMs.current
     return flow?.collectAsState() ?: rememberUpdatedState(fallbackPositionMs)
+}
+
+internal val LocalSleepTimer = staticCompositionLocalOf<StateFlow<SleepTimerState>?> { null }
+
+@Composable
+internal fun rememberSleepTimerState(): State<SleepTimerState> {
+    val flow = LocalSleepTimer.current
+    return flow?.collectAsState() ?: rememberUpdatedState(SleepTimerState())
 }

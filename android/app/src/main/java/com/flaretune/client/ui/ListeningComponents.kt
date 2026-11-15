@@ -1,6 +1,5 @@
 package com.flaretune.client.ui
 
-import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
@@ -18,19 +17,22 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -49,11 +51,14 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
@@ -65,6 +70,7 @@ import androidx.compose.ui.unit.isSpecified
 import coil.ImageLoader
 import coil.compose.AsyncImage
 import com.flaretune.client.R
+import com.flaretune.client.data.PlayedCollectionType
 import com.flaretune.client.model.ClientNotice
 import com.flaretune.client.model.PlaylistSummary
 import com.flaretune.client.model.Song
@@ -132,24 +138,74 @@ internal fun rememberAbsorbBottomOverscroll(): NestedScrollConnection = remember
 /**
  * Unified ModalBottomSheet shell across Queue, Action Menus, Song Pickers, and Ordering lists.
  */
+internal val LocalFlareSheetDismiss = compositionLocalOf<((() -> Unit) -> Unit)?> { null }
+
+class FlareSheetDismissHandle {
+    internal var dismissWithAction: ((() -> Unit) -> Unit)? = null
+
+    fun dismiss(afterHide: () -> Unit) {
+        val handler = dismissWithAction
+        if (handler != null) {
+            handler(afterHide)
+        } else {
+            afterHide()
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun FlareModalSheet(
     onDismissRequest: () -> Unit,
     modifier: Modifier = Modifier,
     sheetGesturesEnabled: Boolean = true,
+    dismissHandle: FlareSheetDismissHandle? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
+    val latestOnDismiss by rememberUpdatedState(onDismissRequest)
+    var dismissing by remember { mutableStateOf(false) }
+    val animatedDismiss: (() -> Unit) -> Unit = { afterHide ->
+        if (!dismissing) {
+            dismissing = true
+            scope.launch {
+                var completed = false
+                try {
+                    if (sheetState.isVisible) {
+                        sheetState.hide()
+                    }
+                    completed = true
+                } finally {
+                    dismissing = false
+                    if (completed || !sheetState.isVisible) {
+                        afterHide()
+                    }
+                }
+            }
+        }
+    }
+    SideEffect {
+        dismissHandle?.dismissWithAction = animatedDismiss
+    }
+    DisposableEffect(dismissHandle) {
+        onDispose {
+            dismissHandle?.dismissWithAction = null
+        }
+    }
     ModalBottomSheet(
-        onDismissRequest = onDismissRequest,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        onDismissRequest = { if (!dismissing) latestOnDismiss() },
+        sheetState = sheetState,
         sheetGesturesEnabled = sheetGesturesEnabled,
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
         containerColor = MaterialTheme.colorScheme.surface,
         tonalElevation = 2.dp,
         modifier = modifier,
-        content = content,
-    )
+    ) {
+        CompositionLocalProvider(LocalFlareSheetDismiss provides animatedDismiss) {
+            content()
+        }
+    }
 }
 
 @Composable
@@ -160,6 +216,7 @@ internal fun FlareSheetHeader(
     closeEnabled: Boolean = true,
     trailingActions: @Composable RowScope.() -> Unit = {},
 ) {
+    val dismissSheet = LocalFlareSheetDismiss.current
     Row(
         Modifier.fillMaxWidth().padding(start = 20.dp, end = 10.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -187,7 +244,7 @@ internal fun FlareSheetHeader(
             ActionIcon(
                 ClientIcons.Close,
                 stringResource(R.string.ft_close),
-                onClose,
+                { dismissSheet?.invoke(onClose) ?: onClose() },
                 enabled = closeEnabled,
             )
         }
@@ -251,7 +308,8 @@ internal fun AnimatedTrashIcon(
 }
 
 /**
- * Programmatically drawn red heart on a crisp white canvas for the special "Favorites / 我喜欢" playlist.
+ * Programmatically drawn coral-red five-pointed star on a crisp white canvas for the special
+ * "Favorites / 我的收藏" playlist, matching the web `collection-star.svg` artwork.
  */
 @Composable
 internal fun FavoriteHeartCover(
@@ -261,58 +319,46 @@ internal fun FavoriteHeartCover(
         val w = size.width
         val h = size.height
         val minDim = minOf(w, h)
-        drawRect(
-            brush = Brush.verticalGradient(
-                colors = listOf(Color(0xFFFFFFFF), Color(0xFFFFF5F7)),
-            ),
-        )
+        drawRect(color = Color(0xFFFFFFFF))
         drawCircle(
             brush = Brush.radialGradient(
-                colors = listOf(Color(0x1CF43F5E), Color.Transparent),
-                center = Offset(w * 0.5f, h * 0.52f),
+                colors = listOf(Color(0x18EF3150), Color.Transparent),
+                center = Offset(w * 0.5f, h * 0.5f),
                 radius = minDim * 0.44f,
             ),
             radius = minDim * 0.44f,
-            center = Offset(w * 0.5f, h * 0.52f),
+            center = Offset(w * 0.5f, h * 0.5f),
         )
-        val heartW = minDim * 0.52f
-        val heartH = minDim * 0.46f
-        val left = (w - heartW) * 0.5f
-        val top = (h - heartH) * 0.5f + minDim * 0.015f
-        val cx = left + heartW * 0.5f
-        val dipY = top + heartH * 0.28f
-        val bottomY = top + heartH
+        val s = minDim / 256f
+        val ox = (w - minDim) * 0.5f
+        val oy = (h - minDim) * 0.5f
         val path = Path().apply {
-            moveTo(cx, bottomY)
-            cubicTo(
-                left + heartW * 0.14f, top + heartH * 0.72f,
-                left, top + heartH * 0.46f,
-                left, top + heartH * 0.28f,
-            )
-            cubicTo(
-                left, top,
-                left + heartW * 0.40f, top,
-                cx, dipY,
-            )
-            cubicTo(
-                left + heartW * 0.60f, top,
-                left + heartW, top,
-                left + heartW, top + heartH * 0.28f,
-            )
-            cubicTo(
-                left + heartW, top + heartH * 0.46f,
-                left + heartW * 0.86f, top + heartH * 0.72f,
-                cx, bottomY,
-            )
+            moveTo(ox + 129.43f * s, oy + 63.74f * s)
+            lineTo(ox + 144.15f * s, oy + 102.2f * s)
+            quadraticTo(ox + 145.05f * s, oy + 104.54f * s, ox + 147.54f * s, oy + 104.67f * s)
+            lineTo(ox + 188.68f * s, oy + 106.78f * s)
+            quadraticTo(ox + 192.67f * s, oy + 106.99f * s, ox + 189.56f * s, oy + 109.5f * s)
+            lineTo(ox + 157.53f * s, oy + 135.39f * s)
+            quadraticTo(ox + 155.58f * s, oy + 136.96f * s, ox + 156.23f * s, oy + 139.38f * s)
+            lineTo(ox + 166.93f * s, oy + 179.15f * s)
+            quadraticTo(ox + 167.97f * s, oy + 183.01f * s, ox + 164.62f * s, oy + 180.83f * s)
+            lineTo(ox + 130.1f * s, oy + 158.36f * s)
+            quadraticTo(ox + 128f * s, oy + 157f * s, ox + 125.9f * s, oy + 158.36f * s)
+            lineTo(ox + 91.38f * s, oy + 180.83f * s)
+            quadraticTo(ox + 88.03f * s, oy + 183.01f * s, ox + 89.07f * s, oy + 179.15f * s)
+            lineTo(ox + 99.77f * s, oy + 139.38f * s)
+            quadraticTo(ox + 100.42f * s, oy + 136.96f * s, ox + 98.47f * s, oy + 135.39f * s)
+            lineTo(ox + 66.44f * s, oy + 109.5f * s)
+            quadraticTo(ox + 63.33f * s, oy + 106.99f * s, ox + 67.32f * s, oy + 106.78f * s)
+            lineTo(ox + 108.46f * s, oy + 104.67f * s)
+            quadraticTo(ox + 110.95f * s, oy + 104.54f * s, ox + 111.85f * s, oy + 102.2f * s)
+            lineTo(ox + 126.57f * s, oy + 63.74f * s)
+            quadraticTo(ox + 128f * s, oy + 60f * s, ox + 129.43f * s, oy + 63.74f * s)
             close()
         }
         drawPath(
             path = path,
-            brush = Brush.verticalGradient(
-                colors = listOf(Color(0xFFFF4766), Color(0xFFE11D48)),
-                startY = top,
-                endY = bottomY,
-            ),
+            color = Color(0xFFEF3150),
         )
     }
 }
@@ -420,6 +466,9 @@ internal fun UnifiedSongSectionList(
     rowsPerColumn: Int = 4,
     tagPrefix: String = "shelf_song_",
     availableWidth: Dp = Dp.Unspecified,
+    selectionActive: Boolean = false,
+    selectedIds: Set<String> = emptySet(),
+    onLongSelect: ((Song) -> Unit)? = null,
     onSelect: (Song, Int) -> Unit,
 ) {
     val visible = remember(songs, limit) { songs.take(limit) }
@@ -437,6 +486,9 @@ internal fun UnifiedSongSectionList(
             buffering = buffering,
             loader = loader,
             tagPrefix = tagPrefix,
+            selectionActive = selectionActive,
+            selectedIds = selectedIds,
+            onLongSelect = onLongSelect,
             onSelect = onSelect,
             modifier = modifier.fillMaxWidth(),
         )
@@ -452,6 +504,9 @@ internal fun UnifiedSongSectionList(
                 buffering = buffering,
                 loader = loader,
                 tagPrefix = tagPrefix,
+                selectionActive = selectionActive,
+                selectedIds = selectedIds,
+                onLongSelect = onLongSelect,
                 onSelect = onSelect,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -476,6 +531,9 @@ private fun UnifiedSongSectionListContent(
     buffering: Boolean,
     loader: ImageLoader?,
     tagPrefix: String,
+    selectionActive: Boolean = false,
+    selectedIds: Set<String> = emptySet(),
+    onLongSelect: ((Song) -> Unit)? = null,
     onSelect: (Song, Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -503,6 +561,9 @@ private fun UnifiedSongSectionListContent(
                         playing = playing,
                         buffering = current && buffering,
                         horizontalPadding = 6.dp,
+                        selectionActive = selectionActive,
+                        selected = song.id in selectedIds,
+                        onLongClick = onLongSelect?.let { { it(song) } },
                         modifier = Modifier
                             .clip(RoundedCornerShape(12.dp))
                             .testTag(tagPrefix + song.id),
@@ -544,6 +605,8 @@ internal fun CollectionDetailScaffold(
     emptyMessage: String,
     isEmpty: Boolean,
     listTestTag: String = "detail_track_list",
+    topBarOverride: (@Composable () -> Unit)? = null,
+    bottomOverlay: (@Composable BoxScope.() -> Unit)? = null,
     tracksContent: LazyListScope.() -> Unit,
 ) {
     val listState = rememberLazyListState()
@@ -556,6 +619,11 @@ internal fun CollectionDetailScaffold(
         label = "detail_bar_alpha",
     )
     val bgColor = MaterialTheme.colorScheme.background
+    val density = LocalDensity.current
+    var overlayHeightDp by remember { mutableStateOf(0.dp) }
+    LaunchedEffect(bottomOverlay == null) {
+        if (bottomOverlay == null) overlayHeightDp = 0.dp
+    }
 
     BoxWithConstraints(
         Modifier.fillMaxSize().background(bgColor).testTag(testTag),
@@ -568,15 +636,13 @@ internal fun CollectionDetailScaffold(
             Box(
                 Modifier.fillMaxWidth().height(340.dp).align(Alignment.TopCenter),
             ) {
-                AsyncImage(
-                    model = ambientUrl,
+                PreblurredCoverBackdrop(
+                    coverUrl = ambientUrl,
                     imageLoader = loader,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
                     alpha = 0.24f,
-                    modifier = Modifier.fillMaxSize().let {
-                        if (Build.VERSION.SDK_INT >= 31) it.blur(48.dp) else it
-                    },
+                    targetSize = 64,
+                    radius = 14,
+                    modifier = Modifier.fillMaxSize(),
                 )
                 Box(
                     Modifier.fillMaxSize().background(
@@ -592,34 +658,44 @@ internal fun CollectionDetailScaffold(
 
         Column(Modifier.fillMaxSize()) {
             // Sticky Top Bar
-            Row(
-                Modifier.fillMaxWidth()
-                    .background(bgColor.copy(alpha = topBarAlpha))
-                    .padding(top = topInset + 4.dp, start = 8.dp, end = 8.dp, bottom = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                ActionIcon(
-                    ClientIcons.ChevronLeft,
-                    stringResource(R.string.ft_back),
-                    onBack,
-                    modifier = Modifier.testTag(backTag),
-                )
-                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                    androidx.compose.animation.AnimatedVisibility(
-                        visible = scrolledPastHero,
-                        enter = fadeIn(tween(180)),
-                        exit = fadeOut(tween(150)),
-                    ) {
-                        Text(
-                            title,
-                            style = MaterialTheme.typography.titleLarge,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(horizontal = 6.dp),
-                        )
-                    }
+            if (topBarOverride != null) {
+                Box(
+                    Modifier.fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .padding(top = topInset),
+                ) {
+                    topBarOverride()
                 }
-                headerExtraActions()
+            } else {
+                Row(
+                    Modifier.fillMaxWidth()
+                        .background(bgColor.copy(alpha = topBarAlpha))
+                        .padding(top = topInset + 4.dp, start = 8.dp, end = 8.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ActionIcon(
+                        ClientIcons.ChevronLeft,
+                        stringResource(R.string.ft_back),
+                        onBack,
+                        modifier = Modifier.testTag(backTag),
+                    )
+                    Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = scrolledPastHero,
+                            enter = fadeIn(tween(180)),
+                            exit = fadeOut(tween(150)),
+                        ) {
+                            Text(
+                                title,
+                                style = MaterialTheme.typography.titleLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = 6.dp),
+                            )
+                        }
+                    }
+                    headerExtraActions()
+                }
             }
 
             if (loading) {
@@ -629,7 +705,13 @@ internal fun CollectionDetailScaffold(
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxWidth().weight(1f).testTag(listTestTag),
-                contentPadding = PaddingValues(bottom = bottomInset),
+                contentPadding = PaddingValues(
+                    bottom = if (bottomOverlay != null && overlayHeightDp > 0.dp) {
+                        maxOf(bottomInset + 76.dp, overlayHeightDp + 12.dp)
+                    } else {
+                        bottomInset
+                    },
+                ),
             ) {
                 item(key = "collection-masthead") {
                     if (wide) {
@@ -771,12 +853,27 @@ internal fun CollectionDetailScaffold(
                 }
             }
         }
+        bottomOverlay?.let { overlay ->
+            Box(
+                Modifier.align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .onSizeChanged { size ->
+                        overlayHeightDp = with(density) { size.height.toDp() }
+                    },
+                contentAlignment = Alignment.BottomCenter,
+            ) {
+                overlay()
+            }
+        }
     }
 }
 
+private enum class PlayHistoryTab { SONGS, ARTISTS, COLLECTIONS, QUEUES }
+
 /**
- * Full-page Play History view reusing CollectionDetailScaffold.
+ * Play history secondary page with 4 top tabs: Songs, Artists, Albums & Playlists, and Past Queues.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun PlayHistoryPage(
     state: ClientUiState,
@@ -785,8 +882,18 @@ internal fun PlayHistoryPage(
     topInset: Dp,
     bottomInset: Dp,
     onBack: () -> Unit,
+    onOpenQueue: () -> Unit = {},
+    selectedTabIndex: Int? = null,
+    onSelectTabIndex: ((Int) -> Unit)? = null,
 ) {
     val listeningInteractions = LocalListeningInteractions.current
+    var localTab by rememberSaveable { mutableStateOf(PlayHistoryTab.SONGS) }
+    val selectedTab = selectedTabIndex
+        ?.let { PlayHistoryTab.entries.getOrNull(it.coerceIn(0, PlayHistoryTab.entries.lastIndex)) }
+        ?: localTab
+    val setSelectedTab: (PlayHistoryTab) -> Unit = { tab ->
+        if (onSelectTabIndex != null) onSelectTabIndex(tab.ordinal) else localTab = tab
+    }
     val historyItems = state.playHistory
     val historyKeys = remember(historyItems) {
         val seen = HashMap<String, Int>(historyItems.size)
@@ -796,86 +903,636 @@ internal fun PlayHistoryPage(
             if (count == 1) item.id else "${item.id}#$count"
         }
     }
-    val leadCover = historyItems.firstOrNull { !it.coverUrl.isNullOrBlank() }?.coverUrl
-    val previewCovers = remember(historyItems) {
-        historyItems.mapNotNull { it.coverUrl?.takeIf(String::isNotBlank) }.distinct().take(4)
+
+    val artistCoverLookup = remember(state.artists, state.songs, state.playHistory) {
+        buildMap {
+            state.artists.forEach { a ->
+                val url = a.photoUrl ?: a.coverUrl
+                if (!url.isNullOrBlank()) {
+                    a.id?.let { put("id:$it", url) }
+                    put("name:${a.name.lowercase()}", url)
+                }
+            }
+            (state.playHistory + state.songs).forEach { song ->
+                val url = song.coverUrl?.takeIf(String::isNotBlank) ?: return@forEach
+                song.artistId?.let { id -> getOrPut("id:$id") { url } }
+                if (song.artist.isNotBlank()) getOrPut("name:${song.artist.lowercase()}") { url }
+            }
+        }
     }
 
-    CollectionDetailScaffold(
-        kindLabel = stringResource(R.string.ft_continue_listening),
-        title = stringResource(R.string.ft_play_history),
-        metaLine = pluralStringResource(R.plurals.ft_track_count, historyItems.size, historyItems.size),
-        coverUrl = if (previewCovers.size >= 4) null else leadCover,
-        previewCovers = previewCovers,
-        fallbackIcon = ClientIcons.History,
-        loader = loader,
-        topInset = topInset,
-        bottomInset = bottomInset,
-        testTag = "history_panel",
-        backTag = "history_back",
-        onBack = onBack,
-        headerExtraActions = {
-            if (historyItems.isNotEmpty() && listeningInteractions != null) {
-                ActionIcon(
-                    ClientIcons.Trash,
-                    stringResource(R.string.ft_listening_clear_history),
-                    listeningInteractions.clearHistory,
-                    modifier = Modifier.testTag("history_clear"),
-                )
-            }
-        },
-        primaryActions = {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Button(
-                    onClick = { actions.playSongs(historyItems, 0) },
-                    enabled = historyItems.isNotEmpty(),
-                    shape = CircleShape,
-                    contentPadding = PaddingValues(horizontal = 22.dp, vertical = 12.dp),
-                    modifier = Modifier.testTag("history_play_all"),
-                ) {
-                    Icon(ClientIcons.Play, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.ft_play_all))
-                }
-            }
-        },
-        notice = state.historyNotice,
-        emptyMessage = stringResource(R.string.ft_empty_catalog),
-        isEmpty = historyItems.isEmpty(),
-        listTestTag = "history_list",
-    ) {
-        itemsIndexed(historyItems, key = { index, _ -> historyKeys[index] }) { _, song ->
-            val playedAt = listeningTime(state.playHistoryPlayedAt[song.id])
-            Column(Modifier.fillMaxWidth()) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    SongRow(
-                        song = song,
-                        imageLoader = loader,
-                        current = song.id == state.playback.current?.id,
-                        playing = state.playback.playing,
-                        buffering = state.playback.buffering,
-                        modifier = Modifier.weight(1f).testTag("history_song_" + song.id),
-                    ) { actions.playHistorySong(song) }
-                    val removedMessage = stringResource(R.string.ft_feedback_history_removed)
+    val albumLookup = remember(state.albums, state.searchAlbums, state.artistAlbums) {
+        (state.albums + state.searchAlbums + state.artistAlbums).associateBy { it.id }
+    }
+    val playlistLookup = remember(state.playlists) { state.playlists.associateBy { it.id } }
+
+    var pendingClearTab by remember { mutableStateOf<PlayHistoryTab?>(null) }
+    val fontScale = LocalDensity.current.fontScale
+
+    Column(Modifier.fillMaxSize().testTag("history_panel")) {
+        // Sticky Top Header
+        Row(
+            Modifier.fillMaxWidth()
+                .padding(top = topInset + 4.dp, start = 8.dp, end = 8.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ActionIcon(
+                ClientIcons.ChevronLeft,
+                stringResource(R.string.ft_back),
+                onBack,
+                modifier = Modifier.testTag("history_back"),
+            )
+            Text(
+                stringResource(R.string.ft_play_history),
+                Modifier.weight(1f).padding(horizontal = 6.dp),
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            when (selectedTab) {
+                PlayHistoryTab.SONGS -> if (historyItems.isNotEmpty() && listeningInteractions != null) {
                     ActionIcon(
                         ClientIcons.Trash,
-                        stringResource(R.string.ft_listening_remove_history),
-                        {
-                            actions.removeHistory(song.id)
-                            listeningInteractions?.feedback?.invoke(removedMessage)
-                        },
-                        modifier = Modifier.testTag("history_remove_" + song.id),
+                        stringResource(R.string.ft_listening_clear_history),
+                        listeningInteractions.clearHistory,
+                        modifier = Modifier.testTag("history_clear"),
                     )
                 }
-                if (playedAt.isNotBlank()) {
-                    Text(
-                        playedAt,
-                        Modifier.padding(start = 76.dp, bottom = 6.dp),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                PlayHistoryTab.ARTISTS -> if (state.visitedArtists.isNotEmpty()) {
+                    ActionIcon(
+                        ClientIcons.Trash,
+                        stringResource(R.string.ft_history_clear_tab),
+                        { pendingClearTab = PlayHistoryTab.ARTISTS },
+                        modifier = Modifier.testTag("history_clear_artists"),
+                    )
+                }
+                PlayHistoryTab.COLLECTIONS -> if (state.playedCollections.isNotEmpty()) {
+                    ActionIcon(
+                        ClientIcons.Trash,
+                        stringResource(R.string.ft_history_clear_tab),
+                        { pendingClearTab = PlayHistoryTab.COLLECTIONS },
+                        modifier = Modifier.testTag("history_clear_collections"),
+                    )
+                }
+                PlayHistoryTab.QUEUES -> if (state.queueSnapshots.isNotEmpty()) {
+                    ActionIcon(
+                        ClientIcons.Trash,
+                        stringResource(R.string.ft_history_clear_tab),
+                        { pendingClearTab = PlayHistoryTab.QUEUES },
+                        modifier = Modifier.testTag("history_clear_queues"),
                     )
                 }
             }
         }
+
+        // 4-Tab Capsule Strip
+        val tabsContent: @Composable () -> Unit = {
+            listOf(
+                Triple(PlayHistoryTab.SONGS, R.string.ft_history_tab_songs, "history_tab_songs"),
+                Triple(PlayHistoryTab.ARTISTS, R.string.ft_history_tab_artists, "history_tab_artists"),
+                Triple(PlayHistoryTab.COLLECTIONS, R.string.ft_history_tab_collections, "history_tab_collections"),
+                Triple(PlayHistoryTab.QUEUES, R.string.ft_history_tab_queues, "history_tab_queues"),
+            ).forEach { (tab, labelRes, tag) ->
+                val active = selectedTab == tab
+                Surface(
+                    onClick = { setSelectedTab(tab) },
+                    shape = CircleShape,
+                    color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.heightIn(min = 48.dp)
+                        .testTag(tag)
+                        .semantics { selected = active },
+                ) {
+                    Box(
+                        Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            stringResource(labelRes),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+        }
+        if (fontScale >= 1.35f) {
+            FlowRow(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                tabsContent()
+            }
+        } else {
+            Row(
+                Modifier.fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                tabsContent()
+            }
+        }
+
+        state.historyNotice?.let { notice ->
+            Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
+                Notice(notice)
+            }
+        }
+
+        BoxWithConstraints(
+            Modifier.weight(1f).fillMaxWidth(),
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            val contentModifier = if (maxWidth >= 720.dp) {
+                Modifier.widthIn(max = 900.dp).fillMaxSize()
+            } else {
+                Modifier.fillMaxSize()
+            }
+            when (selectedTab) {
+                PlayHistoryTab.SONGS -> {
+                    val removedMessage = stringResource(R.string.ft_feedback_history_removed)
+                    LazyColumn(
+                        modifier = contentModifier.testTag("history_list"),
+                        contentPadding = PaddingValues(bottom = bottomInset),
+                    ) {
+                        if (historyItems.isNotEmpty()) {
+                            item(key = "history-songs-header") {
+                                val countLabel = pluralStringResource(R.plurals.ft_track_count, historyItems.size, historyItems.size)
+                                val playAllButton: @Composable () -> Unit = {
+                                    Button(
+                                        onClick = { actions.playSongs(historyItems, 0) },
+                                        shape = CircleShape,
+                                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
+                                        modifier = Modifier.heightIn(min = 48.dp).testTag("history_play_all"),
+                                    ) {
+                                        Icon(ClientIcons.Play, null, Modifier.size(18.dp))
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(stringResource(R.string.ft_play_all))
+                                    }
+                                }
+                                if (fontScale >= 1.35f) {
+                                    Column(
+                                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Text(
+                                            countLabel,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        playAllButton()
+                                    }
+                                } else {
+                                    Row(
+                                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    ) {
+                                        Text(
+                                            countLabel,
+                                            Modifier.weight(1f),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        playAllButton()
+                                    }
+                                }
+                            }
+                            itemsIndexed(historyItems, key = { index, _ -> historyKeys[index] }) { _, song ->
+                                val playedAt = listeningTime(state.playHistoryPlayedAt[song.id])
+                                Column(Modifier.fillMaxWidth()) {
+                                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                        SongRow(
+                                            song = song,
+                                            imageLoader = loader,
+                                            current = song.id == state.playback.current?.id,
+                                            playing = state.playback.playing,
+                                            buffering = state.playback.buffering,
+                                            modifier = Modifier.weight(1f).testTag("history_song_" + song.id),
+                                        ) {
+                                            actions.playHistorySong(song)
+                                        }
+                                        ActionIcon(
+                                            ClientIcons.Trash,
+                                            stringResource(R.string.ft_listening_remove_history),
+                                            {
+                                                actions.removeHistory(song.id)
+                                                listeningInteractions?.feedback?.invoke(removedMessage)
+                                            },
+                                            modifier = Modifier.testTag("history_remove_" + song.id),
+                                        )
+                                    }
+                                    if (playedAt.isNotBlank()) {
+                                        Text(
+                                            playedAt,
+                                            Modifier.padding(start = 76.dp, bottom = 6.dp),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            item(key = "history-songs-empty") {
+                                HistoryTabEmptyMessage(stringResource(R.string.ft_history_empty_songs))
+                            }
+                        }
+                    }
+                }
+
+                PlayHistoryTab.ARTISTS -> {
+                    val removedMessage = stringResource(R.string.ft_history_artist_removed)
+                    LazyColumn(
+                        modifier = contentModifier.testTag("history_artists_list"),
+                        contentPadding = PaddingValues(bottom = bottomInset),
+                    ) {
+                        if (state.visitedArtists.isEmpty()) {
+                            item(key = "history-artists-empty") {
+                                HistoryTabEmptyMessage(stringResource(R.string.ft_history_empty_artists))
+                            }
+                        } else {
+                            items(state.visitedArtists, key = { it.key }) { artist ->
+                                val cover = artist.coverUrl
+                                    ?: artist.id?.let { artistCoverLookup["id:$it"] }
+                                    ?: artistCoverLookup["name:${artist.name.lowercase()}"]
+                                val visitedAt = listeningTime(artist.visitedAtMs)
+                                Row(
+                                    Modifier.fillMaxWidth()
+                                        .clickable { actions.openArtist(artist.toArtist()) }
+                                        .testTag("history_artist_" + artist.key)
+                                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Box(
+                                        Modifier.size(48.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Icon(ClientIcons.Artist, null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        if (!cover.isNullOrBlank() && loader != null) {
+                                            AsyncImage(
+                                                model = cover,
+                                                contentDescription = null,
+                                                imageLoader = loader,
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier.fillMaxSize(),
+                                            )
+                                        }
+                                    }
+                                    Spacer(Modifier.width(14.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            artist.name,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        if (visitedAt.isNotBlank()) {
+                                            Text(
+                                                visitedAt,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                    }
+                                    ActionIcon(
+                                        ClientIcons.Trash,
+                                        stringResource(R.string.ft_history_remove_item),
+                                        {
+                                            actions.removeVisitedArtist(artist.key)
+                                            listeningInteractions?.feedback?.invoke(removedMessage)
+                                        },
+                                        modifier = Modifier.testTag("history_remove_artist_" + artist.key),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                PlayHistoryTab.COLLECTIONS -> {
+                    val removedMessage = stringResource(R.string.ft_history_collection_removed)
+                    LazyColumn(
+                        modifier = contentModifier.testTag("history_collections_list"),
+                        contentPadding = PaddingValues(bottom = bottomInset),
+                    ) {
+                        if (state.playedCollections.isEmpty()) {
+                            item(key = "history-collections-empty") {
+                                HistoryTabEmptyMessage(stringResource(R.string.ft_history_empty_collections))
+                            }
+                        } else {
+                            items(state.playedCollections, key = { it.key }) { collection ->
+                                val liveAlbum = if (collection.type == PlayedCollectionType.ALBUM) albumLookup[collection.id] else null
+                                val livePlaylist = if (collection.type == PlayedCollectionType.PLAYLIST) playlistLookup[collection.id] else null
+                                val cover = collection.coverUrl ?: liveAlbum?.coverUrl ?: livePlaylist?.customCoverUrl
+                                val previews = collection.previewCovers.ifEmpty { livePlaylist?.previewCovers.orEmpty() }
+                                val isFavorite = collection.kind == "favorite"
+                                val typeLabel = when {
+                                    isFavorite -> stringResource(R.string.ft_liked_songs)
+                                    collection.type == PlayedCollectionType.ALBUM -> stringResource(R.string.ft_album_label)
+                                    else -> stringResource(R.string.ft_playlist_label)
+                                }
+                                val playedAt = listeningTime(collection.playedAtMs)
+                                val metaParts = buildList {
+                                    add(typeLabel)
+                                    if (collection.subtitle.isNotBlank()) add(collection.subtitle)
+                                    if (collection.trackCount > 0) add(pluralStringResource(R.plurals.ft_track_count, collection.trackCount, collection.trackCount))
+                                    if (playedAt.isNotBlank()) add(playedAt)
+                                }
+                                Row(
+                                    Modifier.fillMaxWidth()
+                                        .clickable { actions.openPlayedCollection(collection) }
+                                        .testTag("history_collection_" + collection.key)
+                                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    PlaylistCoverArt(
+                                        name = collection.title,
+                                        customCoverUrl = cover,
+                                        previewCovers = previews,
+                                        isFavorite = isFavorite,
+                                        loader = loader,
+                                        fallbackIcon = if (collection.type == PlayedCollectionType.ALBUM) ClientIcons.Disc else ClientIcons.Music,
+                                        modifier = Modifier.size(54.dp),
+                                        radius = 10.dp,
+                                    )
+                                    Spacer(Modifier.width(14.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            collection.title,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Text(
+                                            metaParts.joinToString(" · "),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                    ActionIcon(
+                                        ClientIcons.Play,
+                                        stringResource(R.string.ft_play),
+                                        { actions.playPlayedCollection(collection) },
+                                        modifier = Modifier.testTag("history_play_collection_" + collection.key),
+                                    )
+                                    ActionIcon(
+                                        ClientIcons.Trash,
+                                        stringResource(R.string.ft_history_remove_item),
+                                        {
+                                            actions.removePlayedCollection(collection.key)
+                                            listeningInteractions?.feedback?.invoke(removedMessage)
+                                        },
+                                        modifier = Modifier.testTag("history_remove_collection_" + collection.key),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                PlayHistoryTab.QUEUES -> {
+                    val removedMessage = stringResource(R.string.ft_history_queue_removed)
+                    LazyColumn(
+                        modifier = contentModifier.testTag("history_queues_list"),
+                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = bottomInset),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        if (state.playback.queue.isNotEmpty()) {
+                            item(key = "history-current-queue") {
+                                Surface(
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    modifier = Modifier.fillMaxWidth().testTag("history_current_queue_card"),
+                                ) {
+                                    val summaryContent: @Composable (Modifier) -> Unit = { summaryModifier ->
+                                        Column(summaryModifier) {
+                                            Text(
+                                                stringResource(R.string.ft_history_current_queue),
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = MaterialTheme.colorScheme.primary,
+                                            )
+                                            Spacer(Modifier.height(2.dp))
+                                            Text(
+                                                state.playback.current?.title
+                                                    ?: pluralStringResource(R.plurals.ft_track_count, state.playback.queue.size, state.playback.queue.size),
+                                                style = MaterialTheme.typography.titleMedium,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            Text(
+                                                pluralStringResource(R.plurals.ft_track_count, state.playback.queue.size, state.playback.queue.size),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                    }
+                                    val openQueueButton: @Composable () -> Unit = {
+                                        TextButton(
+                                            onClick = onOpenQueue,
+                                            modifier = Modifier.heightIn(min = 48.dp).testTag("history_open_current_queue"),
+                                        ) {
+                                            Text(stringResource(R.string.ft_history_view_current_queue))
+                                        }
+                                    }
+                                    if (fontScale >= 1.35f) {
+                                        Column(
+                                            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                                        ) {
+                                            summaryContent(Modifier.fillMaxWidth())
+                                            openQueueButton()
+                                        }
+                                    } else {
+                                        Row(
+                                            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            summaryContent(Modifier.weight(1f))
+                                            openQueueButton()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (state.queueSnapshots.isEmpty()) {
+                            item(key = "history-queues-empty") {
+                                HistoryTabEmptyMessage(stringResource(R.string.ft_history_empty_queues))
+                            }
+                        } else {
+                            items(state.queueSnapshots, key = { it.id }) { snapshot ->
+                                val sourceText = queueSnapshotSourceTitle(snapshot)
+                                val capturedAt = listeningTime(snapshot.capturedAtMs)
+                                val activeTrack = snapshot.currentSong
+                                Surface(
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                                    modifier = Modifier.fillMaxWidth().testTag("history_queue_" + snapshot.id),
+                                ) {
+                                    Column(Modifier.fillMaxWidth().padding(14.dp)) {
+                                        Row(
+                                            Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Column(Modifier.weight(1f)) {
+                                                Text(
+                                                    sourceText,
+                                                    style = MaterialTheme.typography.titleMedium,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                )
+                                                val sub = listOfNotNull(
+                                                    pluralStringResource(R.plurals.ft_track_count, snapshot.songs.size, snapshot.songs.size),
+                                                    capturedAt.takeIf(String::isNotBlank),
+                                                ).joinToString(" · ")
+                                                Text(
+                                                    sub,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            }
+                                            ActionIcon(
+                                                ClientIcons.Trash,
+                                                stringResource(R.string.ft_history_remove_item),
+                                                {
+                                                    actions.removeQueueSnapshot(snapshot.id)
+                                                    listeningInteractions?.feedback?.invoke(removedMessage)
+                                                },
+                                                modifier = Modifier.testTag("history_remove_queue_" + snapshot.id),
+                                            )
+                                        }
+                                        if (activeTrack != null) {
+                                            Spacer(Modifier.height(6.dp))
+                                            Text(
+                                                stringResource(R.string.ft_history_snapshot_now_playing, activeTrack.title),
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                        val previewLines = snapshot.songs.take(3)
+                                        if (previewLines.isNotEmpty()) {
+                                            Spacer(Modifier.height(6.dp))
+                                            previewLines.forEachIndexed { idx, song ->
+                                                val line = if (song.artist.isNotBlank()) "${idx + 1}. ${song.title} · ${song.artist}" else "${idx + 1}. ${song.title}"
+                                                Text(
+                                                    line,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                )
+                                            }
+                                        }
+                                        Spacer(Modifier.height(10.dp))
+                                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                            Button(
+                                                onClick = { actions.restoreQueueSnapshot(snapshot.id) },
+                                                shape = CircleShape,
+                                                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp),
+                                                modifier = Modifier.heightIn(min = 48.dp).testTag("history_restore_queue_" + snapshot.id),
+                                            ) {
+                                                Icon(ClientIcons.Play, null, Modifier.size(16.dp))
+                                                Spacer(Modifier.width(6.dp))
+                                                Text(stringResource(R.string.ft_history_restore_queue))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pendingClearTab?.let { clearTab ->
+        val (titleRes, messageRes) = when (clearTab) {
+            PlayHistoryTab.ARTISTS -> R.string.ft_history_clear_artists_title to R.string.ft_history_clear_artists_message
+            PlayHistoryTab.COLLECTIONS -> R.string.ft_history_clear_collections_title to R.string.ft_history_clear_collections_message
+            PlayHistoryTab.QUEUES -> R.string.ft_history_clear_queues_title to R.string.ft_history_clear_queues_message
+            PlayHistoryTab.SONGS -> R.string.ft_listening_clear_history to R.string.ft_listening_clear_history_message
+        }
+        AlertDialog(
+            onDismissRequest = { pendingClearTab = null },
+            modifier = Modifier.testTag("history_clear_dialog"),
+            title = { Text(stringResource(titleRes)) },
+            text = { Text(stringResource(messageRes)) },
+            dismissButton = {
+                TextButton(
+                    onClick = { pendingClearTab = null },
+                    modifier = Modifier.testTag("history_clear_cancel"),
+                ) {
+                    Text(stringResource(R.string.ft_cancel))
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        when (clearTab) {
+                            PlayHistoryTab.ARTISTS -> actions.clearVisitedArtists()
+                            PlayHistoryTab.COLLECTIONS -> actions.clearPlayedCollections()
+                            PlayHistoryTab.QUEUES -> actions.clearQueueSnapshots()
+                            PlayHistoryTab.SONGS -> actions.clearHistory()
+                        }
+                        pendingClearTab = null
+                    },
+                    modifier = Modifier.testTag("history_clear_confirm"),
+                ) {
+                    Text(stringResource(R.string.ft_history_clear_tab))
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun HistoryTabEmptyMessage(message: String) {
+    Box(
+        Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 56.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            message,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun queueSnapshotSourceTitle(snapshot: QueueSnapshot): String {
+    val kind = when (snapshot.sourceType) {
+        "album" -> stringResource(R.string.ft_album_label)
+        "playlist" -> stringResource(R.string.ft_playlist_label)
+        "favorites" -> stringResource(R.string.ft_liked_songs)
+        "artist" -> stringResource(R.string.ft_artist_label)
+        "continue" -> stringResource(R.string.ft_continue_listening)
+        "discovery" -> stringResource(R.string.ft_listening_random)
+        "history" -> stringResource(R.string.ft_play_history)
+        "search" -> stringResource(R.string.ft_search_page)
+        "stats" -> stringResource(R.string.ft_listening_statistics)
+        "library" -> stringResource(R.string.ft_from_your_library)
+        else -> ""
+    }
+    return when {
+        snapshot.sourceLabel.isNotBlank() && kind.isNotBlank() && snapshot.sourceType != "favorites" ->
+            stringResource(R.string.ft_history_snapshot_source_named, kind, snapshot.sourceLabel)
+        snapshot.sourceLabel.isNotBlank() -> snapshot.sourceLabel
+        kind.isNotBlank() -> kind
+        else -> stringResource(R.string.ft_history_snapshot_source_fallback)
     }
 }

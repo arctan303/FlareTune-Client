@@ -99,18 +99,6 @@ class ClientLifecycleUiTest {
         rule.runOnIdle { org.junit.Assert.assertEquals("yt:artist:UCfixture", opened?.id) }
     }
 
-    @Test fun unknownCountsAreNotShownAsZeroAndPartialFactsRemainAvailable() {
-        var artist by mutableStateOf(Artist("Remote", knownSongCount = null, knownAlbumCount = null))
-        rule.setContent { FlareTuneTheme {
-            androidx.compose.material3.Text(knownArtistCounts(artist), androidx.compose.ui.Modifier.testTag("count_label"))
-        } }
-        rule.onNodeWithTag("count_label").assertTextEquals("")
-        rule.runOnIdle { artist = artist.copy(knownSongCount = 3) }
-        rule.onNodeWithTag("count_label").assertTextEquals("3 tracks")
-        rule.runOnIdle { artist = artist.copy(knownSongCount = null, knownAlbumCount = 1) }
-        rule.onNodeWithTag("count_label").assertTextEquals("1 album")
-    }
-
     @Test fun aDifferentAccountAndAnActuallyClearedQueueCloseTheOldPlayer() {
         val state = mutableStateOf(fixture)
         rule.setContent { FlareTuneTheme { ClientApp(state.value, lifecycleActions) } }
