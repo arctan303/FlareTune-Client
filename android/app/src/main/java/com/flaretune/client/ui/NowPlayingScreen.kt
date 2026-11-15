@@ -46,7 +46,6 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
@@ -1344,31 +1343,27 @@ private fun ClassicLyricsTopRow(
                 modifier = Modifier.weight(1f).clipToBounds().then(revealModifier),
             ) { displaySong ->
                 Column(Modifier.fillMaxWidth()) {
-                    Text(
-                        displaySong.title,
+                    MarqueeFadedText(
+                        text = displaySong.title,
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontSize = 16.sp * controlScale,
                             lineHeight = 22.sp * controlScale,
                             fontWeight = FontWeight.Bold,
                         ),
                         color = FlareTokens.ClassicTitle,
-                        maxLines = 1,
-                        softWrap = false,
-                        modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE),
+                        iterations = Int.MAX_VALUE,
                     )
                     val meta = listOf(displaySong.artist.ifBlank { stringResource(R.string.ft_unknown_artist) }, displaySong.album)
                         .filter { it.isNotBlank() }
                         .joinToString(" — ")
-                    Text(
-                        meta,
+                    MarqueeFadedText(
+                        text = meta,
                         style = MaterialTheme.typography.bodyMedium.copy(
                             fontSize = 14.sp * controlScale,
                             lineHeight = 20.sp * controlScale,
                         ),
                         color = FlareTokens.ClassicSubtitle,
-                        maxLines = 1,
-                        softWrap = false,
-                        modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE),
+                        iterations = Int.MAX_VALUE,
                     )
                 }
             }
@@ -1724,6 +1719,12 @@ private fun ClassicLyricsSceneContent(
                     }
                     val blurPxList = remember(presentations, density) {
                         presentations.map { with(density) { it.blurRadius.toPx() } }
+                    }
+                    val topEdgeFadePx = remember(density, lyricScale) {
+                        with(density) { (72.dp * lyricScale).toPx() }
+                    }
+                    val bottomEdgeFadePx = remember(density, lyricScale) {
+                        with(density) { (80.dp * lyricScale).toPx() }
                     }
 
                     SubcomposeLayout(
@@ -2121,15 +2122,35 @@ private fun ClassicLyricsSceneContent(
                                 val subPixelY = targetY - yInt
                                 placeable.placeRelativeWithLayer(0, yInt) {
                                     val liveState = controller.visualStateFor(key)
+                                    val rawH = placeable.height.toFloat()
+                                    val isFocusedActive = slotIndex == activeIdx && !userScrolling
                                     if (liveState != null) {
                                         val liveY = liveState.displayY + liveState.displayPushYPx
+                                        val scaledH = rawH * liveState.displayScale
+                                        val scaledTop = liveY + (rawH - scaledH) * 0.5f
+                                        val edgeAlpha = computeLyricsViewportEdgeAlpha(
+                                            rowTop = scaledTop,
+                                            rowHeight = scaledH,
+                                            containerHeight = containerHeight,
+                                            topFadePx = topEdgeFadePx,
+                                            bottomFadePx = bottomEdgeFadePx,
+                                            isFocusedActiveLine = isFocusedActive,
+                                        )
                                         translationY = liveY - yInt
                                         scaleX = liveState.displayScale
                                         scaleY = liveState.displayScale
-                                        alpha = liveState.displayOpacity
+                                        alpha = liveState.displayOpacity * edgeAlpha
                                         transformOrigin = TransformOrigin(0f, 0.5f)
                                     } else {
                                         translationY = subPixelY
+                                        alpha = computeLyricsViewportEdgeAlpha(
+                                            rowTop = targetY,
+                                            rowHeight = rawH,
+                                            containerHeight = containerHeight,
+                                            topFadePx = topEdgeFadePx,
+                                            bottomFadePx = bottomEdgeFadePx,
+                                            isFocusedActiveLine = isFocusedActive,
+                                        )
                                     }
                                 }
                             }
@@ -2763,32 +2784,29 @@ private fun ClassicSongMetadataRow(
             modifier = Modifier.weight(1f).clipToBounds().padding(end = 10.dp * controlScale),
         ) { displaySong ->
             Column(Modifier.fillMaxWidth()) {
-                Text(
-                    displaySong.title,
+                MarqueeFadedText(
+                    text = displaySong.title,
                     style = MaterialTheme.typography.titleLarge.copy(
                         fontSize = 21.sp * controlScale,
                         lineHeight = 27.sp * controlScale,
                         fontWeight = FontWeight.Bold,
                     ),
                     color = FlareTokens.ClassicTitle,
-                    maxLines = 1,
-                    softWrap = false,
-                    modifier = Modifier.fillMaxWidth().basicMarquee(iterations = Int.MAX_VALUE),
+                    iterations = Int.MAX_VALUE,
                 )
                 val meta = listOf(
                     displaySong.artist.ifBlank { stringResource(R.string.ft_unknown_artist) },
                     displaySong.album,
                 ).filter { it.isNotBlank() }.joinToString(" — ")
-                Text(
-                    meta,
+                MarqueeFadedText(
+                    text = meta,
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontSize = 14.sp * controlScale,
                         lineHeight = 20.sp * controlScale,
                     ),
                     color = FlareTokens.ClassicSubtitle,
-                    maxLines = 1,
-                    softWrap = false,
-                    modifier = Modifier.fillMaxWidth().padding(top = 3.dp * controlScale).basicMarquee(iterations = Int.MAX_VALUE),
+                    iterations = Int.MAX_VALUE,
+                    modifier = Modifier.padding(top = 3.dp * controlScale),
                 )
             }
         }

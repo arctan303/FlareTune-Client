@@ -613,3 +613,49 @@ internal class LyricsSpringLayoutController {
         hasCommittedFirstFrame = false
     }
 }
+
+/**
+ * Hermite smoothstep easing over `[edge0, edge1]` for continuous edge fade transitions.
+ */
+internal fun smoothStepEdge(edge0: Float, edge1: Float, x: Float): Float {
+    if (edge1 <= edge0) return if (x >= edge1) 1f else 0f
+    val t = ((x - edge0) / (edge1 - edge0)).coerceIn(0f, 1f)
+    return t * t * (3f - 2f * t)
+}
+
+/**
+ * Computes per-row edge opacity multiplier so lyrics rows fade smoothly to zero before reaching
+ * the viewport clip boundaries without using offscreen layers or blur filters.
+ */
+internal fun computeLyricsViewportEdgeAlpha(
+    rowTop: Float,
+    rowHeight: Float,
+    containerHeight: Float,
+    topFadePx: Float,
+    bottomFadePx: Float,
+    isFocusedActiveLine: Boolean = false,
+): Float {
+    if (containerHeight <= 0f) return 1f
+    val safeHeight = rowHeight.coerceAtLeast(1f)
+    val rowBottom = rowTop + safeHeight
+    val effectiveTopFade = kotlin.math.min(topFadePx, containerHeight * 0.18f).coerceAtLeast(0f)
+    val effectiveBottomFade = kotlin.math.min(bottomFadePx, containerHeight * 0.20f).coerceAtLeast(0f)
+
+    val topAlpha = if (effectiveTopFade > 0f) {
+        if (rowTop <= 0f) 0f else smoothStepEdge(0f, effectiveTopFade, rowTop)
+    } else {
+        1f
+    }
+
+    val bottomAlpha = if (effectiveBottomFade > 0f) {
+        if (rowBottom >= containerHeight) 0f else smoothStepEdge(0f, effectiveBottomFade, containerHeight - rowBottom)
+    } else {
+        1f
+    }
+
+    val combined = (topAlpha * bottomAlpha).coerceIn(0f, 1f)
+    if (isFocusedActiveLine && rowTop < effectiveTopFade && rowBottom > containerHeight - effectiveBottomFade) {
+        return kotlin.math.max(combined, 0.85f)
+    }
+    return combined
+}

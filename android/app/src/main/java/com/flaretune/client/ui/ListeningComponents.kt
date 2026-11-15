@@ -3,6 +3,7 @@ package com.flaretune.client.ui
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -34,16 +35,21 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -51,6 +57,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -61,8 +68,10 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
@@ -74,6 +83,7 @@ import com.flaretune.client.data.PlayedCollectionType
 import com.flaretune.client.model.ClientNotice
 import com.flaretune.client.model.PlaylistSummary
 import com.flaretune.client.model.Song
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -1534,5 +1544,166 @@ private fun queueSnapshotSourceTitle(snapshot: QueueSnapshot): String {
         snapshot.sourceLabel.isNotBlank() -> snapshot.sourceLabel
         kind.isNotBlank() -> kind
         else -> stringResource(R.string.ft_history_snapshot_source_fallback)
+    }
+}
+
+/**
+ * Returns normalized `[leftStrength, rightStrength]` in `0f..1f` for single-line marquee edge
+ * fading. Left fade ramps in only while the primary pass is scrolling past the left boundary so
+ * characters resting at `x = 0` stay crisp.
+ */
+internal fun computeMarqueeEdgeFadeStrengths(
+    scrollOffsetPx: Float,
+    textWidthPx: Float,
+    leftFadePx: Float,
+    rightFadePx: Float,
+): Pair<Float, Float> {
+    val leftStrength = if (leftFadePx > 0f && scrollOffsetPx > 0.5f && scrollOffsetPx < textWidthPx) {
+        kotlin.math.min(scrollOffsetPx / leftFadePx, (textWidthPx - scrollOffsetPx) / leftFadePx).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    val rightStrength = if (rightFadePx > 0f) 1f else 0f
+    return leftStrength to rightStrength
+}
+
+/**
+ * Single-line marquee text that activates an offscreen horizontal alpha feather strictly when
+ * [text] exceeds the viewport width and scrolling is enabled, keeping fitting text at zero extra cost.
+ */
+@Composable
+internal fun MarqueeFadedText(
+    text: String,
+    style: TextStyle,
+    color: Color,
+    modifier: Modifier = Modifier,
+    fontWeight: FontWeight? = null,
+    iterations: Int = Int.MAX_VALUE,
+    initialDelayMillis: Int = 1200,
+    overflow: TextOverflow = TextOverflow.Clip,
+    leftFade: Dp = 8.dp,
+    rightFade: Dp = 16.dp,
+) {
+    if (iterations <= 0) {
+        Box(modifier = modifier.fillMaxWidth()) {
+            Text(
+                text = text,
+                style = style,
+                color = color,
+                fontWeight = fontWeight,
+                maxLines = 1,
+                softWrap = false,
+                overflow = overflow,
+            )
+        }
+        return
+    }
+
+    val density = LocalDensity.current
+    var viewportWidthPx by remember { mutableIntStateOf(0) }
+    var textWidthPx by remember { mutableIntStateOf(0) }
+    val activeMarquee = viewportWidthPx > 0 && textWidthPx > viewportWidthPx
+    val gapPx = kotlin.math.max(viewportWidthPx / 3f, with(density) { 24.dp.toPx() })
+    val cycleDistancePx = if (activeMarquee) textWidthPx.toFloat() + gapPx else 0f
+    val velocityPxPerSec = with(density) { 30.dp.toPx() }.coerceAtLeast(1f)
+    val scrollDurationMs = if (activeMarquee) {
+        ((cycleDistancePx / velocityPxPerSec) * 1000f).toInt().coerceAtLeast(1)
+    } else {
+        0
+    }
+    val scrollOffset = remember { Animatable(0f) }
+
+    LaunchedEffect(activeMarquee, text, cycleDistancePx, scrollDurationMs, iterations, initialDelayMillis) {
+        scrollOffset.snapTo(0f)
+        if (!activeMarquee || cycleDistancePx <= 0f) return@LaunchedEffect
+        var remaining = iterations
+        while (remaining > 0) {
+            delay(initialDelayMillis.toLong())
+            scrollOffset.snapTo(0f)
+            scrollOffset.animateTo(
+                targetValue = cycleDistancePx,
+                animationSpec = tween(durationMillis = scrollDurationMs, easing = LinearEasing),
+            )
+            scrollOffset.snapTo(0f)
+            if (iterations != Int.MAX_VALUE) remaining--
+        }
+    }
+
+    Layout(
+        modifier = modifier
+            .fillMaxWidth()
+            .clipToBounds()
+            .then(
+                if (activeMarquee) {
+                    Modifier
+                        .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                        .drawWithContent {
+                            drawContent()
+                            if (size.width <= 1f || size.height <= 1f) return@drawWithContent
+                            val maxLeftPx = leftFade.toPx().coerceAtMost(size.width * 0.14f)
+                            val maxRightPx = rightFade.toPx().coerceAtMost(size.width * 0.20f)
+                            val (leftStrength, rightStrength) = computeMarqueeEdgeFadeStrengths(
+                                scrollOffsetPx = scrollOffset.value,
+                                textWidthPx = textWidthPx.toFloat(),
+                                leftFadePx = maxLeftPx,
+                                rightFadePx = maxRightPx,
+                            )
+                            val leftFrac = (maxLeftPx / size.width).coerceIn(0.005f, 0.25f)
+                            val rightFrac = (maxRightPx / size.width).coerceIn(0.005f, 0.30f)
+                            val safeRightStart = (1f - rightFrac).coerceAtLeast(leftFrac + 0.01f)
+                            drawRect(
+                                brush = Brush.horizontalGradient(
+                                    0f to Color.Black.copy(alpha = 1f - leftStrength),
+                                    leftFrac to Color.Black,
+                                    safeRightStart to Color.Black,
+                                    1f to Color.Black.copy(alpha = 1f - rightStrength),
+                                ),
+                                blendMode = BlendMode.DstIn,
+                            )
+                        }
+                } else {
+                    Modifier
+                },
+            ),
+        content = {
+            Box(
+                Modifier.drawWithContent {
+                    val offset = scrollOffset.value
+                    if (!activeMarquee || offset <= 0f) {
+                        drawContent()
+                    } else {
+                        translate(left = -offset) { this@drawWithContent.drawContent() }
+                        val secondLeft = cycleDistancePx - offset
+                        if (secondLeft < viewportWidthPx.toFloat()) {
+                            translate(left = secondLeft) { this@drawWithContent.drawContent() }
+                        }
+                    }
+                },
+            ) {
+                Text(
+                    text = text,
+                    style = style,
+                    color = color,
+                    fontWeight = fontWeight,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Clip,
+                )
+            }
+        },
+    ) { measurables, constraints ->
+        val placeable = measurables[0].measure(
+            constraints.copy(minWidth = 0, maxWidth = Constraints.Infinity),
+        )
+        val containerW = if (constraints.hasBoundedWidth) {
+            constraints.maxWidth.coerceAtLeast(1)
+        } else {
+            placeable.width.coerceAtLeast(1)
+        }
+        if (viewportWidthPx != containerW) viewportWidthPx = containerW
+        if (textWidthPx != placeable.width) textWidthPx = placeable.width
+        layout(containerW, placeable.height) {
+            placeable.placeRelative(0, 0)
+        }
     }
 }

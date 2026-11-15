@@ -640,6 +640,62 @@ class PlayerLyricsMotionTest {
         settle(200)
         rule.onNodeWithText("1:00").assertExists()
     }
+    @Test fun lyricsViewportEdgeAlphaFadesEdgesWithoutClippingFocusedLine() {
+        val h = 600f
+        val topFade = 90f
+        val bottomFade = 100f
+        assertEquals(0f, computeLyricsViewportEdgeAlpha(-5f, 60f, h, topFade, bottomFade), 0.001f)
+        assertEquals(0f, computeLyricsViewportEdgeAlpha(0f, 60f, h, topFade, bottomFade), 0.001f)
+        assertEquals(0f, computeLyricsViewportEdgeAlpha(540f, 60f, h, topFade, bottomFade), 0.001f)
+        assertEquals(0f, computeLyricsViewportEdgeAlpha(560f, 60f, h, topFade, bottomFade), 0.001f)
+        assertEquals(1f, computeLyricsViewportEdgeAlpha(200f, 60f, h, topFade, bottomFade), 0.001f)
+
+        val topNearZero = computeLyricsViewportEdgeAlpha(12f, 60f, h, topFade, bottomFade)
+        val topMid = computeLyricsViewportEdgeAlpha(45f, 60f, h, topFade, bottomFade)
+        assertTrue("Top edge alpha must smoothly increase inward ($topNearZero < $topMid < 1)", topNearZero in 0.01f..topMid && topMid < 1f)
+
+        val bottomNearEnd = computeLyricsViewportEdgeAlpha(525f, 60f, h, topFade, bottomFade)
+        val bottomMid = computeLyricsViewportEdgeAlpha(490f, 60f, h, topFade, bottomFade)
+        assertTrue("Bottom edge alpha must smoothly increase inward ($bottomNearEnd < $bottomMid < 1)", bottomNearEnd in 0.01f..bottomMid && bottomMid < 1f)
+
+        val oversizedActive = computeLyricsViewportEdgeAlpha(
+            rowTop = 10f,
+            rowHeight = 580f,
+            containerHeight = h,
+            topFadePx = topFade,
+            bottomFadePx = bottomFade,
+            isFocusedActiveLine = true,
+        )
+        assertTrue("Focused active line spanning viewport must remain legible (>= 0.85f), was $oversizedActive", oversizedActive >= 0.85f)
+    }
+    @Test fun marqueeEdgeFadeStrengthsKeepRestingStartSharpAndFadeScrollingEdges() {
+        val (restLeft, restRight) = computeMarqueeEdgeFadeStrengths(
+            scrollOffsetPx = 0f,
+            textWidthPx = 420f,
+            leftFadePx = 16f,
+            rightFadePx = 32f,
+        )
+        assertEquals(0f, restLeft, 0.001f)
+        assertEquals(1f, restRight, 0.001f)
+
+        val (midLeft, midRight) = computeMarqueeEdgeFadeStrengths(
+            scrollOffsetPx = 120f,
+            textWidthPx = 420f,
+            leftFadePx = 16f,
+            rightFadePx = 32f,
+        )
+        assertEquals(1f, midLeft, 0.001f)
+        assertEquals(1f, midRight, 0.001f)
+
+        val (gapLeft, gapRight) = computeMarqueeEdgeFadeStrengths(
+            scrollOffsetPx = 450f,
+            textWidthPx = 420f,
+            leftFadePx = 16f,
+            rightFadePx = 32f,
+        )
+        assertEquals(0f, gapLeft, 0.001f)
+        assertEquals(1f, gapRight, 0.001f)
+    }
     private fun screenshot(name: String) {
         settle(800)
         val dir=File(checkNotNull(System.getProperty("flaretune.screenshots.dir"))).apply { mkdirs() }

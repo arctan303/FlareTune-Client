@@ -24,7 +24,6 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
@@ -3862,37 +3861,27 @@ internal fun MiniPlayerLyricSlotContent(
                 positionMsState = livePositionMsState,
             )
         } else {
-            Text(
-                lineSlot.primary,
+            MarqueeFadedText(
+                text = lineSlot.primary,
                 style = MaterialTheme.typography.titleMedium.let {
                     if (wideStyle) it.copy(fontSize = 16.sp, lineHeight = 21.sp) else it.copy(fontSize = 14.5.sp, lineHeight = 19.sp)
                 },
                 color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .basicMarquee(
-                        iterations = if (activeScroll) Int.MAX_VALUE else 0,
-                        initialDelayMillis = 800,
-                    ),
+                iterations = if (activeScroll) Int.MAX_VALUE else 0,
+                initialDelayMillis = 800,
             )
         }
-        Text(
-            lineSlot.secondary,
+        MarqueeFadedText(
+            text = lineSlot.secondary,
             style = MaterialTheme.typography.bodyMedium.let {
                 if (wideStyle) it.copy(fontSize = 13.5.sp, lineHeight = 18.sp) else it.copy(fontSize = 12.5.sp, lineHeight = 16.sp)
             },
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier
-                .fillMaxWidth()
-                .basicMarquee(
-                    iterations = if (activeScroll) Int.MAX_VALUE else 0,
-                    initialDelayMillis = 1000,
-                ),
+            iterations = if (activeScroll) Int.MAX_VALUE else 0,
+            initialDelayMillis = 1000,
         )
     }
 }
