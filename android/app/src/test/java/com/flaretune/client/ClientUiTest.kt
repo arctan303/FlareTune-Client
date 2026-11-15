@@ -751,12 +751,39 @@ class ClientUiTest {
             syncMode = "word",
             translationState = LyricTranslationStatus.READY,
         )
-        render(fixture(MainDestination.HOME).copy(
-            playback = PlaybackSnapshot(songs[0], songs, 0, playing = false, positionMs = 3_500, durationMs = 180_000),
-            lyricState = wordLyrics,
-        ))
+        val state = mutableStateOf(
+            fixture(MainDestination.HOME).copy(
+                playback = PlaybackSnapshot(songs[0], songs, 0, playing = false, positionMs = 1_100, durationMs = 180_000),
+                lyricState = wordLyrics,
+            ),
+        )
+        rule.setContent {
+            FlareTuneTheme {
+                ClientApp(state.value, actions, imageLoader = null)
+            }
+        }
+        rule.waitForIdle()
         rule.onNodeWithTag("mini_player").assertIsDisplayed()
-        rule.onNodeWithText(longLineText).assertExists()
+        val miniLyricNode = rule.onNode(
+            hasText(longLineText) and hasAnyAncestor(hasTestTag("mini_player_card_current")),
+            useUnmergedTree = true,
+        )
+        miniLyricNode.assertExists()
+        val earlyLeft = miniLyricNode.fetchSemanticsNode().positionInRoot.x
+        val lyricLayouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+        miniLyricNode.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult].action?.invoke(lyricLayouts)
+        assertTrue(lyricLayouts.isNotEmpty())
+        assertFalse("Word-synced mini player lyric must scroll horizontally instead of ellipsizing", lyricLayouts.first().hasVisualOverflow)
+
+        state.value = state.value.copy(
+            playback = PlaybackSnapshot(songs[0], songs, 0, playing = false, positionMs = 5_200, durationMs = 180_000),
+        )
+        rule.waitForIdle()
+        val lateLeft = rule.onNode(
+            hasText(longLineText) and hasAnyAncestor(hasTestTag("mini_player_card_current")),
+            useUnmergedTree = true,
+        ).fetchSemanticsNode().positionInRoot.x
+        assertTrue("Expected mini player horizontal focus scroll to shift left ($lateLeft < $earlyLeft)", lateLeft < earlyLeft - 10f)
 
         rule.onNodeWithTag("mini_player").performClick()
         rule.onNodeWithTag("player_lyric_preview").assertDoesNotExist()

@@ -2392,7 +2392,7 @@ internal fun KaraokeLyricText(
             overflowMetrics = viewportW to textPlaceable.width
         }
         layout(viewportW, textPlaceable.height) {
-            val xOffset = if (textPlaceable.width <= viewportW) {
+            val xOffset = if (textPlaceable.width <= viewportW && textAlign == TextAlign.Center) {
                 (viewportW - textPlaceable.width) / 2
             } else {
                 0

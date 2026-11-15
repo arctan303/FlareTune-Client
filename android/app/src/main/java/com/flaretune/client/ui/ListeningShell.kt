@@ -9,6 +9,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandHorizontally
@@ -24,6 +25,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
@@ -3841,21 +3843,24 @@ internal fun MiniPlayerLyricSlotContent(
     dark: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val activeScroll = miniPlayerActive && playing && !buffering
     Column(modifier.fillMaxWidth()) {
         if (lineSlot.wordSynced && lineSlot.line != null) {
-            val livePositionMs by rememberPlaybackPositionMsState(positionMs)
+            val livePositionMsState = rememberPlaybackPositionMsState(positionMs)
             KaraokeLyricText(
                 line = lineSlot.line,
-                basePositionMs = livePositionMs,
-                playing = miniPlayerActive && playing && !buffering,
+                basePositionMs = positionMs,
+                playing = activeScroll,
                 fontSize = if (wideStyle) 16.sp else 14.5.sp,
                 lineHeight = if (wideStyle) 21.sp else 19.sp,
                 sungColor = MaterialTheme.colorScheme.onSurface,
                 unsungColor = MaterialTheme.colorScheme.onSurface.copy(alpha = if (dark) 0.46f else 0.60f),
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                trackHorizontalFocus = false,
+                overflow = TextOverflow.Clip,
+                textAlign = TextAlign.Start,
+                trackHorizontalFocus = true,
+                positionMsState = livePositionMsState,
             )
         } else {
             Text(
@@ -3867,6 +3872,12 @@ internal fun MiniPlayerLyricSlotContent(
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .basicMarquee(
+                        iterations = if (activeScroll) Int.MAX_VALUE else 0,
+                        initialDelayMillis = 800,
+                    ),
             )
         }
         Text(
@@ -3877,6 +3888,12 @@ internal fun MiniPlayerLyricSlotContent(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .fillMaxWidth()
+                .basicMarquee(
+                    iterations = if (activeScroll) Int.MAX_VALUE else 0,
+                    initialDelayMillis = 1000,
+                ),
         )
     }
 }
@@ -4148,21 +4165,33 @@ private fun ShellMiniPlayer(
                 contentAlignment = Alignment.CenterStart,
             ) { slot, isActiveSlot, isPreviewSlot ->
                 key(slot.song.id) {
+                    val showCardChrome = isPreviewSlot || cardMoving
+                    val cardChromeAlpha by animateFloatAsState(
+                        targetValue = if (showCardChrome) 1f else 0f,
+                        animationSpec = tween(durationMillis = if (showCardChrome) 90 else 180),
+                        label = "mini_player_card_chrome",
+                    )
+                    val chromeModifier = if (cardChromeAlpha > 0.01f) {
+                        Modifier
+                            .shadow(
+                                elevation = (3f * cardChromeAlpha).dp,
+                                shape = cardShape,
+                                clip = false,
+                                ambientColor = Color.Black.copy(alpha = (if (dark) 0.45f else 0.14f) * cardChromeAlpha),
+                                spotColor = Color.Black.copy(alpha = (if (dark) 0.50f else 0.16f) * cardChromeAlpha),
+                            )
+                            .clip(cardShape)
+                            .background(cardBg.copy(alpha = cardChromeAlpha))
+                            .border(0.75.dp, cardBorder.copy(alpha = cardBorder.alpha * cardChromeAlpha), cardShape)
+                    } else {
+                        Modifier
+                    }
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = cardOuterVerticalPad)
                             .testTag(if (isActiveSlot) "mini_player_card_current" else "mini_player_card_preview_${slot.song.id}")
-                            .shadow(
-                                elevation = if (isPreviewSlot || cardMoving) 3.dp else 1.dp,
-                                shape = cardShape,
-                                clip = false,
-                                ambientColor = Color.Black.copy(alpha = if (dark) 0.45f else 0.14f),
-                                spotColor = Color.Black.copy(alpha = if (dark) 0.50f else 0.16f),
-                            )
-                            .clip(cardShape)
-                            .background(cardBg)
-                            .border(0.75.dp, cardBorder, cardShape)
+                            .then(chromeModifier)
                             .padding(
                                 horizontal = if (wideStyle) 10.dp else 8.dp,
                                 vertical = cardInnerVerticalPad,
