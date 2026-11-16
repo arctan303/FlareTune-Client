@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title">
-<title id="title">FlareTune C · 声流 · 应用图标候选</title>
-<defs><linearGradient id="bg" x2="0.8" y2="1"><stop stop-color="#163044"/><stop offset="1" stop-color="#0B192B"/></linearGradient><linearGradient id="flow-ink" x1="9" y1="25" x2="55" y2="40" gradientUnits="userSpaceOnUse"><stop stop-color="#8AF1CC"/><stop offset="1" stop-color="#A5B9FF"/></linearGradient></defs>
-<rect width="128" height="128" rx="29" fill="url(#bg)"/>
-<g transform="translate(20 20) scale(1.375)"><path d="M9 39C17 39 16 19 24 19C32 19 30 47 39 47C47 47 45 25 55 25" fill="none" stroke="url(#flow-ink)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/></g>
-</svg>

@@ -1,3 +1,0 @@
-<set xmlns:android="http://schemas.android.com/apk/res/android">
-  <translate android:interpolator="@android:010A0005" android:duration="@integer/slide_animation_duration[250]" android:fromYDelta="100.000000%p" android:toYDelta="0.000000"/>
-</set>

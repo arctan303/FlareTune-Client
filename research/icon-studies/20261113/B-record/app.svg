@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title">
-<title id="title">FlareTune B · 留声 · 应用图标候选</title>
-<defs><linearGradient id="bg" x2="0.8" y2="1"><stop stop-color="#E5DCC7"/><stop offset="1" stop-color="#D8C8A9"/></linearGradient></defs>
-<rect width="128" height="128" rx="29" fill="url(#bg)"/>
-<g transform="translate(20 20) scale(1.375)"><path d="M49 15A24 24 0 1 0 55 39" fill="none" stroke="#214D46" stroke-width="9" stroke-linecap="round"/><circle cx="32" cy="32" r="5" fill="#214D46"/></g>
-</svg>

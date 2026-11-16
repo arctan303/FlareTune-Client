@@ -1,4 +1,0 @@
-<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="0">
-  <corners android:topLeftRadius="@dimen/player_sheet_corner_radius[16.0dip]" android:topRightRadius="@dimen/player_sheet_corner_radius[16.0dip]" android:bottomLeftRadius="0.100000dip" android:bottomRightRadius="0.100000dip"/>
-  <solid android:color="@color/lyrics_bg_default[#ff424242]"/>
-</shape>
