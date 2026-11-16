@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Explicit ADB entry only. No launcher, intent filters, or release source-set entry. -->
+        <activity
+            android:name=".preview.PreviewActivity"
+            android:exported="true"
+            android:process=":ui_preview"
+            android:label="@string/ft_preview_mode" />
+    </application>
+</manifest>

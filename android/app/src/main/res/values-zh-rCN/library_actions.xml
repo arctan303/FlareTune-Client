@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ft_library_favorite">加入我的收藏</string>
+    <string name="ft_library_unfavorite">移出我的收藏</string>
+    <string name="ft_library_play_next">下一首播放</string>
+    <string name="ft_library_enqueue">加入播放队列</string>
+    <string name="ft_library_add_to_playlist">加入歌单</string>
+    <string name="ft_library_quick_next">下一首</string>
+    <string name="ft_library_quick_playlist">加入歌单</string>
+    <string name="ft_library_quick_favorite">加入收藏</string>
+    <string name="ft_library_quick_favorited">已收藏</string>
+    <string name="ft_library_view_artist">查看歌手</string>
+    <string name="ft_library_view_album">查看专辑</string>
+    <string name="ft_library_remove_song">从此歌单移除</string>
+    <string name="ft_library_copy_song_info">复制歌曲信息</string>
+    <string name="ft_library_create_playlist">新建歌单</string>
+    <string name="ft_library_edit_playlist">编辑歌单</string>
+    <string name="ft_library_playlist_name">名称</string>
+    <string name="ft_library_playlist_description">简介</string>
+    <string name="ft_library_character_count">%1$d / %2$d 字符</string>
+    <string name="ft_library_save">保存</string>
+    <string name="ft_library_cancel">取消</string>
+    <string name="ft_library_saving">正在保存…</string>
+    <string name="ft_library_choose_playlists">选择歌单</string>
+    <string name="ft_library_target_count">已选 %1$d 项 · 最多 %2$d 个歌单</string>
+    <string name="ft_library_song_count">%1$d 首歌曲</string>
+    <string name="ft_library_invalid_song_count">请选择 1 至 100 首歌曲后添加。</string>
+    <string name="ft_library_no_playlists">暂无可选歌单，可以先新建歌单。</string>
+    <string name="ft_library_add_selected">加入所选歌单</string>
+    <string name="ft_library_order_title">调整“%1$s”的顺序</string>
+    <string name="ft_library_position">第 %1$d 项，共 %2$d 项</string>
+    <string name="ft_library_move_up">上移“%1$s”</string>
+    <string name="ft_library_move_down">下移“%1$s”</string>
+    <string name="ft_library_empty_playlist">此歌单还没有歌曲。</string>
+    <string name="ft_library_unavailable_member">暂不可播 · 仍保留在歌单中</string>
+    <string name="ft_library_conflict">歌单已变更。请关闭此编辑器，刷新歌单后重新打开，再进行编辑和保存。</string>
+    <string name="ft_library_favorite_protected">“我的收藏”的名称和简介不可修改。</string>
+    <string name="ft_library_invalid_membership">无法确认完整歌曲列表，请关闭编辑器并刷新歌单。</string>
+    <string name="ft_library_unknown_playlist">歌单</string>
+    <string name="ft_library_target_applied">%1$s：已成功加入</string>
+    <string name="ft_library_target_noop">%1$s：已包含所选歌曲</string>
+    <string name="ft_library_target_conflict">%1$s：已在别处变更，请刷新后重试</string>
+    <string name="ft_library_target_full">%1$s：加入后将超过 500 首上限</string>
+    <string name="ft_library_target_missing">%1$s：已不可用</string>
+    <string name="ft_library_target_failed">%1$s：加入失败，请重试</string>
+    <string name="ft_library_drag_song">长按并拖动以调整“%1$s”的顺序</string>
+</resources>
