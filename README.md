@@ -16,6 +16,10 @@ FlareTune 官方原生音乐客户端，连接你自己的 FlareTune 实例，�
 
 服务端项目见 [FlareTune](https://github.com/arctan303/FlareTune)，接入合同见[宿主 HTTP API](https://github.com/arctan303/FlareTune/blob/main/server/API.md)。具体在线能力取决于实例版本及已安装的插件。
 
+## 开发协作
+
+日常开发在 `dev`。`main` 禁止直接开发，只接收通过检查的合并；常规由 `dev` 经 Pull Request 合入。确需隔离的任务从 `dev` 建立临时分支，完成后先合回 `dev` 并验证，再删除支线及临时工作树。紧急修复也必须同步回 `dev`。
+
 ## 本地构建
 
 工程位于 `android/`。准备 JDK 17 或更新版本、Android SDK Platform 36 与 Build Tools 36.0.0；通过本机 `JAVA_HOME`、`ANDROID_HOME` 或 `android/local.properties` 配置工具位置。
