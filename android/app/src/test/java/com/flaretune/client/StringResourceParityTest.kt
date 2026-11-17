@@ -12,17 +12,18 @@ import org.w3c.dom.Element
  * Guards the five interface languages the app ships (zh-CN, zh-Hant, en, ja, ko).
  *
  * Wording may change freely; this test only enforces structure: the same keys everywhere, the same
- * format placeholders per key, the plural forms each language actually needs, and the five language
- * names that must never be translated.
+ * format placeholders per key, the plural forms each language actually needs, no untranslated
+ * leftovers per plural quantity, and the five language names that must never be translated.
  */
 class StringResourceParityTest {
     private data class Item(val quantity: String, val text: String)
 
-    private data class Entry(
-        val items: List<Item>,
-        val translatable: Boolean,
-    ) {
+    private data class Entry(val items: List<Item>, val translatable: Boolean) {
         val text: String get() = items.joinToString(" | ") { it.text }
+
+        /** Worst case for a single-line slot: the plural "other" form, or the only value. */
+        fun other(): String? =
+            items.firstOrNull { it.quantity == "other" }?.text ?: items.firstOrNull()?.text
     }
 
     private val files = listOf(
@@ -37,7 +38,7 @@ class StringResourceParityTest {
     private val localeDirs = listOf("values-zh-rCN", "values-b+zh+Hant", "values-ja", "values-ko")
     private val placeholder = Regex("""%\d+\$[sd]""")
 
-    private fun resRoot(): File {
+    private fun mainRoot(): File {
         val userDir = System.getProperty("user.dir") ?: "."
         var dir = File(userDir).absoluteFile
         while (true) {
@@ -47,33 +48,42 @@ class StringResourceParityTest {
         }
     }
 
-    private fun read(dir: String): Map<String, Entry> {
-        val root = resRoot()
-        val entries = linkedMapOf<String, Entry>()
-        for (name in files) {
-            val file = File(File(root, dir), name)
-            assertTrue("missing resource file $dir/$name", file.isFile)
-            val document = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(file)
-            val children = document.documentElement.childNodes
-            for (index in 0 until children.length) {
-                val element = children.item(index) as? Element ?: continue
-                val key = element.getAttribute("name")
-                assertTrue("blank resource name in $dir/$name", key.isNotBlank())
-                when (element.tagName) {
-                    "string" -> entries[key] = Entry(
-                        items = listOf(Item("", element.textContent)),
-                        translatable = element.getAttribute("translatable") != "false",
-                    )
-                    "plurals" -> {
-                        val items = (0 until element.childNodes.length)
-                            .mapNotNull { element.childNodes.item(it) as? Element }
-                            .filter { it.tagName == "item" }
-                            .map { Item(it.getAttribute("quantity"), it.textContent) }
-                        entries[key] = Entry(items = items, translatable = true)
-                    }
+    private fun debugRoot(): File = File(mainRoot().parentFile.parentFile, "debug/res")
+
+    private fun parse(file: File, into: MutableMap<String, Entry>) {
+        assertTrue("missing resource file ${file.path}", file.isFile)
+        val document = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(file)
+        val children = document.documentElement.childNodes
+        for (index in 0 until children.length) {
+            val element = children.item(index) as? Element ?: continue
+            val key = element.getAttribute("name")
+            assertTrue("blank resource name in ${file.path}", key.isNotBlank())
+            when (element.tagName) {
+                "string" -> into[key] = Entry(
+                    items = listOf(Item("", element.textContent)),
+                    translatable = element.getAttribute("translatable") != "false",
+                )
+                "plurals" -> {
+                    val items = (0 until element.childNodes.length)
+                        .mapNotNull { element.childNodes.item(it) as? Element }
+                        .filter { it.tagName == "item" }
+                        .map { Item(it.getAttribute("quantity"), it.textContent) }
+                    into[key] = Entry(items = items, translatable = true)
                 }
             }
         }
+    }
+
+    private fun read(dir: String): Map<String, Entry> {
+        val entries = linkedMapOf<String, Entry>()
+        for (name in files) parse(File(File(mainRoot(), dir), name), entries)
+        return entries
+    }
+
+    /** The debug source set only carries the preview harness strings. */
+    private fun readDebug(dir: String): Map<String, Entry> {
+        val entries = linkedMapOf<String, Entry>()
+        parse(File(File(debugRoot(), dir), "strings.xml"), entries)
         return entries
     }
 
@@ -91,19 +101,28 @@ class StringResourceParityTest {
     }
 
     @Test
+    fun debugPreviewStringsShipInEveryLocale() {
+        val base = readDebug(baseDir)
+        assertEquals(setOf("ft_preview_mode", "ft_open_app"), base.keys)
+        for (dir in localeDirs) {
+            val locale = readDebug(dir)
+            assertEquals("debug/$dir must mirror the debug base keys", base.keys, locale.keys)
+            for ((key, entry) in locale) {
+                assertTrue("debug/$dir/$key is blank", entry.text.isNotBlank())
+                assertFalse("debug/$dir/$key still holds the English text", entry.text == base.getValue(key).text)
+            }
+        }
+    }
+
+    @Test
     fun placeholdersMatchTheBaseLanguage() {
         val base = read(baseDir)
         for (dir in localeDirs) {
-            val locale = read(dir)
-            for ((key, entry) in locale) {
+            for ((key, entry) in read(dir)) {
                 val reference = base[key] ?: continue
                 val expected = reference.items.flatMap { placeholders(it.text) }.toSet()
                 for (item in entry.items) {
-                    assertEquals(
-                        "$dir/$key changed format placeholders",
-                        expected,
-                        placeholders(item.text).toSet(),
-                    )
+                    assertEquals("$dir/$key changed format placeholders", expected, placeholders(item.text).toSet())
                 }
             }
         }
@@ -113,16 +132,17 @@ class StringResourceParityTest {
     fun translationsAreNotEmpty() {
         val base = read(baseDir)
         for (dir in localeDirs) {
-            val locale = read(dir)
-            for ((key, entry) in locale) {
-                assertTrue("$dir/$key lost its base entry", base.containsKey(key))
-                assertTrue("$dir/$key is blank", entry.items.all { it.text.isNotBlank() })
-                val reference = base.getValue(key)
+            for ((key, entry) in read(dir)) {
+                assertTrue("$dir/$key is blank", entry.items.isNotEmpty() && entry.items.all { it.text.isNotBlank() })
+                val reference = base[key] ?: continue
                 if (!reference.translatable) continue
-                // A translated value identical to the English base is a leftover, except for values that
-                // carry no words of their own (pure placeholder patterns such as "%1$s · %2$s").
-                if (reference.items.joinToString(" ") { it.text }.replace(placeholder, "").none { it.isLetter() }) continue
-                assertTrue("$dir/$key is still the English base text", entry.text != reference.text)
+                // Compare the same quantity, so an untranslated plural cannot hide behind the
+                // "one | other" concatenation of the base entry.
+                val referenceText = reference.other() ?: continue
+                val localeText = entry.other() ?: continue
+                // Values that carry no words of their own (pure placeholder patterns) are exempt.
+                if (referenceText.replace(placeholder, "").none { it.isLetter() }) continue
+                assertTrue("$dir/$key is still the English base text", localeText != referenceText)
             }
         }
     }
@@ -130,18 +150,20 @@ class StringResourceParityTest {
     @Test
     fun pluralsUseTheFormsEachLanguageNeeds() {
         val base = read(baseDir)
-        val basePlurals = base.filterValues { it.items.size > 1 }
+        fun pluralEntries(entries: Map<String, Entry>) = entries.filterValues { entry -> entry.items.any { it.quantity.isNotEmpty() } }
+        val basePlurals = pluralEntries(base)
         assertTrue("expected plural resources", basePlurals.size >= 7)
         for ((key, entry) in basePlurals) {
+            assertTrue("values/$key has no plural items", entry.items.isNotEmpty())
             assertEquals("values/$key plural forms", listOf("one", "other"), entry.items.map { it.quantity })
         }
         for (dir in localeDirs) {
-            val locale = read(dir)
-            for ((key, entry) in locale.filter { (_, value) -> value.items.size > 1 || value.items.first().quantity.isNotEmpty() }) {
+            val localePlurals = pluralEntries(read(dir))
+            for ((key, entry) in localePlurals) {
                 assertTrue("$dir/$key must only use the other quantity", entry.items.map { it.quantity } == listOf("other"))
                 assertTrue("$dir/$key is not a base plural", basePlurals.containsKey(key))
             }
-            assertEquals("$dir plural keys", basePlurals.keys, locale.filterValues { it.items.first().quantity.isNotEmpty() }.keys)
+            assertEquals("$dir plural keys", basePlurals.keys, localePlurals.keys)
         }
     }
 

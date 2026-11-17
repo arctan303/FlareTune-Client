@@ -3663,13 +3663,16 @@ private fun AlbumScreen(state: ClientUiState, actions: ClientActions, loader: Im
                     Spacer(Modifier.width(6.dp))
                     Text(stringResource(R.string.ft_quick_shuffle))
                 }
-                FilledTonalButton(
+                FilledTonalIconButton(
                     onClick = { actions.enqueue(state.albumSongs) },
                     enabled = state.albumSongs.isNotEmpty() && !state.albumLoading,
-                    shape = CircleShape,
-                    modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("album_enqueue"),
+                    modifier = Modifier.size(FlareTokens.TouchTargetMin).testTag("album_enqueue"),
                 ) {
-                    Text(stringResource(R.string.ft_listening_enqueue))
+                    Icon(
+                        ClientIcons.Queue,
+                        stringResource(R.string.ft_listening_enqueue),
+                        Modifier.size(20.dp),
+                    )
                 }
                 OutlinedButton(
                     onClick = { if (multiSelect.active) multiSelect.exit() else multiSelect.enter() },

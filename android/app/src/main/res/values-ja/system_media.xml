@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="ft_system_order_sequential">順番に再生。再生順を変更</string>
-    <string name="ft_system_order_repeat_all">リストをリピート。再生順を変更</string>
+    <string name="ft_system_order_repeat_all">全曲リピート。再生順を変更</string>
     <string name="ft_system_order_repeat_one">1曲リピート。再生順を変更</string>
     <string name="ft_system_order_shuffle">シャッフル再生。再生順を変更</string>
     <string name="ft_system_favorite_add">お気に入りに追加</string>

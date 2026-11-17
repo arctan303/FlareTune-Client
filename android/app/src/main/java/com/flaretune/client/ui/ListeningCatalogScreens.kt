@@ -500,13 +500,16 @@ internal fun ListeningArtistPage(state: ClientUiState, actions: ClientActions, l
                                             Spacer(Modifier.width(6.dp))
                                             Text(stringResource(R.string.ft_quick_shuffle))
                                         }
-                                        FilledTonalButton(
+                                        FilledTonalIconButton(
                                             onClick = { actions.enqueue(state.artistSongs) },
                                             enabled = state.artistSongs.isNotEmpty(),
-                                            shape = CircleShape,
-                                            modifier = Modifier.heightIn(min = FlareTokens.TouchTargetMin).testTag("artist_enqueue"),
+                                            modifier = Modifier.size(FlareTokens.TouchTargetMin).testTag("artist_enqueue"),
                                         ) {
-                                            Text(stringResource(R.string.ft_listening_enqueue))
+                                            Icon(
+                                                ClientIcons.Queue,
+                                                stringResource(R.string.ft_listening_enqueue),
+                                                Modifier.size(20.dp),
+                                            )
                                         }
                                         if (interaction != null && state.artistSongs.isNotEmpty()) {
                                             FilledTonalIconButton(
@@ -981,9 +984,15 @@ internal fun ListeningSearchPage(
                                         style = MaterialTheme.typography.titleLarge,
                                         fontWeight = FontWeight.Bold,
                                     )
-                                    TextButton(onClick = { actions.clearRecentSearches(); actions.clearRecentSearchTerms() }) {
-                                        Text(stringResource(R.string.ft_listening_clear))
-                                    }
+                                    ActionIcon(
+                                        icon = ClientIcons.Trash,
+                                        description = stringResource(R.string.ft_listening_clear),
+                                        onClick = {
+                                            actions.clearRecentSearches()
+                                            actions.clearRecentSearchTerms()
+                                        },
+                                        modifier = Modifier.testTag("recent_searches_clear"),
+                                    )
                                 }
                                 if (state.recentSearchTerms.isNotEmpty()) {
                                     FlowRow(
@@ -1497,7 +1506,7 @@ private fun RecentSearchTermChip(term: String, onSelect: () -> Unit, onRemove: (
 
 /** Locale of the interface language, so dates and times follow the app language, not the device one. */
 @Composable
-internal fun rememberAppLocale(): java.util.Locale =
+internal fun appLocale(): java.util.Locale =
     com.flaretune.client.data.AppLocale.current(LocalContext.current)
 
 internal fun listeningTime(playedAt: Long?, locale: java.util.Locale = java.util.Locale.getDefault()): String =

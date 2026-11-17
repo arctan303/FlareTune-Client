@@ -5,7 +5,7 @@
     <string name="ft_library_play_next">次に再生</string>
     <string name="ft_library_enqueue">キューに追加</string>
     <string name="ft_library_add_to_playlist">プレイリストに追加</string>
-    <string name="ft_library_quick_next">次の曲</string>
+    <string name="ft_library_quick_next">次に再生</string>
     <string name="ft_library_quick_playlist">プレイリストに追加</string>
     <string name="ft_library_quick_favorite">お気に入りに追加</string>
     <string name="ft_library_quick_favorited">お気に入り済み</string>
@@ -13,7 +13,7 @@
     <string name="ft_library_view_album">アルバムを表示</string>
     <string name="ft_library_remove_song">このプレイリストから削除</string>
     <string name="ft_library_copy_song_info">曲情報をコピー</string>
-    <string name="ft_library_create_playlist">新規プレイリスト</string>
+    <string name="ft_library_create_playlist">プレイリストを作成</string>
     <string name="ft_library_edit_playlist">プレイリストを編集</string>
     <string name="ft_library_playlist_name">名前</string>
     <string name="ft_library_playlist_description">説明</string>
@@ -34,7 +34,7 @@
     <string name="ft_library_move_up">%1$sを上へ移動</string>
     <string name="ft_library_move_down">%1$sを下へ移動</string>
     <string name="ft_library_empty_playlist">このプレイリストには曲がありません。</string>
-    <string name="ft_library_unavailable_member">利用不可・このプレイリストに保持</string>
+    <string name="ft_library_unavailable_member">再生不可・このプレイリストに残ります</string>
     <string name="ft_library_conflict">プレイリストが変更されました。このエディターを閉じ、プレイリストを更新してから開き直して保存してください。</string>
     <string name="ft_library_favorite_protected">「お気に入り」の名前と説明は編集できません。</string>
     <string name="ft_library_invalid_membership">曲リストを確認できませんでした。エディターを閉じてプレイリストを更新してください。</string>

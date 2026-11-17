@@ -954,11 +954,17 @@ class ClientViewModel(
     }
 
     override fun setAppLanguage(language: AppLanguage) {
+        val store = appLanguagePreferences
+        if (store == null) {
+            // Nothing can be persisted, so do not pretend the choice took effect.
+            mutable.value = mutable.value.copy(notice = ClientNotice.STORAGE_FAILED)
+            return
+        }
         val revision = ++appLanguageRevision
         viewModelScope.launch {
             try {
                 withContext(ioDispatcher) { preferenceMutex.withLock {
-                    if (revision == appLanguageRevision) appLanguagePreferences?.write(language)
+                    if (revision == appLanguageRevision) store.write(language)
                 } }
                 if (revision == appLanguageRevision) {
                     appLanguage = language

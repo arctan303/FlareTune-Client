@@ -1114,7 +1114,7 @@ internal fun PlayHistoryPage(
                                 }
                             }
                             itemsIndexed(historyItems, key = { index, _ -> historyKeys[index] }) { _, song ->
-                                val playedAt = listeningTime(state.playHistoryPlayedAt[song.id], rememberAppLocale())
+                                val playedAt = listeningTime(state.playHistoryPlayedAt[song.id], appLocale())
                                 Column(Modifier.fillMaxWidth()) {
                                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                         SongRow(
@@ -1170,7 +1170,7 @@ internal fun PlayHistoryPage(
                                 val cover = artist.coverUrl
                                     ?: artist.id?.let { artistCoverLookup["id:$it"] }
                                     ?: artistCoverLookup["name:${artist.name.lowercase()}"]
-                                val visitedAt = listeningTime(artist.visitedAtMs, rememberAppLocale())
+                                val visitedAt = listeningTime(artist.visitedAtMs, appLocale())
                                 Row(
                                     Modifier.fillMaxWidth()
                                         .clickable { actions.openArtist(artist.toArtist()) }
@@ -1249,7 +1249,7 @@ internal fun PlayHistoryPage(
                                     collection.type == PlayedCollectionType.ALBUM -> stringResource(R.string.ft_album_label)
                                     else -> stringResource(R.string.ft_playlist_label)
                                 }
-                                val playedAt = listeningTime(collection.playedAtMs, rememberAppLocale())
+                                val playedAt = listeningTime(collection.playedAtMs, appLocale())
                                 val metaParts = buildList {
                                     add(typeLabel)
                                     if (collection.subtitle.isNotBlank()) add(collection.subtitle)
@@ -1382,7 +1382,7 @@ internal fun PlayHistoryPage(
                         } else {
                             items(state.queueSnapshots, key = { it.id }) { snapshot ->
                                 val sourceText = queueSnapshotSourceTitle(snapshot)
-                                val capturedAt = listeningTime(snapshot.capturedAtMs, rememberAppLocale())
+                                val capturedAt = listeningTime(snapshot.capturedAtMs, appLocale())
                                 val activeTrack = snapshot.currentSong
                                 Surface(
                                     shape = RoundedCornerShape(16.dp),

@@ -7,13 +7,13 @@
     <string name="ft_library_add_to_playlist">재생목록에 추가</string>
     <string name="ft_library_quick_next">다음에 재생</string>
     <string name="ft_library_quick_playlist">재생목록에 추가</string>
-    <string name="ft_library_quick_favorite">즐겨찾기 추가</string>
+    <string name="ft_library_quick_favorite">즐겨찾기에 추가</string>
     <string name="ft_library_quick_favorited">즐겨찾기됨</string>
     <string name="ft_library_view_artist">아티스트 보기</string>
     <string name="ft_library_view_album">앨범 보기</string>
     <string name="ft_library_remove_song">이 재생목록에서 제거</string>
     <string name="ft_library_copy_song_info">곡 정보 복사</string>
-    <string name="ft_library_create_playlist">새 재생목록</string>
+    <string name="ft_library_create_playlist">재생목록 만들기</string>
     <string name="ft_library_edit_playlist">재생목록 편집</string>
     <string name="ft_library_playlist_name">이름</string>
     <string name="ft_library_playlist_description">설명</string>
@@ -27,7 +27,7 @@
         <item quantity="other">%1$d곡</item>
     </plurals>
     <string name="ft_library_invalid_song_count">추가할 곡을 1~100곡 선택하세요.</string>
-    <string name="ft_library_no_playlists">사용 가능한 재생목록이 없습니다. 새로 만들어 시작하세요.</string>
+    <string name="ft_library_no_playlists">사용 가능한 재생목록이 없습니다. 새 재생목록을 만들어 시작하세요.</string>
     <string name="ft_library_add_selected">선택한 재생목록에 추가</string>
     <string name="ft_library_order_title">%1$s 순서 변경</string>
     <string name="ft_library_position">%2$d개 중 %1$d번째</string>

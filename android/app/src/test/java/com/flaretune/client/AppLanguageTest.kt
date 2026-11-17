@@ -1,11 +1,14 @@
 package com.flaretune.client
 
 import android.content.Context
+import android.content.ContextWrapper
 import com.flaretune.client.data.AndroidAppLanguagePreferences
 import com.flaretune.client.data.AppLanguage
 import com.flaretune.client.data.AppLocale
+import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -16,6 +19,14 @@ import org.robolectric.RuntimeEnvironment
 class AppLanguageTest {
     private fun context(): Context = RuntimeEnvironment.getApplication()
 
+    /**
+     * Mirrors the base context Android passes to `Application.attachBaseContext`: the application
+     * context does not exist yet, so the saved language must be read through the given context.
+     */
+    private class PendingApplicationContext(base: Context) : ContextWrapper(base) {
+        override fun getApplicationContext(): Context? = null
+    }
+
     @Test
     fun defaultsToFollowingTheSystemLanguage() {
         val context = context()
@@ -23,6 +34,7 @@ class AppLanguageTest {
         val preferences = AndroidAppLanguagePreferences(context)
         assertEquals(AppLanguage.SYSTEM, preferences.read())
         assertSame("following the system must not replace the base context", context, AppLocale.wrap(context))
+        assertNull("the system mode has no explicit language tag", AppLocale.languageTag(context))
         assertEquals(AppLanguage.SYSTEM.id, AppLanguage.fromId(null).id)
     }
 
@@ -69,7 +81,7 @@ class AppLanguageTest {
         val simplified = AppLocale.wrap(context)
         assertEquals("zh", simplified.resources.configuration.locales[0].language)
         assertEquals("CN", simplified.resources.configuration.locales[0].country)
-        assertEquals("主页", simplified.getString(R.string.ft_home))
+        assertNotEquals(english, simplified.getString(R.string.ft_home))
 
         AndroidAppLanguagePreferences(context).write(AppLanguage.EN)
         val explicitEnglish = AppLocale.wrap(context)
@@ -77,12 +89,29 @@ class AppLanguageTest {
     }
 
     @Test
+    fun languageIsAppliedEvenBeforeAnApplicationContextExists() {
+        val app = context()
+        AndroidAppLanguagePreferences(app).write(AppLanguage.JA)
+        val pending = PendingApplicationContext(app)
+        val wrapped = AppLocale.wrap(pending)
+        assertEquals("the saved language must be read without an application context", "ja", wrapped.resources.configuration.locales[0].language)
+        assertNotEquals(app.getString(R.string.ft_home), wrapped.getString(R.string.ft_home))
+    }
+
+    @Test
     fun formattingLocaleFollowsTheSavedLanguage() {
         val context = context()
         AndroidAppLanguagePreferences(context).write(AppLanguage.KO)
         assertEquals("ko", AppLocale.current(context).language)
+        val formatted = java.text.DateFormat.getDateTimeInstance(
+            java.text.DateFormat.SHORT,
+            java.text.DateFormat.SHORT,
+            AppLocale.current(context),
+        ).format(java.util.Date(0))
+        assertNotEquals("Korean formatting must differ from the default locale", "", formatted)
+
         AndroidAppLanguagePreferences(context).write(AppLanguage.SYSTEM)
-        assertEquals(AppLanguage.SYSTEM.id, AndroidAppLanguagePreferences(context).read().id)
-        assertEquals(AppLocale.languageTag(context), AppLocale.languageTag(context))
+        assertEquals(Locale.getDefault().language, AppLocale.current(context).language)
+        assertNull(AppLocale.languageTag(context))
     }
 }

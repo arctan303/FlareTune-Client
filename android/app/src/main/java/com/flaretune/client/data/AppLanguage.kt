@@ -32,7 +32,9 @@ interface AppLanguagePreferences {
 }
 
 class AndroidAppLanguagePreferences(context: Context) : AppLanguagePreferences {
-    private val preferences = context.applicationContext.getSharedPreferences("app_language_v1", Context.MODE_PRIVATE)
+    // Read through the caller's own context: during Application.attachBaseContext the application
+    // context does not exist yet, and getSharedPreferences already returns the process-wide instance.
+    private val preferences = context.getSharedPreferences("app_language_v1", Context.MODE_PRIVATE)
 
     override fun read(): AppLanguage = try {
         AppLanguage.fromId(preferences.getString("app_language", null))

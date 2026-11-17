@@ -3,11 +3,11 @@
     <string name="ft_library_favorite">加入我的收藏</string>
     <string name="ft_library_unfavorite">移出我的收藏</string>
     <string name="ft_library_play_next">下一首播放</string>
-    <string name="ft_library_enqueue">加入播放佇列</string>
+    <string name="ft_library_enqueue">加入佇列</string>
     <string name="ft_library_add_to_playlist">加入播放清單</string>
-    <string name="ft_library_quick_next">下一首</string>
+    <string name="ft_library_quick_next">下一首播放</string>
     <string name="ft_library_quick_playlist">加入播放清單</string>
-    <string name="ft_library_quick_favorite">加入收藏</string>
+    <string name="ft_library_quick_favorite">加入我的收藏</string>
     <string name="ft_library_quick_favorited">已收藏</string>
     <string name="ft_library_view_artist">查看歌手</string>
     <string name="ft_library_view_album">查看專輯</string>

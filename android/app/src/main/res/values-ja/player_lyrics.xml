@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="ft_translate_to_language">%1$sに翻訳</string>
-    <string name="ft_lyric_translation_failed">訳文を読み込めませんでした。元の歌詞は引き続き利用できます。</string>
+    <string name="ft_lyric_translation_failed">翻訳を読み込めませんでした。元の歌詞は引き続き利用できます。</string>
 </resources>
