@@ -56,6 +56,12 @@ class ClientUiTest {
         }
         actions.onCloseAlbum = { state.value = state.value.copy(selectedAlbum = null, albumSongs = emptyList()) }
         actions.onVolume = { volume -> state.value = state.value.copy(playback = state.value.playback.copy(volume = volume)) }
+        actions.onCheckInstance = { origin ->
+            state.value = state.value.copy(
+                instanceUrl = origin,
+                connectStep = ConnectStep.CREDENTIALS,
+            )
+        }
         val loader = if (artwork) fixtureLoader() else null
         rule.setContent {
             val density = LocalDensity.current
@@ -68,6 +74,7 @@ class ClientUiTest {
     @Test fun connectSubmitsTheExactInputAndClearsPassword() {
         render(ClientUiState(screen = ClientScreen.CONNECT), artwork = false)
         rule.onNodeWithTag("connect_url").performTextInput("https://music.example")
+        rule.onNodeWithTag("connect_check").performClick()
         rule.onNodeWithTag("connect_username").performTextInput("listener")
         rule.onNodeWithTag("connect_password").performTextInput("ephemeral-password")
         rule.onNodeWithTag("connect_submit").performClick()
@@ -1570,6 +1577,7 @@ private class RecordingActions : ClientActions {
     var onAlbum: (Album) -> Unit = {}
     var onCloseAlbum: () -> Unit = {}
     var onVolume: (Float) -> Unit = {}
+    var onCheckInstance: (String) -> Unit = {}
     var onSetTranslationEnabled: (Boolean) -> Unit = {}
     var discoverLanguageSelected: String? = null
     override fun navigate(destination: MainDestination) { this.destination = destination; onNavigate(destination) }
@@ -1578,6 +1586,7 @@ private class RecordingActions : ClientActions {
     override fun openAlbum(album: Album) { this.album = album; onAlbum(album) }
     override fun closeAlbum() { onCloseAlbum() }
     override fun setVolume(volume: Float) { this.lastVolume = volume; onVolume(volume) }
+    override fun checkInstance(instanceUrl: String) { onCheckInstance(instanceUrl) }
     override fun login(instanceUrl: String, username: String, password: String) { credentials = listOf(instanceUrl, username, password) }
     override fun changePassword(currentPassword: String, newPassword: String) { passwordChanges++ }
     override fun logout() {}

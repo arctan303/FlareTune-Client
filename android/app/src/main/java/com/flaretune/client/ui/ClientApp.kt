@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
@@ -16,8 +17,11 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -683,24 +687,32 @@ private fun RestoringScreen() {
 
 @Composable
 private fun ConnectionScreen(state: ClientUiState, actions: ClientActions) {
-    var url by rememberSaveable(state.instanceUrl, state.username, state.addingAccount) {
+    var url by rememberSaveable(state.instanceUrl, state.addingAccount) {
         mutableStateOf(state.instanceUrl)
     }
-    var username by rememberSaveable(state.instanceUrl, state.username, state.addingAccount) {
+    var username by rememberSaveable(state.instanceUrl, state.username, state.addingAccount, state.connectStep) {
         mutableStateOf(state.username)
     }
-    var password by remember(state.instanceUrl, state.username, state.addingAccount) { mutableStateOf("") }
-    var showPassword by remember(state.instanceUrl, state.username, state.addingAccount) { mutableStateOf(false) }
+    var password by remember(state.instanceUrl, state.username, state.addingAccount, state.connectStep) {
+        mutableStateOf("")
+    }
+    var showPassword by remember(state.instanceUrl, state.username, state.addingAccount, state.connectStep) {
+        mutableStateOf(false)
+    }
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
-    BackHandler(enabled = state.addingAccount && !state.busy) {
+    BackHandler(enabled = state.connectStep == ConnectStep.CREDENTIALS && !state.busy) {
+        actions.editInstanceAddress()
+    }
+    BackHandler(enabled = state.connectStep == ConnectStep.INSTANCE && state.addingAccount && !state.busy) {
         actions.cancelAddAccount()
     }
-    val retrySavedAccount = remember(state.savedAccounts, state.addingAccount, url, username) {
+    val activeOrigin = state.instanceUrl.ifBlank { url.trim() }
+    val retrySavedAccount = remember(state.savedAccounts, state.addingAccount, activeOrigin, username) {
         if (state.addingAccount) null
         else {
-            val normalizedOrigin = runCatching { InstanceAddress.parse(url).origin }
-                .getOrElse { url.trim().trimEnd('/') }
+            val normalizedOrigin = runCatching { InstanceAddress.parse(activeOrigin).origin }
+                .getOrElse { activeOrigin.trim().trimEnd('/') }
             val trimmedUsername = username.trim()
             state.savedAccounts.firstOrNull { acc ->
                 !acc.needsReauth &&
@@ -709,10 +721,18 @@ private fun ConnectionScreen(state: ClientUiState, actions: ClientActions) {
             }
         }
     }
-    val canSubmit = url.isNotBlank() && username.isNotBlank() &&
+    val canCheckInstance = url.isNotBlank() && !state.busy
+    val checkInstance = {
+        if (canCheckInstance) {
+            focusManager.clearFocus(force = true)
+            keyboard?.hide()
+            actions.checkInstance(url.trim())
+        }
+    }
+    val canSubmitLogin = activeOrigin.isNotBlank() && username.isNotBlank() &&
         (password.isNotEmpty() || retrySavedAccount != null) && !state.busy
-    val submit = {
-        if (canSubmit) {
+    val submitLogin = {
+        if (canSubmitLogin) {
             focusManager.clearFocus(force = true)
             keyboard?.hide()
             val submitted = password
@@ -720,12 +740,17 @@ private fun ConnectionScreen(state: ClientUiState, actions: ClientActions) {
             if (submitted.isEmpty() && retrySavedAccount != null) {
                 actions.switchAccount(retrySavedAccount.accountKey)
             } else {
-                actions.login(url.trim(), username.trim(), submitted)
+                actions.login(activeOrigin, username.trim(), submitted)
             }
         }
     }
     val titleRes = if (state.addingAccount) R.string.ft_add_account else R.string.ft_connect_title
-    val subtitleRes = if (state.addingAccount) R.string.ft_add_account_subtitle else R.string.ft_connect_subtitle
+    val subtitleRes = when {
+        state.connectStep == ConnectStep.INSTANCE && state.addingAccount -> R.string.ft_add_account_instance_subtitle
+        state.connectStep == ConnectStep.INSTANCE -> R.string.ft_connect_instance_subtitle
+        state.addingAccount -> R.string.ft_add_account_subtitle
+        else -> R.string.ft_connect_subtitle
+    }
 
     val density = LocalDensity.current
     BoxWithConstraints(
@@ -750,7 +775,7 @@ private fun ConnectionScreen(state: ClientUiState, actions: ClientActions) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     ConnectionBrandHeroPane(
-                        username = username,
+                        username = if (state.connectStep == ConnectStep.CREDENTIALS) username else "",
                         titleRes = titleRes,
                         subtitleRes = subtitleRes,
                         addingAccount = state.addingAccount,
@@ -768,8 +793,10 @@ private fun ConnectionScreen(state: ClientUiState, actions: ClientActions) {
                         showPassword = showPassword,
                         onTogglePassword = { showPassword = !showPassword },
                         state = state,
-                        canSubmit = canSubmit,
-                        onSubmit = submit,
+                        canCheckInstance = canCheckInstance,
+                        onCheckInstance = checkInstance,
+                        canSubmitLogin = canSubmitLogin,
+                        onSubmitLogin = submitLogin,
                         actions = actions,
                         contentPadding = 24.dp,
                         modifier = Modifier.widthIn(min = 360.dp, max = 440.dp).weight(1f, fill = false),
@@ -800,7 +827,7 @@ private fun ConnectionScreen(state: ClientUiState, actions: ClientActions) {
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         LoginAvatarBadge(
-                            username = username,
+                            username = if (state.connectStep == ConnectStep.CREDENTIALS) username else "",
                             busy = state.busy,
                             size = 56.dp,
                         )
@@ -834,8 +861,10 @@ private fun ConnectionScreen(state: ClientUiState, actions: ClientActions) {
                         showPassword = showPassword,
                         onTogglePassword = { showPassword = !showPassword },
                         state = state,
-                        canSubmit = canSubmit,
-                        onSubmit = submit,
+                        canCheckInstance = canCheckInstance,
+                        onCheckInstance = checkInstance,
+                        canSubmitLogin = canSubmitLogin,
+                        onSubmitLogin = submitLogin,
                         actions = actions,
                         contentPadding = 20.dp,
                         modifier = Modifier.fillMaxWidth(),
@@ -944,8 +973,10 @@ private fun ConnectionFormCard(
     showPassword: Boolean,
     onTogglePassword: () -> Unit,
     state: ClientUiState,
-    canSubmit: Boolean,
-    onSubmit: () -> Unit,
+    canCheckInstance: Boolean,
+    onCheckInstance: () -> Unit,
+    canSubmitLogin: Boolean,
+    onSubmitLogin: () -> Unit,
     actions: ClientActions,
     contentPadding: Dp,
     modifier: Modifier = Modifier,
@@ -956,132 +987,295 @@ private fun ConnectionFormCard(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         tonalElevation = 1.dp,
     ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(contentPadding)) {
-            OutlinedTextField(
-                value = url,
-                onValueChange = onUrlChange,
-                enabled = !state.busy,
-                label = { Text(stringResource(R.string.ft_instance_address)) },
-                placeholder = { Text("https://music.example.com") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
-                singleLine = true,
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier.fillMaxWidth().testTag("connect_url"),
-            )
-            Spacer(Modifier.height(12.dp))
-            OutlinedTextField(
-                value = username,
-                onValueChange = onUsernameChange,
-                enabled = !state.busy,
-                label = { Text(stringResource(R.string.ft_username)) },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                singleLine = true,
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier.fillMaxWidth().testTag("connect_username"),
-            )
-            Spacer(Modifier.height(12.dp))
-            SecretField(
-                value = password,
-                onChange = onPasswordChange,
-                label = stringResource(R.string.ft_password),
-                enabled = !state.busy,
-                shown = showPassword,
-                toggle = onTogglePassword,
-                modifier = Modifier.testTag("connect_password"),
-                imeAction = ImeAction.Go,
-                keyboardActions = KeyboardActions(onGo = { onSubmit() }),
-            )
-            state.notice?.let { Notice(it, Modifier.padding(top = 14.dp)) }
-            Spacer(Modifier.height(20.dp))
-            Button(
-                onClick = onSubmit,
-                enabled = canSubmit,
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("connect_submit"),
-            ) {
-                if (state.busy) {
-                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
-                    Spacer(Modifier.width(12.dp))
-                }
-                Text(stringResource(if (state.busy) R.string.ft_connecting else R.string.ft_connect_action))
-            }
-            val switchableAccounts = remember(state.savedAccounts) {
-                state.savedAccounts.filter { !it.needsReauth || !it.active }
-            }
-            if (!state.addingAccount && switchableAccounts.isNotEmpty()) {
-                Spacer(Modifier.height(22.dp))
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
-                Spacer(Modifier.height(14.dp))
-                Text(
-                    stringResource(R.string.ft_saved_accounts),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 8.dp),
-                )
-                Column(
-                    Modifier.fillMaxWidth().testTag("connect_saved_accounts"),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    switchableAccounts.forEach { acc ->
-                        val name = acc.displayName.ifBlank { acc.username }
-                        Surface(
-                            onClick = { if (!state.busy) actions.switchAccount(acc.accountKey) },
-                            enabled = !state.busy,
-                            shape = RoundedCornerShape(14.dp),
-                            color = MaterialTheme.colorScheme.surfaceContainer,
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("connect_saved_${acc.accountKey}"),
+        AnimatedContent(
+            targetState = state.connectStep,
+            transitionSpec = {
+                val forward = targetState == ConnectStep.CREDENTIALS
+                (fadeIn(tween(220)) + slideInHorizontally(tween(260)) { full ->
+                    if (forward) full / 4 else -full / 4
+                }) togetherWith (fadeOut(tween(180)) + slideOutHorizontally(tween(220)) { full ->
+                    if (forward) -full / 4 else full / 4
+                })
+            },
+            label = "connection_step_transition",
+        ) { step ->
+            Column(modifier = Modifier.fillMaxWidth().padding(contentPadding)) {
+                if (step == ConnectStep.INSTANCE) {
+                    OutlinedTextField(
+                        value = url,
+                        onValueChange = onUrlChange,
+                        enabled = !state.busy,
+                        label = { Text(stringResource(R.string.ft_instance_address)) },
+                        placeholder = { Text("https://music.example.com") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
+                        keyboardActions = KeyboardActions(onGo = { onCheckInstance() }),
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("connect_url"),
+                    )
+                    state.notice?.let { Notice(it, Modifier.padding(top = 14.dp)) }
+                    Spacer(Modifier.height(20.dp))
+                    Button(
+                        onClick = onCheckInstance,
+                        enabled = canCheckInstance,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("connect_check"),
+                    ) {
+                        if (state.busy) {
+                            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                            Spacer(Modifier.width(12.dp))
+                        }
+                        Text(stringResource(if (state.busy) R.string.ft_checking_instance else R.string.ft_check_and_continue))
+                    }
+                    val switchableAccounts = remember(state.savedAccounts) {
+                        state.savedAccounts.filter { !it.needsReauth || !it.active }
+                    }
+                    if (!state.addingAccount && switchableAccounts.isNotEmpty()) {
+                        Spacer(Modifier.height(22.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                        Spacer(Modifier.height(14.dp))
+                        Text(
+                            stringResource(R.string.ft_saved_accounts),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 8.dp),
+                        )
+                        Column(
+                            Modifier.fillMaxWidth().testTag("connect_saved_accounts"),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Row(
-                                Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Box(
-                                    Modifier.size(34.dp).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f), CircleShape),
-                                    contentAlignment = Alignment.Center,
+                            switchableAccounts.forEach { acc ->
+                                val name = acc.displayName.ifBlank { acc.username }
+                                Surface(
+                                    onClick = { if (!state.busy) actions.switchAccount(acc.accountKey) },
+                                    enabled = !state.busy,
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = MaterialTheme.colorScheme.surfaceContainer,
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("connect_saved_${acc.accountKey}"),
                                 ) {
-                                    Text(
-                                        name.take(1).uppercase(Locale.ROOT),
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary,
-                                    )
-                                }
-                                Spacer(Modifier.width(12.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        name,
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        fontWeight = FontWeight.Medium,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    Text(
-                                        "${acc.username} · ${formatAccountOriginHost(acc.origin)}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                                if (acc.needsReauth) {
-                                    Text(
-                                        stringResource(R.string.ft_account_reauth_required),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.error,
-                                    )
-                                } else {
-                                    Text(
-                                        stringResource(R.string.ft_switch_account),
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.primary,
-                                    )
+                                    Row(
+                                        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Box(
+                                            Modifier.size(34.dp).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f), CircleShape),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Text(
+                                                name.take(1).uppercase(Locale.ROOT),
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.primary,
+                                            )
+                                        }
+                                        Spacer(Modifier.width(12.dp))
+                                        Column(Modifier.weight(1f)) {
+                                            Text(
+                                                name,
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                fontWeight = FontWeight.Medium,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            Text(
+                                                "${acc.username} · ${formatAccountOriginHost(acc.origin)}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                        if (acc.needsReauth) {
+                                            Text(
+                                                stringResource(R.string.ft_account_reauth_required),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.error,
+                                            )
+                                        } else {
+                                            Text(
+                                                stringResource(R.string.ft_switch_account),
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = MaterialTheme.colorScheme.primary,
+                                            )
+                                        }
+                                    }
                                 }
                             }
+                        }
+                    }
+                } else {
+                    val displayedOrigin = state.instanceUrl.ifBlank { url.trim() }
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        modifier = Modifier.fillMaxWidth().testTag("connect_instance_bar"),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
+                                Text(
+                                    text = formatAccountOriginHost(displayedOrigin).ifBlank { displayedOrigin },
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = stringResource(R.string.ft_instance_ready_badge),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                            TextButton(
+                                onClick = actions::editInstanceAddress,
+                                enabled = !state.busy,
+                                modifier = Modifier.heightIn(min = 48.dp).testTag("connect_change_instance"),
+                            ) {
+                                Text(stringResource(R.string.ft_change_instance))
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(14.dp))
+                    OutlinedTextField(
+                        value = username,
+                        onValueChange = onUsernameChange,
+                        enabled = !state.busy,
+                        label = { Text(stringResource(R.string.ft_username)) },
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("connect_username"),
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    SecretField(
+                        value = password,
+                        onChange = onPasswordChange,
+                        label = stringResource(R.string.ft_password),
+                        enabled = !state.busy,
+                        shown = showPassword,
+                        toggle = onTogglePassword,
+                        modifier = Modifier.testTag("connect_password"),
+                        imeAction = ImeAction.Go,
+                        keyboardActions = KeyboardActions(onGo = { onSubmitLogin() }),
+                    )
+                    state.notice?.let { Notice(it, Modifier.padding(top = 14.dp)) }
+                    Spacer(Modifier.height(20.dp))
+                    Button(
+                        onClick = onSubmitLogin,
+                        enabled = canSubmitLogin,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("connect_submit"),
+                    ) {
+                        if (state.busy) {
+                            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                            Spacer(Modifier.width(12.dp))
+                        }
+                        Text(stringResource(if (state.busy) R.string.ft_connecting else R.string.ft_sign_in_action))
+                    }
+                    if (state.googleLoginEnabled) {
+                        Spacer(Modifier.height(16.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            HorizontalDivider(
+                                modifier = Modifier.weight(1f),
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+                            )
+                            Text(
+                                stringResource(R.string.ft_or_divider),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            HorizontalDivider(
+                                modifier = Modifier.weight(1f),
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+                            )
+                        }
+                        Spacer(Modifier.height(16.dp))
+                        if (state.googleNativeLoginEnabled) {
+                            OutlinedButton(
+                                onClick = actions::startGoogleLogin,
+                                enabled = !state.busy,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).testTag("connect_google"),
+                            ) {
+                                GoogleBrandMark(modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(10.dp))
+                                Text(stringResource(R.string.ft_continue_with_google))
+                            }
+                        } else {
+                            Text(
+                                text = stringResource(R.string.ft_google_server_upgrade_needed),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.fillMaxWidth().testTag("connect_google_upgrade_hint"),
+                            )
                         }
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun GoogleBrandMark(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val strokeWidth = size.minDimension * 0.21f
+        val inset = strokeWidth / 2f
+        val arcSize = androidx.compose.ui.geometry.Size(size.width - strokeWidth, size.height - strokeWidth)
+        val topLeft = Offset(inset, inset)
+        // Red top arc
+        drawArc(
+            color = Color(0xFFEA4335),
+            startAngle = -140f,
+            sweepAngle = 105f,
+            useCenter = false,
+            topLeft = topLeft,
+            size = arcSize,
+            style = Stroke(width = strokeWidth, cap = androidx.compose.ui.graphics.StrokeCap.Butt),
+        )
+        // Yellow left arc
+        drawArc(
+            color = Color(0xFFFBBC05),
+            startAngle = 140f,
+            sweepAngle = 80f,
+            useCenter = false,
+            topLeft = topLeft,
+            size = arcSize,
+            style = Stroke(width = strokeWidth, cap = androidx.compose.ui.graphics.StrokeCap.Butt),
+        )
+        // Green bottom arc
+        drawArc(
+            color = Color(0xFF34A853),
+            startAngle = 35f,
+            sweepAngle = 105f,
+            useCenter = false,
+            topLeft = topLeft,
+            size = arcSize,
+            style = Stroke(width = strokeWidth, cap = androidx.compose.ui.graphics.StrokeCap.Butt),
+        )
+        // Blue right-bottom arc + horizontal bar
+        drawArc(
+            color = Color(0xFF4285F4),
+            startAngle = -5f,
+            sweepAngle = 45f,
+            useCenter = false,
+            topLeft = topLeft,
+            size = arcSize,
+            style = Stroke(width = strokeWidth, cap = androidx.compose.ui.graphics.StrokeCap.Butt),
+        )
+        val midY = size.height * 0.5f
+        drawLine(
+            color = Color(0xFF4285F4),
+            start = Offset(size.width * 0.52f, midY),
+            end = Offset(size.width - inset * 0.3f, midY),
+            strokeWidth = strokeWidth,
+        )
     }
 }
 
@@ -2015,12 +2209,22 @@ internal fun clientNoticeMessageRes(notice: ClientNotice): Int = when (notice) {
     ClientNotice.PLAYLIST_SONG_LIMIT -> R.string.ft_listening_playlist_song_limit
     ClientNotice.IMAGE_UPLOAD_LIMIT -> R.string.ft_listening_image_upload_limit
     ClientNotice.IMAGE_TOO_LARGE -> R.string.ft_listening_image_too_large
+    ClientNotice.GOOGLE_UNAVAILABLE -> R.string.ft_notice_google_unavailable
+    ClientNotice.GOOGLE_UNBOUND -> R.string.ft_notice_google_unbound
+    ClientNotice.GOOGLE_CANCELLED -> R.string.ft_notice_google_cancelled
+    ClientNotice.GOOGLE_FAILED -> R.string.ft_notice_google_failed
+    ClientNotice.GOOGLE_NO_BROWSER -> R.string.ft_notice_google_no_browser
 }
 
 @Composable
 internal fun Notice(notice: ClientNotice, modifier: Modifier = Modifier) {
     val resource = clientNoticeMessageRes(notice)
-    val informational = notice in setOf(ClientNotice.PASSWORD_CHANGED, ClientNotice.PAGE_LIMIT, ClientNotice.SOME_SOURCES_UNAVAILABLE)
+    val informational = notice in setOf(
+        ClientNotice.PASSWORD_CHANGED,
+        ClientNotice.PAGE_LIMIT,
+        ClientNotice.SOME_SOURCES_UNAVAILABLE,
+        ClientNotice.GOOGLE_CANCELLED,
+    )
     Text(
         stringResource(resource),
         style = MaterialTheme.typography.bodyMedium,

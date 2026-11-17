@@ -15,6 +15,12 @@ import okhttp3.RequestBody.Companion.toRequestBody
 
 data class ActiveConnection(val network: SessionNetwork, val api: AccountApi, @Volatile var auth: AuthSession)
 
+data class InstanceProbeResult(
+    val origin: String,
+    val googleEnabled: Boolean = false,
+    val googleNativeEnabled: Boolean = false,
+)
+
 interface Connections {
     val current: ActiveConnection?
     val lastOrigin: String
@@ -23,7 +29,11 @@ interface Connections {
     val activeAccountKey: String? get() = current?.let { SavedAccount.key(it.network.address.origin, it.auth.account.id) }
     val selectedAccountKey: String? get() = activeAccountKey
     suspend fun restore(): ActiveConnection?
+    suspend fun checkInstance(address: String): InstanceProbeResult =
+        InstanceProbeResult(InstanceAddress.parse(address).origin)
     suspend fun login(address: String, username: String, password: String): ActiveConnection
+    suspend fun loginWithGoogle(address: String, code: String, codeVerifier: String): ActiveConnection =
+        throw ApiFailure(Failure.GOOGLE_UNAVAILABLE)
     suspend fun changePassword(current: String, replacement: String)
     suspend fun logout()
     fun beginAddAccount() {}
@@ -162,7 +172,30 @@ class ConnectionManager(
         if (ticket != generation) throw ApiFailure(Failure.RETIRED)
     }
 
-    override suspend fun login(address: String, username: String, password: String): ActiveConnection {
+    override suspend fun checkInstance(address: String): InstanceProbeResult {
+        val normalized = InstanceAddress.parse(address)
+        return withContext(ioDispatcher) {
+            val network = newNetwork(normalized)
+            try {
+                val status = FlareTuneApi(network).checkInstance()
+                InstanceProbeResult(
+                    origin = normalized.origin,
+                    googleEnabled = status.googleEnabled,
+                    googleNativeEnabled = status.googleNativeEnabled,
+                )
+            } finally {
+                network.retire()
+            }
+        }
+    }
+
+    override suspend fun login(address: String, username: String, password: String): ActiveConnection =
+        authenticate(address) { api -> api.login(username, password) }
+
+    override suspend fun loginWithGoogle(address: String, code: String, codeVerifier: String): ActiveConnection =
+        authenticate(address) { api -> api.exchangeGoogleLogin(code, codeVerifier) }
+
+    private suspend fun authenticate(address: String, signIn: (FlareTuneApi) -> AuthSession): ActiveConnection {
         val normalized = InstanceAddress.parse(address)
         val ticket = synchronized(lock) {
             val ticket = begin(null)
@@ -175,7 +208,7 @@ class ConnectionManager(
             try {
                 val api = FlareTuneApi(network)
                 api.checkReady()
-                commit(ticket, network, api, api.login(username, password))
+                commit(ticket, network, api, signIn(api))
             } catch (error: Exception) {
                 network.retire()
                 synchronized(lock) {

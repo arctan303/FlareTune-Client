@@ -16,6 +16,8 @@ interface TranslationPreferences {
     fun writeThemeMode(mode: AppThemeMode) {}
     fun readBluetoothLyricsMode(): BluetoothLyricsMode = BluetoothLyricsMode.OFF
     fun writeBluetoothLyricsMode(mode: BluetoothLyricsMode) {}
+    fun readIncludePrereleases(): Boolean = false
+    fun writeIncludePrereleases(enabled: Boolean) {}
     fun readVolume(): Float = 1f
     fun writeVolume(volume: Float) {}
 }
@@ -71,6 +73,16 @@ class AndroidTranslationPreferences(context: Context) : TranslationPreferences {
         }
         try {
             if (!preferences.edit().putString("bluetooth_lyrics_mode", raw).commit()) throw ApiFailure(Failure.STORAGE)
+        } catch (_: Exception) { throw ApiFailure(Failure.STORAGE) }
+    }
+
+    override fun readIncludePrereleases(): Boolean = try {
+        preferences.getBoolean("include_prerelease_updates", false)
+    } catch (_: Exception) { throw ApiFailure(Failure.STORAGE) }
+
+    override fun writeIncludePrereleases(enabled: Boolean) {
+        try {
+            if (!preferences.edit().putBoolean("include_prerelease_updates", enabled).commit()) throw ApiFailure(Failure.STORAGE)
         } catch (_: Exception) { throw ApiFailure(Failure.STORAGE) }
     }
 

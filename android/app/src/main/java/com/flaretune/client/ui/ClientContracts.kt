@@ -7,6 +7,8 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.flaretune.client.model.*
 import com.flaretune.client.data.AppThemeMode
+import com.flaretune.client.data.AppUpdateError
+import com.flaretune.client.data.AppUpdateRelease
 import com.flaretune.client.data.BluetoothLyricsMode
 import com.flaretune.client.data.PlayedCollectionType
 import com.flaretune.client.data.SearchEntity
@@ -14,9 +16,34 @@ import com.flaretune.client.data.SavedAccountSummary
 import com.flaretune.client.playback.SleepTimerState
 import kotlinx.coroutines.flow.StateFlow
 
+enum class AppUpdateStatus {
+    IDLE,
+    CHECKING,
+    UP_TO_DATE,
+    NO_RELEASE_FOUND,
+    AVAILABLE,
+    DOWNLOADING,
+    READY_TO_INSTALL,
+    INSTALL_PERMISSION_REQUIRED,
+    FAILED,
+}
+
+data class AppUpdateState(
+    val currentVersion: String = "",
+    val status: AppUpdateStatus = AppUpdateStatus.IDLE,
+    val includePrereleases: Boolean = false,
+    val dialogVisible: Boolean = false,
+    val availableRelease: AppUpdateRelease? = null,
+    val downloadedBytes: Long = 0L,
+    val totalBytes: Long = 0L,
+    val downloadedApkPath: String? = null,
+    val errorKind: AppUpdateError? = null,
+)
+
 enum class ImageCacheClearResult { CLEARING, CLEARED, FAILED, UNAVAILABLE }
 
 enum class ClientScreen { RESTORING, CONNECT, CHANGE_PASSWORD, LIBRARY }
+enum class ConnectStep { INSTANCE, CREDENTIALS }
 enum class LibraryTab { CATALOG, FAVORITES, ALBUMS }
 enum class MainDestination { HOME, DISCOVER, SEARCH, LIBRARY }
 
@@ -154,6 +181,11 @@ data class ClientUiState(
     val playedCollections: List<PlayedCollection> = emptyList(),
     val queueSnapshots: List<QueueSnapshot> = emptyList(),
     val playbackFeedback: PlaybackFeedbackEvent? = null,
+    val connectStep: ConnectStep = ConnectStep.INSTANCE,
+    val googleLoginEnabled: Boolean = false,
+    val googleNativeLoginEnabled: Boolean = false,
+    val googleAuthLaunchUrl: String? = null,
+    val appUpdate: AppUpdateState = AppUpdateState(),
 
 ) {
     val activeLyricIndex: Int get() = lyricState.activeLyricIndex
@@ -229,6 +261,11 @@ interface ClientActions {
     fun openAlbum(album: Album)
     fun closeAlbum()
     fun setVolume(volume: Float)
+    fun checkInstance(instanceUrl: String) {}
+    fun editInstanceAddress() {}
+    fun startGoogleLogin() {}
+    fun consumeGoogleAuthLaunch() {}
+    fun reportGoogleAuthLaunchFailed() {}
     fun login(instanceUrl: String, username: String, password: String)
     fun changePassword(currentPassword: String, newPassword: String)
     fun beginAddAccount() {}
@@ -243,6 +280,13 @@ interface ClientActions {
     fun setThemeMode(mode: AppThemeMode) {}
     fun setBluetoothLyricsMode(mode: BluetoothLyricsMode) {}
     fun clearImageCache() {}
+    fun setIncludePrereleaseUpdates(enabled: Boolean) {}
+    fun checkForAppUpdate() {}
+    fun openAppUpdateDialog() {}
+    fun dismissAppUpdateDialog() {}
+    fun startAppUpdateDownload() {}
+    fun cancelAppUpdateDownload() {}
+    fun installDownloadedAppUpdate() {}
     fun updateDisplayName(displayName: String) {}
     fun setAccountAvatar(sourceUri: String) {}
     fun clearAccountAvatar() {}

@@ -1,14 +1,18 @@
 package com.flaretune.client
 
 import android.app.Application
-import com.flaretune.client.data.AndroidSessionStore
-import com.flaretune.client.data.ConnectionManager
+import com.flaretune.client.data.AndroidCoverImageProcessor
+import com.flaretune.client.data.AndroidListeningLocalStorage
 import com.flaretune.client.data.AndroidPlaybackHistoryStore
-import com.flaretune.client.data.PlaybackHistoryRepository
 import com.flaretune.client.data.AndroidPlaybackQueueStore
-import com.flaretune.client.data.PlaybackQueueRepository
+import com.flaretune.client.data.AndroidSessionStore
 import com.flaretune.client.data.AndroidTranslationPreferences
+import com.flaretune.client.data.AndroidAppUpdateInstaller
+import com.flaretune.client.data.ConnectionManager
+import com.flaretune.client.data.GitHubAppUpdateRepository
 import com.flaretune.client.data.LyricsDiagnostics
+import com.flaretune.client.data.PlaybackHistoryRepository
+import com.flaretune.client.data.PlaybackQueueRepository
 import com.flaretune.client.playback.PlaybackRuntime
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,5 +44,18 @@ class ClientApplication : Application() {
     val playEvents by lazy { com.flaretune.client.data.PlayEventRepository(com.flaretune.client.data.JsonPlayEventStore(listeningLocalStorage), scope) }
     val playlistPreferences by lazy { com.flaretune.client.data.JsonPlaylistPreferencesStore(listeningLocalStorage) }
     val historyExtras by lazy { com.flaretune.client.data.ListeningHistoryExtrasRepository(com.flaretune.client.data.JsonListeningHistoryExtrasStore(listeningLocalStorage), scope) }
+    val appUpdater by lazy {
+        GitHubAppUpdateRepository(
+            cacheDir = cacheDir,
+            expectedPackageName = packageName,
+            currentVersionCode = BuildConfig.VERSION_CODE.toLong(),
+            archiveValidator = GitHubAppUpdateRepository.androidArchiveValidator(
+                context = this,
+                expectedPackageName = packageName,
+                minVersionCode = BuildConfig.VERSION_CODE.toLong(),
+            ),
+        )
+    }
+    val appUpdateInstaller by lazy { AndroidAppUpdateInstaller(this) }
     val playbackRuntime by lazy { PlaybackRuntime(this, history, queueRepository, playEvents) }
 }

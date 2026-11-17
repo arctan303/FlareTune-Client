@@ -46,7 +46,7 @@ class SessionNetwork(
             if (!chain.request().url.isHttps) throw IOException("HTTPS required")
             val response = chain.proceed(chain.request())
             if (address.sameOrigin(response.request.url) &&
-                response.request.url.encodedPath != "/api/auth/login" &&
+                response.request.url.encodedPath !in setOf("/api/auth/login", "/api/auth/google/exchange", "/api/auth/google/status") &&
                 (response.code == 401 || (response.code == 409 &&
                     isAccountChanged(response)))) {
                 onInvalidated(this)

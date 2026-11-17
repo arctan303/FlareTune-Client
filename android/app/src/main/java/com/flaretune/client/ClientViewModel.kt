@@ -30,10 +30,13 @@ class ClientViewModel(
     private val coverImageProcessor: CoverImageProcessor? = null,
     private val searchHistoryStore: SearchHistoryStore? = null,
     private val discoveryCache: DiscoveryCache? = null,
-    savedStateHandle: SavedStateHandle? = null,
+    private val savedStateHandle: SavedStateHandle? = null,
     private val systemMediaFavorites: SystemMediaFavoriteChanges? = null,
     private val historyExtras: ListeningHistoryExtrasRepository? = null,
     private val playlistPreferences: PlaylistPreferencesStore? = null,
+    private val appUpdater: AppUpdateRepository? = null,
+    private val appUpdateInstaller: AppUpdateInstaller? = null,
+    private val appVersionName: String = BuildConfig.VERSION_NAME,
 ) : ViewModel(), ClientActions {
     private val navigation = ClientNavigationState(savedStateHandle)
     private var preferredVolume = runCatching { translationPreferences?.readVolume() ?: 1f }
@@ -45,10 +48,18 @@ class ClientViewModel(
     private var keepScreenOnEnabled = runCatching { translationPreferences?.readKeepScreenOn() ?: true }.getOrDefault(true)
     private var themeMode = runCatching { translationPreferences?.readThemeMode() ?: AppThemeMode.SYSTEM }.getOrDefault(AppThemeMode.SYSTEM)
     private var bluetoothLyricsMode = runCatching { translationPreferences?.readBluetoothLyricsMode() ?: BluetoothLyricsMode.OFF }.getOrDefault(BluetoothLyricsMode.OFF)
+    private var includePrereleaseUpdates = runCatching { translationPreferences?.readIncludePrereleases() ?: false }.getOrDefault(false)
     private val preferenceMutex = Mutex()
     private var keepScreenRevision = 0L
     private var themeModeRevision = 0L
     private var bluetoothLyricsRevision = 0L
+    private var includePrereleaseRevision = 0L
+    private var appUpdateRevision = 0L
+    private var appUpdateJob: Job? = null
+    private var appUpdateState = AppUpdateState(
+        currentVersion = appVersionName,
+        includePrereleases = includePrereleaseUpdates,
+    )
     private var addingAccount = false
     private val mutable = MutableStateFlow(freshUi(instanceUrl = connections.lastOrigin, translationEnabled = translationEnabled, playback = PlaybackSnapshot(volume = preferredVolume)))
     val state: StateFlow<ClientUiState> = mutable
@@ -141,6 +152,12 @@ class ClientViewModel(
     private var favoritesLoadedOnce = false
     private var profileRevision = 0L
     private var profileJob: Job? = null
+    private var instanceProbeRevision = 0L
+    private var instanceProbeJob: Job? = null
+    private var pendingGoogleOrigin: String? = savedStateHandle?.get<String>(KEY_GOOGLE_ORIGIN)
+    private var pendingGoogleVerifier: String? = savedStateHandle?.get<String>(KEY_GOOGLE_VERIFIER)
+    private var pendingGoogleStartedAtMs: Long? = savedStateHandle?.get<Long>(KEY_GOOGLE_STARTED_AT)
+    private var exchangingGoogleCode = false
 
     private enum class SearchSnapshotMode { LOAD_AND_LOCK, RECORD_ONLY, APPLY_TO_VISIBLE }
 
@@ -157,6 +174,9 @@ class ClientViewModel(
         playback: PlaybackSnapshot = PlaybackSnapshot(volume = preferredVolume),
         navigationIdentity: String? = null,
         playbackReady: Boolean = false,
+        connectStep: ConnectStep = if (username.isNotBlank() && instanceUrl.isNotBlank()) ConnectStep.CREDENTIALS else ConnectStep.INSTANCE,
+        googleLoginEnabled: Boolean = false,
+        googleNativeLoginEnabled: Boolean = false,
     ): ClientUiState {
         val accounts = runCatching { connections.savedAccounts }
         return ClientUiState(
@@ -170,7 +190,30 @@ class ClientViewModel(
             keepScreenOnEnabled = keepScreenOnEnabled,
             themeMode = themeMode,
             bluetoothLyricsMode = bluetoothLyricsMode,
+            appUpdate = appUpdateState,
+            connectStep = connectStep,
+            googleLoginEnabled = googleLoginEnabled,
+            googleNativeLoginEnabled = googleNativeLoginEnabled,
         )
+    }
+
+    private fun savePendingGoogleAuth(origin: String, verifier: String) {
+        val now = System.currentTimeMillis()
+        pendingGoogleOrigin = origin
+        pendingGoogleVerifier = verifier
+        pendingGoogleStartedAtMs = now
+        savedStateHandle?.set(KEY_GOOGLE_ORIGIN, origin)
+        savedStateHandle?.set(KEY_GOOGLE_VERIFIER, verifier)
+        savedStateHandle?.set(KEY_GOOGLE_STARTED_AT, now)
+    }
+
+    private fun clearPendingGoogleAuth() {
+        pendingGoogleOrigin = null
+        pendingGoogleVerifier = null
+        pendingGoogleStartedAtMs = null
+        savedStateHandle?.remove<String>(KEY_GOOGLE_ORIGIN)
+        savedStateHandle?.remove<String>(KEY_GOOGLE_VERIFIER)
+        savedStateHandle?.remove<Long>(KEY_GOOGLE_STARTED_AT)
     }
 
     private fun accountSummaries(): List<SavedAccountSummary> =
@@ -207,6 +250,7 @@ class ClientViewModel(
         discoveryRevision++; discoveryJob?.cancel(); discoveryCheckedDate = null; seenSpotlightArtists.clear()
         homeLibraryRevision++; homeLibraryJob?.cancel()
         profileRevision++; profileJob?.cancel()
+        instanceProbeRevision++; instanceProbeJob?.cancel()
     }
 
     private fun resetPrivateData(clearHistory: Boolean = true) {
@@ -339,21 +383,32 @@ class ClientViewModel(
                 player.stopAndClear()
                 addingAccount = false
                 val selected = accountSummaries().firstOrNull { account -> account.accountKey == connections.selectedAccountKey }
+                val origin = selected?.origin ?: connections.lastOrigin
+                val prefilledUsername = selected?.username ?: ""
                 mutable.value = freshUi(screen = ClientScreen.CONNECT,
-                    instanceUrl = selected?.origin ?: connections.lastOrigin, username = selected?.username ?: "", notice = it)
+                    instanceUrl = origin, username = prefilledUsername, notice = it)
+                if (prefilledUsername.isNotBlank() && origin.isNotBlank()) {
+                    probeGoogleStatusQuietly(origin)
+                }
             }
         }
         val ticket = identity
         viewModelScope.launch {
             try {
+                if (ticket != identity) return@launch
                 val connection = connections.restore()
                 if (ticket != identity) return@launch
                 if (connection == null) {
                     navigation.clear()
                     val selected = accountSummaries().firstOrNull { it.accountKey == connections.selectedAccountKey }
+                    val origin = selected?.origin ?: connections.lastOrigin
+                    val prefilledUsername = selected?.username ?: ""
                     mutable.value = freshUi(screen = ClientScreen.CONNECT,
-                        instanceUrl = selected?.origin ?: connections.lastOrigin, username = selected?.username ?: "",
+                        instanceUrl = origin, username = prefilledUsername,
                         notice = if (selected?.needsReauth == true) ClientNotice.SESSION_EXPIRED else null)
+                    if (prefilledUsername.isNotBlank() && origin.isNotBlank()) {
+                        probeGoogleStatusQuietly(origin)
+                    }
                 }
                 else enter(connection, ticket)
             } catch (error: Exception) {
@@ -363,17 +418,255 @@ class ClientViewModel(
         }
     }
 
+    private fun probeGoogleStatusQuietly(origin: String) {
+        val probeTicket = ++instanceProbeRevision
+        val viewTicket = identity
+        instanceProbeJob?.cancel()
+        instanceProbeJob = viewModelScope.launch {
+            val probe = runCatching { connections.checkInstance(origin) }.getOrNull() ?: return@launch
+            if (probeTicket != instanceProbeRevision || viewTicket != identity) return@launch
+            val currentUi = mutable.value
+            if (currentUi.screen == ClientScreen.CONNECT &&
+                currentUi.connectStep == ConnectStep.CREDENTIALS &&
+                currentUi.instanceUrl == probe.origin
+            ) {
+                mutable.value = currentUi.copy(
+                    googleLoginEnabled = probe.googleEnabled,
+                    googleNativeLoginEnabled = probe.googleNativeEnabled,
+                )
+            }
+        }
+    }
+
+    override fun checkInstance(instanceUrl: String) {
+        if (mutable.value.busy) return
+        val normalized = try {
+            InstanceAddress.parse(instanceUrl).origin
+        } catch (error: Exception) {
+            mutable.value = mutable.value.copy(notice = notice(error))
+            return
+        }
+        val viewTicket = identity
+        val probeTicket = ++instanceProbeRevision
+        instanceProbeJob?.cancel()
+        clearPendingGoogleAuth()
+        mutable.value = mutable.value.copy(
+            instanceUrl = normalized,
+            busy = true,
+            notice = null,
+            googleLoginEnabled = false,
+            googleNativeLoginEnabled = false,
+        )
+        instanceProbeJob = viewModelScope.launch {
+            try {
+                val probe = connections.checkInstance(normalized)
+                if (probeTicket != instanceProbeRevision || viewTicket != identity) return@launch
+                mutable.value = mutable.value.copy(
+                    instanceUrl = probe.origin,
+                    connectStep = ConnectStep.CREDENTIALS,
+                    googleLoginEnabled = probe.googleEnabled,
+                    googleNativeLoginEnabled = probe.googleNativeEnabled,
+                    busy = false,
+                    notice = null,
+                )
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (probeTicket == instanceProbeRevision && viewTicket == identity) {
+                    mutable.value = mutable.value.copy(
+                        connectStep = ConnectStep.INSTANCE,
+                        busy = false,
+                        notice = notice(error),
+                    )
+                }
+            }
+        }
+    }
+
+    override fun editInstanceAddress() {
+        if (mutable.value.busy) return
+        instanceProbeRevision++
+        instanceProbeJob?.cancel()
+        clearPendingGoogleAuth()
+        exchangingGoogleCode = false
+        mutable.value = mutable.value.copy(
+            connectStep = ConnectStep.INSTANCE,
+            username = "",
+            googleLoginEnabled = false,
+            googleNativeLoginEnabled = false,
+            googleAuthLaunchUrl = null,
+            notice = null,
+        )
+    }
+
+    override fun startGoogleLogin() {
+        val ui = mutable.value
+        if (ui.screen != ClientScreen.CONNECT || ui.connectStep != ConnectStep.CREDENTIALS || ui.busy) return
+        val origin = try {
+            InstanceAddress.parse(ui.instanceUrl).origin
+        } catch (error: Exception) {
+            mutable.value = ui.copy(notice = notice(error))
+            return
+        }
+        val verifier = GoogleAuthPkce.generateVerifier()
+        val challenge = GoogleAuthPkce.codeChallenge(verifier)
+        savePendingGoogleAuth(origin, verifier)
+        exchangingGoogleCode = false
+        val startUrl = GoogleAuthPkce.buildNativeStartUri(origin, challenge).toString()
+        mutable.value = ui.copy(
+            instanceUrl = origin,
+            busy = true,
+            notice = null,
+            googleAuthLaunchUrl = startUrl,
+        )
+    }
+
+    override fun consumeGoogleAuthLaunch() {
+        if (mutable.value.googleAuthLaunchUrl != null) {
+            mutable.value = mutable.value.copy(googleAuthLaunchUrl = null)
+        }
+    }
+
+    override fun reportGoogleAuthLaunchFailed() {
+        clearPendingGoogleAuth()
+        exchangingGoogleCode = false
+        mutable.value = mutable.value.copy(
+            busy = false,
+            googleAuthLaunchUrl = null,
+            notice = ClientNotice.GOOGLE_NO_BROWSER,
+        )
+    }
+
+    fun onForegroundResume() {
+        val ui = mutable.value
+        if (ui.screen == ClientScreen.CONNECT &&
+            ui.busy &&
+            pendingGoogleVerifier != null &&
+            ui.googleAuthLaunchUrl == null &&
+            !exchangingGoogleCode
+        ) {
+            clearPendingGoogleAuth()
+            mutable.value = ui.copy(busy = false)
+        }
+        val update = appUpdateState
+        if (update.status == AppUpdateStatus.INSTALL_PERMISSION_REQUIRED &&
+            appUpdateInstaller?.canRequestPackageInstalls() == true
+        ) {
+            val path = update.downloadedApkPath
+            if (!path.isNullOrBlank()) {
+                launchApkInstall(java.io.File(path), appUpdateInstaller)
+            } else {
+                updateAppUpdateState { it.copy(status = AppUpdateStatus.AVAILABLE, errorKind = null) }
+            }
+        }
+    }
+
+    fun handleGoogleAuthCallback(code: String?, error: String?) {
+        val origin = pendingGoogleOrigin
+        val verifier = pendingGoogleVerifier
+        val startedAt = pendingGoogleStartedAtMs
+        val hasPendingFlow = !origin.isNullOrBlank() && !verifier.isNullOrBlank() && startedAt != null
+        if (!hasPendingFlow) {
+            val currentUi = mutable.value
+            if (currentUi.screen != ClientScreen.CONNECT || !currentUi.busy) return
+            clearPendingGoogleAuth()
+            exchangingGoogleCode = false
+            mutable.value = currentUi.copy(
+                busy = false,
+                googleAuthLaunchUrl = null,
+                notice = mapGoogleCallbackError(error),
+            )
+            return
+        }
+        clearPendingGoogleAuth()
+        val keepGoogleEnabled = mutable.value.googleLoginEnabled
+        val keepGoogleNative = mutable.value.googleNativeLoginEnabled
+        if (!error.isNullOrBlank()) {
+            exchangingGoogleCode = false
+            ++identity
+            cancelRequests()
+            mutable.value = freshUi(
+                screen = ClientScreen.CONNECT,
+                instanceUrl = origin,
+                busy = false,
+                connectStep = ConnectStep.CREDENTIALS,
+                googleLoginEnabled = keepGoogleEnabled,
+                googleNativeLoginEnabled = keepGoogleNative,
+                notice = mapGoogleCallbackError(error),
+            )
+            if (!keepGoogleEnabled) probeGoogleStatusQuietly(origin)
+            return
+        }
+        val notExpired = (System.currentTimeMillis() - startedAt) <= PENDING_GOOGLE_TTL_MS
+        if (code.isNullOrBlank() || !notExpired) {
+            exchangingGoogleCode = false
+            ++identity
+            cancelRequests()
+            mutable.value = freshUi(
+                screen = ClientScreen.CONNECT,
+                instanceUrl = origin,
+                busy = false,
+                connectStep = ConnectStep.CREDENTIALS,
+                googleLoginEnabled = keepGoogleEnabled,
+                googleNativeLoginEnabled = keepGoogleNative,
+                notice = ClientNotice.GOOGLE_FAILED,
+            )
+            if (!keepGoogleEnabled) probeGoogleStatusQuietly(origin)
+            return
+        }
+        exchangingGoogleCode = true
+        val ticket = ++identity
+        resetPrivateData()
+        player.stopAndClear()
+        mutable.value = freshUi(
+            screen = ClientScreen.CONNECT,
+            instanceUrl = origin,
+            busy = true,
+            connectStep = ConnectStep.CREDENTIALS,
+            googleLoginEnabled = keepGoogleEnabled,
+            googleNativeLoginEnabled = keepGoogleNative,
+        )
+        viewModelScope.launch {
+            try {
+                if (ticket != identity) return@launch
+                val connection = connections.loginWithGoogle(origin, code, verifier)
+                if (ticket == identity) enter(connection, ticket)
+            } catch (err: Exception) {
+                if (err is CancellationException) throw err
+                if (ticket == identity) {
+                    refreshSavedAccounts()
+                    mutable.value = mutable.value.copy(busy = false, notice = notice(err))
+                    if (!keepGoogleEnabled) probeGoogleStatusQuietly(origin)
+                }
+            } finally {
+                exchangingGoogleCode = false
+            }
+        }
+    }
+
+    private fun mapGoogleCallbackError(error: String?): ClientNotice = when (error) {
+        "cancelled" -> ClientNotice.GOOGLE_CANCELLED
+        "unbound" -> ClientNotice.GOOGLE_UNBOUND
+        "rate_limited" -> ClientNotice.RATE_LIMITED
+        "google_unavailable" -> ClientNotice.GOOGLE_UNAVAILABLE
+        else -> ClientNotice.GOOGLE_FAILED
+    }
+
     override fun login(instanceUrl: String, username: String, password: String) {
         if (mutable.value.busy) return
         if (username.isBlank() || password.isEmpty()) {
             mutable.value = mutable.value.copy(notice = ClientNotice.INVALID_LOGIN)
             return
         }
+        clearPendingGoogleAuth()
+        exchangingGoogleCode = false
+        val keepGoogleEnabled = mutable.value.googleLoginEnabled
+        val keepGoogleNative = mutable.value.googleNativeLoginEnabled
         val ticket = ++identity
         resetPrivateData()
         player.stopAndClear()
         mutable.value = freshUi(screen = ClientScreen.CONNECT, instanceUrl = instanceUrl.trim(),
-            username = username.trim(), busy = true)
+            username = username.trim(), busy = true, connectStep = ConnectStep.CREDENTIALS,
+            googleLoginEnabled = keepGoogleEnabled, googleNativeLoginEnabled = keepGoogleNative)
         viewModelScope.launch {
             try {
                 if (ticket != identity) return@launch
@@ -472,6 +765,9 @@ class ClientViewModel(
 
     override fun logout() {
         addingAccount = false
+        clearPendingGoogleAuth()
+        exchangingGoogleCode = false
+        resetAppUpdateInteraction()
         val ticket = ++identity
         resetPrivateData()
         player.stopAndClear()
@@ -487,6 +783,8 @@ class ClientViewModel(
     }
 
     override fun beginAddAccount() {
+        clearPendingGoogleAuth()
+        exchangingGoogleCode = false
         ++identity
         resetPrivateData()
         player.stopAndClear()
@@ -512,6 +810,8 @@ class ClientViewModel(
         work: suspend (() -> Boolean) -> ActiveConnection?,
     ) {
         val selected = accountSummaries().firstOrNull { it.accountKey == accountKey }
+        clearPendingGoogleAuth()
+        exchangingGoogleCode = false
         val ticket = ++identity
         if (playSplash) splashNonce++
         resetPrivateData()
@@ -533,28 +833,36 @@ class ClientViewModel(
                 else {
                     refreshSavedAccounts()
                     val target = accountSummaries().firstOrNull { it.accountKey == connections.selectedAccountKey } ?: selected
+                    val origin = target?.origin ?: mutable.value.instanceUrl
+                    val prefilledUsername = target?.username ?: mutable.value.username
                     mutable.value = mutable.value.copy(
                         screen = ClientScreen.CONNECT,
                         busy = false,
-                        instanceUrl = target?.origin ?: mutable.value.instanceUrl,
-                        username = target?.username ?: mutable.value.username,
+                        instanceUrl = origin,
+                        username = prefilledUsername,
                         accountName = "",
+                        connectStep = if (prefilledUsername.isNotBlank() && origin.isNotBlank()) ConnectStep.CREDENTIALS else ConnectStep.INSTANCE,
                         notice = if (target?.needsReauth == true) ClientNotice.SESSION_EXPIRED else null,
                     )
+                    if (prefilledUsername.isNotBlank() && origin.isNotBlank()) probeGoogleStatusQuietly(origin)
                 }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 if (ticket == identity) {
                     refreshSavedAccounts()
                     val target = accountSummaries().firstOrNull { it.accountKey == connections.selectedAccountKey } ?: selected
+                    val origin = target?.origin ?: mutable.value.instanceUrl
+                    val prefilledUsername = target?.username ?: mutable.value.username
                     mutable.value = mutable.value.copy(
                         screen = ClientScreen.CONNECT,
                         busy = false,
-                        instanceUrl = target?.origin ?: mutable.value.instanceUrl,
-                        username = target?.username ?: mutable.value.username,
+                        instanceUrl = origin,
+                        username = prefilledUsername,
                         accountName = "",
+                        connectStep = if (prefilledUsername.isNotBlank() && origin.isNotBlank()) ConnectStep.CREDENTIALS else ConnectStep.INSTANCE,
                         notice = notice(error),
                     )
+                    if (prefilledUsername.isNotBlank() && origin.isNotBlank()) probeGoogleStatusQuietly(origin)
                 }
             }
         }
@@ -654,6 +962,346 @@ class ClientViewModel(
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 if (revision == bluetoothLyricsRevision) mutable.value = mutable.value.copy(notice = ClientNotice.STORAGE_FAILED)
+            }
+        }
+    }
+
+    private fun updateAppUpdateState(transform: (AppUpdateState) -> AppUpdateState) {
+        val next = transform(appUpdateState)
+        appUpdateState = next
+        mutable.value = mutable.value.copy(appUpdate = next)
+    }
+
+    private fun resetAppUpdateInteraction() {
+        appUpdateRevision++
+        appUpdateJob?.cancel()
+        appUpdateJob = null
+        val current = appUpdateState
+        val nextStatus = when (current.status) {
+            AppUpdateStatus.CHECKING -> AppUpdateStatus.IDLE
+            AppUpdateStatus.DOWNLOADING -> if (current.availableRelease != null) AppUpdateStatus.AVAILABLE else AppUpdateStatus.IDLE
+            else -> current.status
+        }
+        appUpdateState = current.copy(
+            status = nextStatus,
+            dialogVisible = false,
+            downloadedBytes = if (current.status == AppUpdateStatus.DOWNLOADING) 0L else current.downloadedBytes,
+            totalBytes = if (current.status == AppUpdateStatus.DOWNLOADING) -1L else current.totalBytes,
+        )
+    }
+
+    override fun setIncludePrereleaseUpdates(enabled: Boolean) {
+        val revision = ++includePrereleaseRevision
+        val previous = includePrereleaseUpdates
+        includePrereleaseUpdates = enabled
+        updateAppUpdateState { state ->
+            val keepActiveState = state.status == AppUpdateStatus.CHECKING ||
+                state.status == AppUpdateStatus.DOWNLOADING ||
+                state.status == AppUpdateStatus.READY_TO_INSTALL ||
+                state.status == AppUpdateStatus.INSTALL_PERMISSION_REQUIRED
+            if (keepActiveState) {
+                state.copy(includePrereleases = enabled)
+            } else {
+                state.copy(
+                    includePrereleases = enabled,
+                    status = AppUpdateStatus.IDLE,
+                    availableRelease = null,
+                    errorKind = null,
+                )
+            }
+        }
+        viewModelScope.launch {
+            try {
+                withContext(ioDispatcher) {
+                    preferenceMutex.withLock {
+                        if (revision == includePrereleaseRevision) {
+                            translationPreferences?.writeIncludePrereleases(enabled)
+                        }
+                    }
+                }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (revision == includePrereleaseRevision) {
+                    includePrereleaseUpdates = previous
+                    updateAppUpdateState { it.copy(includePrereleases = previous) }
+                    mutable.value = mutable.value.copy(notice = ClientNotice.STORAGE_FAILED)
+                }
+            }
+        }
+    }
+
+    override fun checkForAppUpdate() {
+        if (appUpdateState.status == AppUpdateStatus.CHECKING || appUpdateState.status == AppUpdateStatus.DOWNLOADING) return
+        val updater = appUpdater
+        if (updater == null) {
+            updateAppUpdateState {
+                it.copy(
+                    status = AppUpdateStatus.FAILED,
+                    dialogVisible = false,
+                    errorKind = AppUpdateError.REPOSITORY_UNAVAILABLE,
+                )
+            }
+            return
+        }
+        val revision = ++appUpdateRevision
+        val includePrereleases = includePrereleaseUpdates
+        val currentVersion = appVersionName
+        appUpdateJob?.cancel()
+        updateAppUpdateState {
+            it.copy(
+                currentVersion = currentVersion,
+                status = AppUpdateStatus.CHECKING,
+                dialogVisible = false,
+                downloadedBytes = 0L,
+                totalBytes = -1L,
+                downloadedApkPath = null,
+                errorKind = null,
+            )
+        }
+        appUpdateJob = viewModelScope.launch {
+            try {
+                val result = withContext(ioDispatcher) {
+                    updater.checkLatest(
+                        includePrereleases = includePrereleases,
+                        currentVersion = currentVersion,
+                    )
+                }
+                if (revision != appUpdateRevision) return@launch
+                when (result) {
+                    is AppUpdateCheckResult.Available -> {
+                        updateAppUpdateState {
+                            it.copy(
+                                status = AppUpdateStatus.AVAILABLE,
+                                dialogVisible = true,
+                                availableRelease = result.release,
+                                errorKind = null,
+                            )
+                        }
+                    }
+                    is AppUpdateCheckResult.UpToDate -> {
+                        updateAppUpdateState {
+                            it.copy(
+                                status = AppUpdateStatus.UP_TO_DATE,
+                                dialogVisible = false,
+                                availableRelease = null,
+                                errorKind = null,
+                            )
+                        }
+                    }
+                    AppUpdateCheckResult.NoReleaseFound -> {
+                        updateAppUpdateState {
+                            it.copy(
+                                status = AppUpdateStatus.NO_RELEASE_FOUND,
+                                dialogVisible = false,
+                                availableRelease = null,
+                                errorKind = null,
+                            )
+                        }
+                    }
+                    is AppUpdateCheckResult.Failed -> {
+                        updateAppUpdateState {
+                            it.copy(
+                                status = AppUpdateStatus.FAILED,
+                                dialogVisible = false,
+                                errorKind = result.error,
+                            )
+                        }
+                    }
+                }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (revision == appUpdateRevision) {
+                    updateAppUpdateState {
+                        it.copy(
+                            status = AppUpdateStatus.FAILED,
+                            dialogVisible = false,
+                            errorKind = AppUpdateError.NETWORK,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    override fun openAppUpdateDialog() {
+        if (appUpdateState.availableRelease == null) return
+        updateAppUpdateState { it.copy(dialogVisible = true) }
+    }
+
+    override fun dismissAppUpdateDialog() {
+        updateAppUpdateState { it.copy(dialogVisible = false) }
+    }
+
+    override fun startAppUpdateDownload() {
+        val release = appUpdateState.availableRelease ?: return
+        if (appUpdateState.status == AppUpdateStatus.DOWNLOADING) return
+        val updater = appUpdater
+        if (updater == null) {
+            updateAppUpdateState {
+                it.copy(
+                    status = AppUpdateStatus.FAILED,
+                    dialogVisible = true,
+                    errorKind = AppUpdateError.REPOSITORY_UNAVAILABLE,
+                )
+            }
+            return
+        }
+        if (release.apkDownloadUrl.isNullOrBlank()) {
+            updateAppUpdateState {
+                it.copy(
+                    status = AppUpdateStatus.FAILED,
+                    dialogVisible = true,
+                    errorKind = AppUpdateError.NO_APK_ASSET,
+                )
+            }
+            return
+        }
+        val revision = ++appUpdateRevision
+        appUpdateJob?.cancel()
+        val initialTotal = release.apkSizeBytes.takeIf { it > 0L } ?: -1L
+        updateAppUpdateState {
+            it.copy(
+                status = AppUpdateStatus.DOWNLOADING,
+                dialogVisible = true,
+                downloadedBytes = 0L,
+                totalBytes = initialTotal,
+                downloadedApkPath = null,
+                errorKind = null,
+            )
+        }
+        appUpdateJob = viewModelScope.launch {
+            try {
+                var lastReportedBytes = 0L
+                var lastReportedPercent = -1
+                val apkFile = withContext(ioDispatcher) {
+                    updater.downloadApk(release) { downloaded, total ->
+                        val effectiveTotal = if (total > 0L) total else initialTotal
+                        val percent = if (effectiveTotal > 0L) ((downloaded * 100L) / effectiveTotal).toInt().coerceIn(0, 100) else -1
+                        val bytesDelta = downloaded - lastReportedBytes
+                        if (percent != lastReportedPercent || bytesDelta >= 128 * 1024L || (effectiveTotal > 0L && downloaded >= effectiveTotal)) {
+                            lastReportedBytes = downloaded
+                            lastReportedPercent = percent
+                            viewModelScope.launch {
+                                if (revision == appUpdateRevision && appUpdateState.status == AppUpdateStatus.DOWNLOADING) {
+                                    updateAppUpdateState {
+                                        it.copy(
+                                            downloadedBytes = downloaded,
+                                            totalBytes = effectiveTotal,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (revision != appUpdateRevision) return@launch
+                val length = apkFile.length()
+                updateAppUpdateState {
+                    it.copy(
+                        status = AppUpdateStatus.READY_TO_INSTALL,
+                        downloadedApkPath = apkFile.absolutePath,
+                        downloadedBytes = length,
+                        totalBytes = length,
+                        errorKind = null,
+                    )
+                }
+                launchApkInstall(apkFile, appUpdateInstaller)
+            } catch (error: AppUpdateFailure) {
+                if (revision == appUpdateRevision) {
+                    updateAppUpdateState {
+                        it.copy(
+                            status = AppUpdateStatus.FAILED,
+                            errorKind = error.error,
+                        )
+                    }
+                }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (revision == appUpdateRevision) {
+                    updateAppUpdateState {
+                        it.copy(
+                            status = AppUpdateStatus.FAILED,
+                            errorKind = AppUpdateError.NETWORK,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    override fun cancelAppUpdateDownload() {
+        appUpdateRevision++
+        appUpdateJob?.cancel()
+        appUpdateJob = null
+        if (appUpdateState.status == AppUpdateStatus.DOWNLOADING || appUpdateState.status == AppUpdateStatus.CHECKING) {
+            updateAppUpdateState { state ->
+                state.copy(
+                    status = if (state.availableRelease != null) AppUpdateStatus.AVAILABLE else AppUpdateStatus.IDLE,
+                    downloadedBytes = 0L,
+                    totalBytes = -1L,
+                    errorKind = null,
+                )
+            }
+        }
+    }
+
+    override fun installDownloadedAppUpdate() {
+        val path = appUpdateState.downloadedApkPath
+        if (path.isNullOrBlank()) {
+            startAppUpdateDownload()
+            return
+        }
+        val file = java.io.File(path)
+        if (!file.exists()) {
+            startAppUpdateDownload()
+            return
+        }
+        launchApkInstall(file, appUpdateInstaller)
+    }
+
+    private fun launchApkInstall(apkFile: java.io.File, installer: AppUpdateInstaller?) {
+        if (!apkFile.exists()) {
+            updateAppUpdateState {
+                it.copy(
+                    status = AppUpdateStatus.FAILED,
+                    downloadedApkPath = null,
+                    errorKind = AppUpdateError.STORAGE,
+                )
+            }
+            return
+        }
+        if (installer == null) {
+            updateAppUpdateState {
+                it.copy(
+                    status = AppUpdateStatus.FAILED,
+                    errorKind = AppUpdateError.INSTALL_FAILED,
+                )
+            }
+            return
+        }
+        if (!installer.canRequestPackageInstalls()) {
+            val openedSettings = installer.openUnknownSourcesSettings()
+            updateAppUpdateState {
+                if (openedSettings) {
+                    it.copy(
+                        status = AppUpdateStatus.INSTALL_PERMISSION_REQUIRED,
+                        errorKind = null,
+                    )
+                } else {
+                    it.copy(
+                        status = AppUpdateStatus.FAILED,
+                        errorKind = AppUpdateError.INSTALL_FAILED,
+                    )
+                }
+            }
+            return
+        }
+        val launched = installer.installApk(apkFile)
+        updateAppUpdateState {
+            if (launched) {
+                it.copy(status = AppUpdateStatus.READY_TO_INSTALL, errorKind = null)
+            } else {
+                it.copy(status = AppUpdateStatus.FAILED, errorKind = AppUpdateError.INSTALL_FAILED)
             }
         }
     }
@@ -3031,9 +3679,17 @@ class ClientViewModel(
         player.setUiVisible(visible)
         if (visible && current() != null && discoveryCheckedDate != today()) loadDiscovery(false)
     }
-    override fun onCleared() { if (ownsLyricsCoordinator) lyrics.clear(); player.release() }
+    override fun onCleared() {
+        appUpdateJob?.cancel()
+        if (ownsLyricsCoordinator) lyrics.clear()
+        player.release()
+    }
 
     private companion object {
+        const val KEY_GOOGLE_ORIGIN = "ft.pending_google_origin"
+        const val KEY_GOOGLE_VERIFIER = "ft.pending_google_verifier"
+        const val KEY_GOOGLE_STARTED_AT = "ft.pending_google_started_at"
+        const val PENDING_GOOGLE_TTL_MS = 15 * 60 * 1000L
         val languages = setOf("all", "zh", "en", "ja", "ko", "instrumental", "ru", "es", "fr", "de",
             "sv", "vi", "yue", "it", "th", "pt", "other")
     }
@@ -3059,6 +3715,8 @@ private fun notice(error: Exception): ClientNotice {
         Failure.INVALID_RESPONSE -> ClientNotice.INVALID_RESPONSE
         Failure.STORAGE -> ClientNotice.STORAGE_FAILED
         Failure.FORBIDDEN -> ClientNotice.FORBIDDEN
+        Failure.GOOGLE_UNAVAILABLE -> ClientNotice.GOOGLE_UNAVAILABLE
+        Failure.GOOGLE_FAILED -> ClientNotice.GOOGLE_FAILED
         else -> ClientNotice.REQUEST_FAILED
     }
 }

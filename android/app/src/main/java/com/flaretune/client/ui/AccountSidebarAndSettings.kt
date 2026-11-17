@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Environment
 import android.os.SystemClock
 import android.provider.MediaStore
+import android.text.format.Formatter
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -54,6 +55,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -80,6 +82,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -101,6 +104,7 @@ import coil.request.ImageRequest
 import coil.request.SuccessResult
 import com.flaretune.client.R
 import com.flaretune.client.data.AppThemeMode
+import com.flaretune.client.data.AppUpdateError
 import com.flaretune.client.data.BluetoothLyricsMode
 import com.flaretune.client.data.SavedAccountSummary
 import com.flaretune.client.playback.SleepTimerMode
@@ -1147,7 +1151,11 @@ internal fun SettingsScreen(
                     }
                 }
 
-                SettingsSectionCard(title = stringResource(R.string.ft_settings_section_about)) {
+                SettingsSectionCard(
+                    title = stringResource(R.string.ft_settings_section_about),
+                    tag = "ft_settings_section_about",
+                ) {
+                    val resolvedVersionName = state.appUpdate.currentVersion.ifBlank { versionName }
                     if (state.instanceUrl.isNotBlank()) {
                         SettingsInfoRow(
                             title = stringResource(R.string.ft_settings_current_instance),
@@ -1157,7 +1165,45 @@ internal fun SettingsScreen(
                     }
                     SettingsInfoRow(
                         title = stringResource(R.string.ft_settings_version),
-                        subtitle = versionName,
+                        subtitle = resolvedVersionName,
+                    )
+                    SettingsDivider()
+                    SettingsSwitchRow(
+                        title = stringResource(R.string.ft_settings_include_prereleases_title),
+                        subtitle = stringResource(R.string.ft_settings_include_prereleases_desc),
+                        checked = state.appUpdate.includePrereleases,
+                        onCheckedChange = actions::setIncludePrereleaseUpdates,
+                        tag = "settings_include_prereleases_switch",
+                    )
+                    SettingsDivider()
+                    val updateState = state.appUpdate
+                    val updateSubtitle = appUpdateStatusSubtitle(updateState)
+                    val updateSubtitleColor = when (updateState.status) {
+                        AppUpdateStatus.AVAILABLE,
+                        AppUpdateStatus.READY_TO_INSTALL -> MaterialTheme.colorScheme.primary
+                        AppUpdateStatus.FAILED -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                    val hasPendingDialogAction = updateState.availableRelease != null && (
+                        updateState.status == AppUpdateStatus.AVAILABLE ||
+                            updateState.status == AppUpdateStatus.DOWNLOADING ||
+                            updateState.status == AppUpdateStatus.READY_TO_INSTALL ||
+                            updateState.status == AppUpdateStatus.INSTALL_PERMISSION_REQUIRED
+                        )
+                    SettingsActionRow(
+                        icon = ClientIcons.Download,
+                        title = stringResource(R.string.ft_settings_check_update_title),
+                        subtitle = updateSubtitle,
+                        subtitleColor = updateSubtitleColor,
+                        enabled = updateState.status != AppUpdateStatus.CHECKING,
+                        tag = "settings_check_updates",
+                        onClick = {
+                            if (hasPendingDialogAction) {
+                                actions.openAppUpdateDialog()
+                            } else {
+                                actions.checkForAppUpdate()
+                            }
+                        },
                     )
                 }
             }
@@ -1214,6 +1260,19 @@ internal fun SettingsScreen(
             },
         )
     }
+
+    val dialogRelease = state.appUpdate.availableRelease
+    if (state.appUpdate.dialogVisible && dialogRelease != null) {
+        AppUpdateDialog(
+            state = state.appUpdate,
+            fallbackVersionName = versionName,
+            release = dialogRelease,
+            onDismiss = actions::dismissAppUpdateDialog,
+            onDownload = actions::startAppUpdateDownload,
+            onCancelDownload = actions::cancelAppUpdateDownload,
+            onInstall = actions::installDownloadedAppUpdate,
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1265,6 +1324,315 @@ private fun EditNicknameDialog(
                         modifier = Modifier.testTag("edit_nickname_confirm"),
                     ) {
                         Text(stringResource(R.string.ft_library_save))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun appUpdateStatusSubtitle(state: AppUpdateState): String {
+    val latestVersion = state.availableRelease?.versionName.orEmpty()
+    return when (state.status) {
+        AppUpdateStatus.IDLE -> stringResource(R.string.ft_settings_update_idle)
+        AppUpdateStatus.CHECKING -> stringResource(R.string.ft_settings_update_checking)
+        AppUpdateStatus.UP_TO_DATE -> stringResource(R.string.ft_settings_update_up_to_date)
+        AppUpdateStatus.NO_RELEASE_FOUND -> stringResource(R.string.ft_settings_update_none)
+        AppUpdateStatus.AVAILABLE -> stringResource(R.string.ft_settings_update_available, latestVersion)
+        AppUpdateStatus.DOWNLOADING -> {
+            if (state.totalBytes > 0L) {
+                val pct = ((state.downloadedBytes * 100L) / state.totalBytes).toInt().coerceIn(0, 100)
+                stringResource(R.string.ft_settings_update_downloading, pct)
+            } else {
+                stringResource(R.string.ft_settings_update_downloading_unknown)
+            }
+        }
+        AppUpdateStatus.READY_TO_INSTALL -> stringResource(R.string.ft_settings_update_ready, latestVersion)
+        AppUpdateStatus.INSTALL_PERMISSION_REQUIRED -> stringResource(R.string.ft_settings_update_permission_required)
+        AppUpdateStatus.FAILED -> appUpdateErrorMessage(state.errorKind)
+    }
+}
+
+@Composable
+private fun appUpdateErrorMessage(error: AppUpdateError?): String = when (error) {
+    AppUpdateError.REPOSITORY_UNAVAILABLE -> stringResource(R.string.ft_settings_update_error_unavailable)
+    AppUpdateError.NO_APK_ASSET -> stringResource(R.string.ft_settings_update_error_no_apk)
+    AppUpdateError.INTEGRITY_MISMATCH -> stringResource(R.string.ft_settings_update_error_integrity)
+    AppUpdateError.INVALID_PACKAGE -> stringResource(R.string.ft_settings_update_error_invalid_package)
+    AppUpdateError.INSTALL_FAILED -> stringResource(R.string.ft_settings_update_error_install)
+    AppUpdateError.STORAGE -> stringResource(R.string.ft_settings_update_error_storage)
+    AppUpdateError.NETWORK, null -> stringResource(R.string.ft_settings_update_error_network)
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AppUpdateDialog(
+    state: AppUpdateState,
+    fallbackVersionName: String,
+    release: com.flaretune.client.data.AppUpdateRelease,
+    onDismiss: () -> Unit,
+    onDownload: () -> Unit,
+    onCancelDownload: () -> Unit,
+    onInstall: () -> Unit,
+) {
+    val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
+    val currentVersion = state.currentVersion.ifBlank { fallbackVersionName }
+
+    BasicAlertDialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth().padding(horizontal = 24.dp),
+    ) {
+        Surface(
+            shape = MaterialTheme.shapes.extraLarge,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            tonalElevation = 6.dp,
+            modifier = Modifier.fillMaxWidth().testTag("app_update_dialog"),
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(24.dp)
+                    .heightIn(max = 560.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.ft_update_dialog_title),
+                        style = MaterialTheme.typography.headlineSmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (release.isPrerelease) {
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            modifier = Modifier.testTag("app_update_prerelease_badge"),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.ft_update_prerelease_badge),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            )
+                        }
+                    }
+                }
+
+                Column(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        text = stringResource(R.string.ft_update_current_version_label),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Text(
+                                        text = currentVersion,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.Medium,
+                                        modifier = Modifier.testTag("app_update_current_version"),
+                                    )
+                                }
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        text = stringResource(R.string.ft_update_latest_version_label),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Text(
+                                        text = release.versionName,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.testTag("app_update_latest_version"),
+                                    )
+                                }
+                            }
+                            if (release.apkSizeBytes > 0L) {
+                                Text(
+                                    text = stringResource(
+                                        R.string.ft_update_apk_size,
+                                        Formatter.formatShortFileSize(context, release.apkSizeBytes),
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+
+                    if (state.status == AppUpdateStatus.DOWNLOADING) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (state.totalBytes > 0L) {
+                                val fraction = (state.downloadedBytes.toFloat() / state.totalBytes.toFloat()).coerceIn(0f, 1f)
+                                val pct = (fraction * 100f).toInt().coerceIn(0, 100)
+                                LinearProgressIndicator(
+                                    progress = { fraction },
+                                    modifier = Modifier.fillMaxWidth().testTag("app_update_progress"),
+                                )
+                                Text(
+                                    text = stringResource(
+                                        R.string.ft_update_download_progress,
+                                        Formatter.formatShortFileSize(context, state.downloadedBytes),
+                                        Formatter.formatShortFileSize(context, state.totalBytes),
+                                        pct,
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            } else {
+                                LinearProgressIndicator(
+                                    modifier = Modifier.fillMaxWidth().testTag("app_update_progress"),
+                                )
+                                Text(
+                                    text = stringResource(
+                                        R.string.ft_update_download_progress_unknown,
+                                        Formatter.formatShortFileSize(context, state.downloadedBytes),
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    } else if (state.status == AppUpdateStatus.INSTALL_PERMISSION_REQUIRED) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.ft_update_permission_hint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.padding(12.dp).testTag("app_update_permission_hint"),
+                            )
+                        }
+                    } else if (state.status == AppUpdateStatus.FAILED) {
+                        Text(
+                            text = appUpdateErrorMessage(state.errorKind),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.testTag("app_update_error"),
+                        )
+                    } else if (release.apkDownloadUrl.isNullOrBlank()) {
+                        Text(
+                            text = stringResource(R.string.ft_update_no_apk_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = stringResource(R.string.ft_update_notes_title),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = release.body.ifBlank { stringResource(R.string.ft_update_notes_empty) },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("app_update_notes"),
+                        )
+                    }
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    when {
+                        state.status == AppUpdateStatus.DOWNLOADING -> {
+                            OutlinedButton(
+                                onClick = onCancelDownload,
+                                modifier = Modifier.fillMaxWidth().testTag("app_update_cancel_button"),
+                            ) {
+                                Text(stringResource(R.string.ft_update_action_cancel_download))
+                            }
+                        }
+                        state.status == AppUpdateStatus.READY_TO_INSTALL -> {
+                            Button(
+                                onClick = onInstall,
+                                modifier = Modifier.fillMaxWidth().testTag("app_update_install_button"),
+                            ) {
+                                Text(stringResource(R.string.ft_update_action_install))
+                            }
+                        }
+                        state.status == AppUpdateStatus.INSTALL_PERMISSION_REQUIRED -> {
+                            Button(
+                                onClick = onInstall,
+                                modifier = Modifier.fillMaxWidth().testTag("app_update_grant_permission_button"),
+                            ) {
+                                Text(stringResource(R.string.ft_update_action_grant_permission))
+                            }
+                        }
+                        !release.apkDownloadUrl.isNullOrBlank() -> {
+                            Button(
+                                onClick = onDownload,
+                                modifier = Modifier.fillMaxWidth().testTag("app_update_download_button"),
+                            ) {
+                                Text(
+                                    stringResource(
+                                        if (state.status == AppUpdateStatus.FAILED) {
+                                            R.string.ft_update_action_retry_download
+                                        } else {
+                                            R.string.ft_update_action_download
+                                        },
+                                    ),
+                                )
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        val safeHtmlUrl = release.htmlUrl.trim().takeIf { it.startsWith("https://", ignoreCase = true) }
+                        if (safeHtmlUrl != null) {
+                            TextButton(
+                                onClick = { runCatching { uriHandler.openUri(safeHtmlUrl) } },
+                                modifier = Modifier.weight(1f, fill = false).testTag("app_update_open_release_button"),
+                            ) {
+                                Text(stringResource(R.string.ft_update_action_open_release))
+                            }
+                        } else {
+                            Spacer(Modifier.width(1.dp))
+                        }
+                        TextButton(
+                            onClick = onDismiss,
+                            modifier = Modifier.testTag("app_update_dismiss_button"),
+                        ) {
+                            Text(
+                                stringResource(
+                                    if (state.status == AppUpdateStatus.DOWNLOADING) {
+                                        R.string.ft_close
+                                    } else {
+                                        R.string.ft_update_later
+                                    },
+                                ),
+                            )
+                        }
                     }
                 }
             }

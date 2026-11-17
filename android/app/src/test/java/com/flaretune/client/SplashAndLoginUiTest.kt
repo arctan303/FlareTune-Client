@@ -29,6 +29,7 @@ import com.flaretune.client.ui.ClientActions
 import com.flaretune.client.ui.ClientApp
 import com.flaretune.client.ui.ClientScreen
 import com.flaretune.client.ui.ClientUiState
+import com.flaretune.client.ui.ConnectStep
 import com.flaretune.client.ui.LibraryTab
 import com.flaretune.client.ui.MainDestination
 import com.flaretune.client.ui.theme.FlareTuneTheme
@@ -113,7 +114,7 @@ class SplashAndLoginUiTest {
         assertTrue(rule.onAllNodesWithTag("cold_open_splash").fetchSemanticsNodes().isEmpty())
         rule.onNodeWithTag("login_avatar_badge").assertIsDisplayed()
         rule.onNodeWithTag("connect_url").assertIsDisplayed()
-        rule.onNodeWithTag("connect_submit").assertIsDisplayed()
+        rule.onNodeWithTag("connect_check").assertIsDisplayed()
         captureScreenshot("login-phone-dark.png")
     }
 
@@ -178,9 +179,52 @@ class SplashAndLoginUiTest {
     }
 
     @Test
-    fun connectionScreen_phoneLayoutTypingAndFontScaleWorkCleanly() {
+    fun connectionScreen_twoStepLoginGoogleButtonAndFontScaleWorkCleanly() {
+        var checkedOrigin: String? = null
         var loggedInUser: String? = null
+        var googleStarted = 0
+        var editedInstance = 0
+        var state by mutableStateOf(
+            ClientUiState(
+                screen = ClientScreen.CONNECT,
+                connectStep = ConnectStep.INSTANCE,
+                savedAccounts = listOf(
+                    SavedAccountSummary(
+                        accountKey = "acc1",
+                        origin = "https://music.example.com",
+                        accountId = "u1",
+                        username = "mira",
+                        displayName = "Mira",
+                        active = false,
+                        needsReauth = false,
+                    ),
+                ),
+            ),
+        )
         val actions = object : TestActionsAdapter() {
+            override fun checkInstance(instanceUrl: String) {
+                checkedOrigin = instanceUrl
+                state = state.copy(
+                    instanceUrl = instanceUrl,
+                    connectStep = ConnectStep.CREDENTIALS,
+                    googleLoginEnabled = true,
+                    googleNativeLoginEnabled = true,
+                )
+            }
+
+            override fun editInstanceAddress() {
+                editedInstance++
+                state = state.copy(
+                    connectStep = ConnectStep.INSTANCE,
+                    googleLoginEnabled = false,
+                    googleNativeLoginEnabled = false,
+                )
+            }
+
+            override fun startGoogleLogin() {
+                googleStarted++
+            }
+
             override fun login(instanceUrl: String, username: String, password: String) {
                 loggedInUser = username
             }
@@ -189,37 +233,54 @@ class SplashAndLoginUiTest {
             val baseDensity = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(baseDensity.density, fontScale = 2.0f)) {
                 FlareTuneTheme {
-                    ClientApp(
-                        state = ClientUiState(
-                            screen = ClientScreen.CONNECT,
-                            savedAccounts = listOf(
-                                SavedAccountSummary(
-                                    accountKey = "acc1",
-                                    origin = "https://music.example.com",
-                                    accountId = "u1",
-                                    username = "mira",
-                                    displayName = "Mira",
-                                    active = false,
-                                    needsReauth = false,
-                                ),
-                            ),
-                        ),
-                        actions = actions,
-                    )
+                    ClientApp(state = state, actions = actions)
                 }
             }
         }
 
+        // Step 1: Enter instance address and check
         rule.onNodeWithTag("login_avatar_badge").performScrollTo().assertIsDisplayed()
         rule.onNodeWithTag("connect_url").performScrollTo().performTextInput("https://music.example.com")
+        rule.onNodeWithTag("connect_saved_accounts").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithTag("connect_check").performScrollTo().assertIsEnabled().performClick()
+        org.junit.Assert.assertEquals("https://music.example.com", checkedOrigin)
+
+        // Step 2: Credentials + Google login
+        rule.onNodeWithTag("connect_instance_bar").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithTag("connect_google").performScrollTo().assertIsEnabled().performClick()
+        org.junit.Assert.assertEquals(1, googleStarted)
         rule.onNodeWithTag("connect_username").performScrollTo().performTextInput("flare")
         rule.onNodeWithTag("connect_password").performScrollTo().performTextInput("secret-pass")
         rule.onNodeWithTag("login_avatar_badge").performScrollTo()
         rule.onNodeWithText("F", useUnmergedTree = true).assertIsDisplayed()
-        rule.onNodeWithTag("connect_saved_accounts").performScrollTo().assertIsDisplayed()
         rule.onNodeWithTag("connect_submit").performScrollTo().assertIsEnabled().performClick()
         assertTrue(loggedInUser == "flare")
         captureScreenshot("login-phone-2x.png")
+
+        // Return to Step 1
+        rule.onNodeWithTag("connect_change_instance").performScrollTo().performClick()
+        org.junit.Assert.assertEquals(1, editedInstance)
+        rule.onNodeWithTag("connect_url").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun connectionScreen_showsUpgradeHintWhenServerHasWebGoogleOnly() {
+        rule.setContent {
+            FlareTuneTheme {
+                ClientApp(
+                    state = ClientUiState(
+                        screen = ClientScreen.CONNECT,
+                        connectStep = ConnectStep.CREDENTIALS,
+                        instanceUrl = "https://music.example.com",
+                        googleLoginEnabled = true,
+                        googleNativeLoginEnabled = false,
+                    ),
+                    actions = noopActions,
+                )
+            }
+        }
+        rule.onNodeWithTag("connect_google_upgrade_hint").assertIsDisplayed()
+        assertTrue(rule.onAllNodesWithTag("connect_google").fetchSemanticsNodes().isEmpty())
     }
 
     @Test
@@ -230,9 +291,12 @@ class SplashAndLoginUiTest {
                 ClientApp(
                     state = ClientUiState(
                         screen = ClientScreen.CONNECT,
+                        connectStep = ConnectStep.CREDENTIALS,
                         instanceUrl = "https://music.example.com",
                         username = "luna",
                         addingAccount = true,
+                        googleLoginEnabled = true,
+                        googleNativeLoginEnabled = true,
                         savedAccounts = listOf(
                             SavedAccountSummary(
                                 accountKey = "acc1",
@@ -251,12 +315,13 @@ class SplashAndLoginUiTest {
         }
 
         val avatarBounds = rule.onNodeWithTag("login_avatar_badge").getBoundsInRoot()
-        val formUrlBounds = rule.onNodeWithTag("connect_url").getBoundsInRoot()
+        val formBarBounds = rule.onNodeWithTag("connect_instance_bar").getBoundsInRoot()
         // In wide tablet two-pane layout, the hero badge sits cleanly to the left of the form card.
-        assertTrue(avatarBounds.right < formUrlBounds.left)
-        assertTrue((formUrlBounds.right - formUrlBounds.left) >= 300.dp)
+        assertTrue(avatarBounds.right < formBarBounds.left)
+        assertTrue((formBarBounds.right - formBarBounds.left) >= 300.dp)
         rule.onNodeWithTag("connect_cancel").assertIsDisplayed()
         rule.onNodeWithTag("connect_submit").assertIsDisplayed()
+        rule.onNodeWithTag("connect_google").assertIsDisplayed()
         captureScreenshot("login-tablet-dark.png")
     }
 
@@ -298,6 +363,7 @@ class SplashAndLoginUiTest {
         rule.runOnIdle {
             state = ClientUiState(
                 screen = ClientScreen.CONNECT,
+                connectStep = ConnectStep.CREDENTIALS,
                 splashNonce = 1,
                 instanceUrl = "https://music.example.com",
                 username = "mira",

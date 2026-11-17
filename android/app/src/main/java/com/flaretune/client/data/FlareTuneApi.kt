@@ -10,7 +10,16 @@ import org.json.JSONObject
 import java.io.IOException
 
 // Machine-readable server details are retained without exposing arbitrary upstream messages.
-enum class Failure { INVALID_URL, NOT_READY, NETWORK, INVALID_LOGIN, SESSION_EXPIRED, RATE_LIMITED, INVALID_RESPONSE, STORAGE, REQUEST, FORBIDDEN, RETIRED }
+enum class Failure {
+    INVALID_URL, NOT_READY, NETWORK, INVALID_LOGIN, SESSION_EXPIRED, RATE_LIMITED,
+    INVALID_RESPONSE, STORAGE, REQUEST, FORBIDDEN, RETIRED,
+    GOOGLE_UNAVAILABLE, GOOGLE_FAILED,
+}
+
+data class InstanceStatusResult(
+    val googleEnabled: Boolean = false,
+    val googleNativeEnabled: Boolean = false,
+)
 class ApiFailure(
     val failure: Failure,
     val httpStatus: Int? = null,
@@ -58,6 +67,8 @@ class FlareTuneApi(val network: SessionNetwork) : AccountApi {
                     if (accountChanged) network.retire()
                     val failure = when {
                         accountChanged -> Failure.SESSION_EXPIRED
+                        url.encodedPath == "/api/auth/google/exchange" && code in setOf("google_unavailable", "google_origin_mismatch", "google_secret_unavailable") -> Failure.GOOGLE_UNAVAILABLE
+                        url.encodedPath == "/api/auth/google/exchange" && (response.code == 401 || code == "google_failed") -> Failure.GOOGLE_FAILED
                         response.code == 401 -> if (url.encodedPath == "/api/auth/login") Failure.INVALID_LOGIN else Failure.SESSION_EXPIRED
                         response.code == 403 -> Failure.FORBIDDEN
                         response.code == 429 -> Failure.RATE_LIMITED
@@ -85,8 +96,36 @@ class FlareTuneApi(val network: SessionNetwork) : AccountApi {
         if (request("/api/instance/status").optString("state") != "ready") throw ApiFailure(Failure.NOT_READY)
     }
 
+    fun checkInstance(): InstanceStatusResult {
+        checkReady()
+        return probeGoogleStatus()
+    }
+
+    fun probeGoogleStatus(): InstanceStatusResult {
+        return try {
+            val status = request("/api/auth/google/status?client=android")
+            val enabled = status.optBoolean("enabled", false)
+            val nativeEnabled = status.optBoolean("nativeEnabled", false)
+            InstanceStatusResult(googleEnabled = enabled, googleNativeEnabled = enabled && nativeEnabled)
+        } catch (error: ApiFailure) {
+            if (error.httpStatus in setOf(401, 404) || error.code == "google_secret_unavailable") {
+                InstanceStatusResult()
+            } else {
+                throw error
+            }
+        }
+    }
+
     fun login(username: String, password: String): AuthSession {
         val result = request("/api/auth/login", JSONObject().put("username", username.trim()).put("password", password))
+        return parseSession(result).also { session = it }
+    }
+
+    fun exchangeGoogleLogin(code: String, codeVerifier: String): AuthSession {
+        val result = request(
+            "/api/auth/google/exchange",
+            JSONObject().put("code", code).put("codeVerifier", codeVerifier),
+        )
         return parseSession(result).also { session = it }
     }
 
