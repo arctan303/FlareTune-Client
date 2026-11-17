@@ -1,6 +1,7 @@
 package com.flaretune.client
 
 import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -16,6 +17,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewmodel.CreationExtras
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.flaretune.client.data.AppLocale
 import com.flaretune.client.data.GoogleAuthPkce
 import com.flaretune.client.playback.AndroidPlaybackGateway
 import com.flaretune.client.ui.ClientApp
@@ -23,6 +25,13 @@ import com.flaretune.client.ui.theme.FlareTuneTheme
 
 class MainActivity : ComponentActivity() {
     private lateinit var model: ClientViewModel
+    // Baseline of the last applied language change, so recreation does not loop on configuration change.
+    private var appliedLanguageToken = -1L
+
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(AppLocale.wrap(newBase))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             splashScreen.setOnExitAnimationListener { splashView -> splashView.remove() }
@@ -50,6 +59,7 @@ class MainActivity : ComponentActivity() {
                     appUpdater = app.appUpdater,
                     appUpdateInstaller = app.appUpdateInstaller,
                     appVersionName = BuildConfig.VERSION_NAME,
+                    appLanguagePreferences = app.appLanguagePreferences,
                 ) as T
             }
         }
@@ -61,6 +71,14 @@ class MainActivity : ComponentActivity() {
                 val url = state.googleAuthLaunchUrl ?: return@LaunchedEffect
                 model.consumeGoogleAuthLaunch()
                 launchGoogleAuthBrowser(url)
+            }
+            LaunchedEffect(state.languageChangeToken) {
+                if (appliedLanguageToken < 0L) {
+                    appliedLanguageToken = state.languageChangeToken
+                } else if (appliedLanguageToken != state.languageChangeToken) {
+                    appliedLanguageToken = state.languageChangeToken
+                    recreate()
+                }
             }
             FlareTuneTheme(themeMode = state.themeMode) {
                 ClientApp(

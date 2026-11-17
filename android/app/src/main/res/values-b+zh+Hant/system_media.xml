@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ft_system_order_sequential">順序播放，點選可切換播放順序</string>
+    <string name="ft_system_order_repeat_all">列表迴圈，點選可切換播放順序</string>
+    <string name="ft_system_order_repeat_one">單曲迴圈，點選可切換播放順序</string>
+    <string name="ft_system_order_shuffle">隨機播放，點選可切換播放順序</string>
+    <string name="ft_system_favorite_add">加入我的收藏</string>
+    <string name="ft_system_favorite_remove">移出我的收藏</string>
+    <string name="ft_system_favorite_loading">正在讀取收藏狀態</string>
+    <string name="ft_system_favorite_saving">正在更新收藏</string>
+    <string name="ft_system_favorite_retry_load">重新讀取收藏狀態</string>
+    <string name="ft_system_favorite_retry">重試更新收藏</string>
+    <string name="ft_system_favorite_failed">收藏更新失敗，請重試。</string>
+</resources>

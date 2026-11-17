@@ -23,7 +23,10 @@
     <string name="ft_library_saving">Saving…</string>
     <string name="ft_library_choose_playlists">Choose playlists</string>
     <string name="ft_library_target_count">%1$d selected · up to %2$d playlists</string>
-    <string name="ft_library_song_count">%1$d songs</string>
+    <plurals name="ft_library_song_count">
+        <item quantity="one">%1$d song</item>
+        <item quantity="other">%1$d songs</item>
+    </plurals>
     <string name="ft_library_invalid_song_count">Choose between 1 and 100 songs to add.</string>
     <string name="ft_library_no_playlists">No playlists are available. Create one to get started.</string>
     <string name="ft_library_add_selected">Add to selected playlists</string>

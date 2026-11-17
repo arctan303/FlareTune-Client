@@ -1386,7 +1386,7 @@ private fun HomeScreen(
                 val topPlayed = state.playStats?.songs?.firstOrNull()
                 val totalPlays = state.playStats?.totalPlays ?: 0L
                 val statsSubtitle = topPlayed?.song?.title ?: if (totalPlays > 0L) {
-                    stringResource(R.string.ft_listening_play_count, totalPlays.toInt())
+                    pluralStringResource(R.plurals.ft_listening_play_count, totalPlays.toInt(), totalPlays.toInt())
                 } else {
                     stringResource(R.string.ft_listening_empty_stats)
                 }

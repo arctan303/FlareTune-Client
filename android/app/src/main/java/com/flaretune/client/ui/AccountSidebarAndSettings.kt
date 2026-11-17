@@ -103,6 +103,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.request.SuccessResult
 import com.flaretune.client.R
+import com.flaretune.client.data.AppLanguage
 import com.flaretune.client.data.AppThemeMode
 import com.flaretune.client.data.AppUpdateError
 import com.flaretune.client.data.BluetoothLyricsMode
@@ -580,7 +581,7 @@ internal fun SleepTimerSheet(
                 ) {
                     pair.forEach { minutes ->
                         SleepTimerPresetChip(
-                            label = stringResource(R.string.ft_sleep_timer_minutes, minutes),
+                            label = androidx.compose.ui.res.pluralStringResource(R.plurals.ft_sleep_timer_minutes, minutes, minutes),
                             tag = "sleep_timer_$minutes",
                             modifier = Modifier.weight(1f),
                             onClick = {
@@ -1078,6 +1079,11 @@ internal fun SettingsScreen(
                     SettingsThemeSelectorRow(
                         selected = state.themeMode,
                         onSelect = actions::setThemeMode,
+                    )
+                    SettingsDivider()
+                    SettingsLanguageSelectorRow(
+                        selected = state.appLanguage,
+                        onSelect = actions::setAppLanguage,
                     )
                 }
 
@@ -1921,6 +1927,99 @@ private fun SettingsThemeSelectorRow(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsLanguageSelectorRow(
+    selected: AppLanguage,
+    onSelect: (AppLanguage) -> Unit,
+) {
+    val options = remember {
+        listOf(
+            Triple(AppLanguage.SYSTEM, R.string.ft_settings_language_system, "settings_language_system"),
+            Triple(AppLanguage.ZH_CN, R.string.ft_language_zh_cn, "settings_language_zh"),
+            Triple(AppLanguage.ZH_HANT, R.string.ft_language_zh_hant, "settings_language_zh_hant"),
+            Triple(AppLanguage.EN, R.string.ft_language_en, "settings_language_en"),
+            Triple(AppLanguage.JA, R.string.ft_language_ja, "settings_language_ja"),
+            Triple(AppLanguage.KO, R.string.ft_language_ko, "settings_language_ko"),
+        )
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .testTag("settings_language"),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(
+                ClientIcons.Globe,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    stringResource(R.string.ft_settings_language_title),
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    stringResource(R.string.ft_settings_language_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f))
+                .padding(4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            options.forEach { (language, labelRes, tag) ->
+                val isSelected = selected == language
+                val containerBg = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent
+                val contentTint = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .clip(RoundedCornerShape(9.dp))
+                        .background(containerBg)
+                        .semantics { this.selected = isSelected }
+                        .clickable(role = Role.RadioButton) { onSelect(language) }
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                        .testTag(tag),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        stringResource(labelRes),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                        color = contentTint,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (isSelected) {
+                        Spacer(Modifier.width(8.dp))
+                        Icon(
+                            ClientIcons.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = contentTint,
+                        )
+                    }
                 }
             }
         }

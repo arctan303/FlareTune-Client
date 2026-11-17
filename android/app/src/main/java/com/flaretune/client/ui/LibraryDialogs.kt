@@ -36,6 +36,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -391,7 +392,7 @@ fun PlaylistTargetSheet(
                 Checkbox(checked = checked, onCheckedChange = null, enabled = enabled)
                 Column(Modifier.weight(1f)) {
                     Text(playlist.name, style = MaterialTheme.typography.bodyLarge)
-                    Text(stringResource(R.string.ft_library_song_count, playlist.songCount), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(pluralStringResource(R.plurals.ft_library_song_count, playlist.songCount, playlist.songCount), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -701,7 +702,7 @@ internal fun PlaylistActionsSheet(
                 )
                 Text(
                     listOfNotNull(
-                        stringResource(R.string.ft_library_song_count, playlist.songCount),
+                        pluralStringResource(R.plurals.ft_library_song_count, playlist.songCount, playlist.songCount),
                         subtitle,
                     ).joinToString(" · "),
                     style = MaterialTheme.typography.bodyMedium,
@@ -843,7 +844,7 @@ internal fun PlaylistOrderSheet(
         ) {
             FlareSheetHeader(
                 title = stringResource(R.string.ft_library_order_title, playlist.name),
-                subtitle = stringResource(R.string.ft_library_song_count, controller.draft.size),
+                subtitle = pluralStringResource(R.plurals.ft_library_song_count, controller.draft.size, controller.draft.size),
                 onClose = onDismiss,
                 closeEnabled = !busy,
             )

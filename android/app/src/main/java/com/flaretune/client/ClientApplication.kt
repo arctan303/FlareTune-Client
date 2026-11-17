@@ -20,6 +20,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 class ClientApplication : Application() {
+    // Applied before anything resolves resources so a saved interface language wins over the device locale.
+    override fun attachBaseContext(base: android.content.Context) {
+        super.attachBaseContext(com.flaretune.client.data.AppLocale.wrap(base))
+    }
+
     override fun onCreate() {
         super.onCreate()
         if ((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
@@ -57,5 +62,6 @@ class ClientApplication : Application() {
         )
     }
     val appUpdateInstaller by lazy { AndroidAppUpdateInstaller(this) }
+    val appLanguagePreferences by lazy { com.flaretune.client.data.AndroidAppLanguagePreferences(this) }
     val playbackRuntime by lazy { PlaybackRuntime(this, history, queueRepository, playEvents) }
 }

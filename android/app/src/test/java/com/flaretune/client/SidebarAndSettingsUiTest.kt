@@ -24,6 +24,7 @@ import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.height
+import com.flaretune.client.data.AppLanguage
 import com.flaretune.client.data.AppThemeMode
 import com.flaretune.client.data.BluetoothLyricsMode
 import com.flaretune.client.data.SavedAccountSummary
@@ -107,6 +108,7 @@ class SidebarAndSettingsUiTest {
         var sleepCancelledCalls = 0
         var keepScreenOnSet: Boolean? = null
         var themeModeSet: AppThemeMode? = null
+        var appLanguageSet: AppLanguage? = null
         var bluetoothLyricsModeSet: BluetoothLyricsMode? = null
         var translationSet: Boolean? = null
         var cacheClearCalls = 0
@@ -156,6 +158,10 @@ class SidebarAndSettingsUiTest {
 
         override fun setThemeMode(mode: AppThemeMode) {
             themeModeSet = mode
+        }
+
+        override fun setAppLanguage(language: AppLanguage) {
+            appLanguageSet = language
         }
 
         override fun setBluetoothLyricsMode(mode: BluetoothLyricsMode) {
@@ -398,6 +404,14 @@ class SidebarAndSettingsUiTest {
         assertEquals(AppThemeMode.LIGHT, actions.themeModeSet)
         scrollAboveDockAndClick("settings_theme_system")
         assertEquals(AppThemeMode.SYSTEM, actions.themeModeSet)
+
+        rule.onNodeWithText(rule.activity.getString(R.string.ft_settings_language_title)).assertIsDisplayed()
+        scrollAboveDockAndClick("settings_language_ja")
+        assertEquals(AppLanguage.JA, actions.appLanguageSet)
+        scrollAboveDockAndClick("settings_language_zh_hant")
+        assertEquals(AppLanguage.ZH_HANT, actions.appLanguageSet)
+        scrollAboveDockAndClick("settings_language_system")
+        assertEquals(AppLanguage.SYSTEM, actions.appLanguageSet)
 
         scrollAboveDockAndClick("settings_keep_screen_on_switch")
         assertEquals(false, actions.keepScreenOnSet)

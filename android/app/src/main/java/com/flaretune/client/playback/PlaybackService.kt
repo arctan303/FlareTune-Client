@@ -36,6 +36,11 @@ import kotlinx.coroutines.launch
 
 @androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 class PlaybackService : MediaSessionService() {
+    // Notification and system media text follow the saved interface language as well.
+    override fun attachBaseContext(newBase: android.content.Context) {
+        super.attachBaseContext(com.flaretune.client.data.AppLocale.wrap(newBase))
+    }
+
     private var mediaSession: MediaSession? = null
     private var activeConnection: ActiveConnection? = null
     private var network: com.flaretune.client.data.SessionNetwork? = null

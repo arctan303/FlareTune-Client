@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ft_settings_language_title">语言</string>
+    <string name="ft_settings_language_desc">选择应用界面语言，默认跟随系统语言。</string>
+    <string name="ft_settings_language_system">跟随系统语言</string>
+</resources>

@@ -160,7 +160,10 @@
     <string name="ft_sleep_timer_title">Sleep timer</string>
     <string name="ft_sleep_timer_subtitle">Audio fades out smoothly when time is up.</string>
     <string name="ft_sleep_timer_off">Off</string>
-    <string name="ft_sleep_timer_minutes">%1$d minutes</string>
+    <plurals name="ft_sleep_timer_minutes">
+        <item quantity="one">%1$d minute</item>
+        <item quantity="other">%1$d minutes</item>
+    </plurals>
     <string name="ft_sleep_timer_custom">Custom duration</string>
     <string name="ft_sleep_timer_custom_hint">Minutes (1-480)</string>
     <string name="ft_sleep_timer_custom_start">Start</string>
@@ -232,7 +235,10 @@
     <string name="ft_history_snapshot_source_named">%1$s · %2$s</string>
     <string name="ft_feedback_track_unavailable">This track is unavailable</string>
     <string name="ft_feedback_queue_restore_unavailable">None of the tracks in this saved queue are playable</string>
-    <string name="ft_history_queue_restored_partial">Restored queue (skipped %1$d unavailable tracks)</string>
+    <plurals name="ft_history_queue_restored_partial">
+        <item quantity="one">Restored queue (skipped %1$d unavailable track)</item>
+        <item quantity="other">Restored queue (skipped %1$d unavailable tracks)</item>
+    </plurals>
     <string name="ft_history_clear_artists_title">Clear visited artists</string>
     <string name="ft_history_clear_artists_message">Remove all visited artists recorded for this account? This cannot be undone.</string>
     <string name="ft_history_clear_collections_title">Clear played albums &amp; playlists</string>

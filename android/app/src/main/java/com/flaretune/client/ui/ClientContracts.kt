@@ -6,6 +6,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.flaretune.client.model.*
+import com.flaretune.client.data.AppLanguage
 import com.flaretune.client.data.AppThemeMode
 import com.flaretune.client.data.AppUpdateError
 import com.flaretune.client.data.AppUpdateRelease
@@ -77,6 +78,8 @@ data class ClientUiState(
     val splashNonce: Int = 0,
     val keepScreenOnEnabled: Boolean = true,
     val themeMode: AppThemeMode = AppThemeMode.SYSTEM,
+    val appLanguage: AppLanguage = AppLanguage.SYSTEM,
+    val languageChangeToken: Long = 0L,
     val bluetoothLyricsMode: BluetoothLyricsMode = BluetoothLyricsMode.OFF,
     val imageCacheClearResult: ImageCacheClearResult? = null,
     val busy: Boolean = false,
@@ -278,6 +281,7 @@ interface ClientActions {
     fun cancelSleepTimer() {}
     fun setKeepScreenOnEnabled(enabled: Boolean) {}
     fun setThemeMode(mode: AppThemeMode) {}
+    fun setAppLanguage(language: AppLanguage) {}
     fun setBluetoothLyricsMode(mode: BluetoothLyricsMode) {}
     fun clearImageCache() {}
     fun setIncludePrereleaseUpdates(enabled: Boolean) {}

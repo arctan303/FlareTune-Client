@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ft_preview_mode">UI 미리보기</string>
+    <string name="ft_open_app">앱 열기</string>
+</resources>

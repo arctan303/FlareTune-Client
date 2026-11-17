@@ -245,7 +245,7 @@ private fun ClientAppContent(
             PlaybackFeedbackKind.QUEUE_RESTORED ->
                 stringResource(R.string.ft_history_queue_restored)
             PlaybackFeedbackKind.QUEUE_RESTORED_PARTIAL ->
-                stringResource(R.string.ft_history_queue_restored_partial, event.omittedCount)
+                pluralStringResource(R.plurals.ft_history_queue_restored_partial, event.omittedCount, event.omittedCount)
             PlaybackFeedbackKind.TRACK_UNAVAILABLE ->
                 stringResource(R.string.ft_feedback_track_unavailable)
             PlaybackFeedbackKind.QUEUE_RESTORE_UNAVAILABLE ->

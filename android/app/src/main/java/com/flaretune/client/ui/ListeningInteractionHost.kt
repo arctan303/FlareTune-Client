@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -464,7 +465,7 @@ internal fun ListeningInteractionHost(
                         ListeningConfirmation.CLEAR_HISTORY -> stringResource(R.string.ft_listening_clear_history_message)
                         ListeningConfirmation.CLEAR_QUEUE -> stringResource(R.string.ft_listening_clear_queue_message)
                         ListeningConfirmation.REMOVE_SONG -> stringResource(R.string.ft_listening_remove_message, confirmingSong?.title.orEmpty())
-                        ListeningConfirmation.REMOVE_SONGS -> stringResource(R.string.ft_listening_remove_songs_message, confirmingSongs.size)
+                        ListeningConfirmation.REMOVE_SONGS -> pluralStringResource(R.plurals.ft_listening_remove_songs_message, confirmingSongs.size, confirmingSongs.size)
                     })
                     state.libraryMutationNotice?.let { Notice(it) }
                 }

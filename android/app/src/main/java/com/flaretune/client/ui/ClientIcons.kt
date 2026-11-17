@@ -296,6 +296,21 @@ object ClientIcons {
         moveTo(13.6f, 19.2f); lineTo(17.5f, 10f); lineTo(21.4f, 19.2f)
         moveTo(14.9f, 16.4f); lineTo(20.1f, 16.4f)
     }
+    val Globe = lines("Globe") {
+        // Circle, equator and two meridians: interface language, distinct from the translate glyph.
+        moveTo(12f, 3f)
+        curveTo(16.97f, 3f, 21f, 7.03f, 21f, 12f)
+        curveTo(21f, 16.97f, 16.97f, 21f, 12f, 21f)
+        curveTo(7.03f, 21f, 3f, 16.97f, 3f, 12f)
+        curveTo(3f, 7.03f, 7.03f, 3f, 12f, 3f)
+        moveTo(3f, 12f); lineTo(21f, 12f)
+        moveTo(12f, 3f)
+        curveTo(9.6f, 5.5f, 8.3f, 8.6f, 8.3f, 12f)
+        curveTo(8.3f, 15.4f, 9.6f, 18.5f, 12f, 21f)
+        moveTo(12f, 3f)
+        curveTo(14.4f, 5.5f, 15.7f, 8.6f, 15.7f, 12f)
+        curveTo(15.7f, 15.4f, 14.4f, 18.5f, 12f, 21f)
+    }
     val ChevronLeft = lines("ChevronLeft") { moveTo(15f, 5f); lineTo(8f, 12f); lineTo(15f, 19f) }
     val ChevronRight = lines("ChevronRight") { moveTo(9f, 5f); lineTo(16f, 12f); lineTo(9f, 19f) }
     val Trash = lines("Trash") {

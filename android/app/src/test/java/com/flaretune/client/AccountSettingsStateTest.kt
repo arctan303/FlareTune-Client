@@ -269,8 +269,7 @@ class AccountSettingsStateTest {
         } finally { f.close() }
     }
 
-    @Test fun themeModePersistsAcrossSwitchAndLogoutAndSurfacesStorageError() = runTest {
-        val f = Fixture(this)
+    @Test fun themeModePersistsAcrossSwitchAndLogoutAndSurfacesStorageError() = runTest {        val f = Fixture(this)
         try {
             advanceUntilIdle()
             assertEquals(AppThemeMode.SYSTEM, f.model.state.value.themeMode)
@@ -430,6 +429,41 @@ class AccountSettingsStateTest {
         } finally { f.close() }
     }
 
+    @Test fun appLanguagePersistsAcrossSwitchAndLogoutAndSurfacesStorageError() = runTest {
+        val f = Fixture(this)
+        try {
+            advanceUntilIdle()
+            assertEquals(AppLanguage.SYSTEM, f.model.state.value.appLanguage)
+            assertEquals(0L, f.model.state.value.languageChangeToken)
+
+            f.model.setAppLanguage(AppLanguage.JA)
+            advanceUntilIdle()
+            assertEquals(AppLanguage.JA, f.model.state.value.appLanguage)
+            assertEquals(AppLanguage.JA, f.languagePreferences.language)
+            assertEquals(1L, f.model.state.value.languageChangeToken)
+
+            f.model.setAppLanguage(AppLanguage.ZH_HANT)
+            advanceUntilIdle()
+            assertEquals(2L, f.model.state.value.languageChangeToken)
+
+            f.model.switchAccount(f.connections.keyB)
+            advanceUntilIdle()
+            assertEquals(AppLanguage.ZH_HANT, f.model.state.value.appLanguage)
+            assertEquals(2L, f.model.state.value.languageChangeToken)
+
+            f.model.logout()
+            advanceUntilIdle()
+            assertEquals(AppLanguage.ZH_HANT, f.model.state.value.appLanguage)
+
+            f.languagePreferences.failWrite = true
+            f.model.setAppLanguage(AppLanguage.KO)
+            advanceUntilIdle()
+            assertEquals(AppLanguage.ZH_HANT, f.model.state.value.appLanguage)
+            assertEquals(2L, f.model.state.value.languageChangeToken)
+            assertEquals(ClientNotice.STORAGE_FAILED, f.model.state.value.notice)
+        } finally { f.close() }
+    }
+
     private class Fixture(
         scope: TestScope,
         coverImageProcessor: CoverImageProcessor? = null,
@@ -439,6 +473,7 @@ class AccountSettingsStateTest {
         val connections = AccountConnections()
         val player = AccountPlayer(scope)
         val preferences = DevicePreferences()
+        val languagePreferences = DeviceAppLanguagePreferences()
         val model: ClientViewModel
         init {
             Dispatchers.setMain(dispatcher)
@@ -449,6 +484,7 @@ class AccountSettingsStateTest {
                 translationPreferences = preferences,
                 coverImageProcessor = coverImageProcessor,
                 playlistPreferences = playlistPreferences,
+                appLanguagePreferences = languagePreferences,
             )
         }
         fun close() { model.viewModelScope.cancel(); Dispatchers.resetMain() }
@@ -470,6 +506,16 @@ private class DevicePreferences : TranslationPreferences {
     override fun writeThemeMode(mode: AppThemeMode) { if (failWrite) throw ApiFailure(Failure.STORAGE); themeMode = mode }
     override fun readBluetoothLyricsMode() = bluetoothLyricsMode
     override fun writeBluetoothLyricsMode(mode: BluetoothLyricsMode) { if (failWrite) throw ApiFailure(Failure.STORAGE); bluetoothLyricsMode = mode }
+}
+
+private class DeviceAppLanguagePreferences : AppLanguagePreferences {
+    var language = AppLanguage.SYSTEM
+    var failWrite = false
+    override fun read() = language
+    override fun write(language: AppLanguage) {
+        if (failWrite) throw ApiFailure(Failure.STORAGE)
+        this.language = language
+    }
 }
 
 private class AccountConnections : Connections {

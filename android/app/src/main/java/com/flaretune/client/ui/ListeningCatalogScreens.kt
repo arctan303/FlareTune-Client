@@ -52,11 +52,13 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -172,7 +174,7 @@ internal fun ListeningAlbumTile(album: Album, loader: ImageLoader?, onClick: () 
         Column(Modifier.weight(1f)) {
             Text(album.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(album.artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            album.knownTrackCount?.let { Text(stringResource(R.string.ft_listening_tracks_count, it), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            album.knownTrackCount?.let { Text(pluralStringResource(R.plurals.ft_listening_tracks_count, it, it), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         Icon(ClientIcons.ChevronRight, null)
     }
@@ -193,7 +195,7 @@ private fun ListeningAlbumCard(album: Album, loader: ImageLoader?, modifier: Mod
         Spacer(Modifier.height(8.dp))
         Text(album.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Text(
-            album.artist.ifBlank { album.knownTrackCount?.let { stringResource(R.string.ft_listening_tracks_count, it) }.orEmpty() },
+            album.artist.ifBlank { album.knownTrackCount?.let { pluralStringResource(R.plurals.ft_listening_tracks_count, it, it) }.orEmpty() },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
@@ -705,7 +707,7 @@ internal fun ListeningStatsPage(
                     ) {
                         Text(artist.key, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
                         Text(
-                            stringResource(R.string.ft_listening_play_count, artist.value),
+                            pluralStringResource(R.plurals.ft_listening_play_count, artist.value.toInt(), artist.value.toInt()),
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -724,7 +726,7 @@ internal fun ListeningStatsPage(
                             actions.playSongs(ranked.map { it.song }, index)
                         }
                         Text(
-                            stringResource(R.string.ft_listening_play_count, row.playCount),
+                            pluralStringResource(R.plurals.ft_listening_play_count, row.playCount.toInt(), row.playCount.toInt()),
                             Modifier.padding(start = 76.dp, bottom = 8.dp),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1493,8 +1495,14 @@ private fun RecentSearchTermChip(term: String, onSelect: () -> Unit, onRemove: (
     }
 }
 
-internal fun listeningTime(playedAt: Long?): String = if (playedAt == null || playedAt <= 0) ""
-else DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(playedAt))
+/** Locale of the interface language, so dates and times follow the app language, not the device one. */
+@Composable
+internal fun rememberAppLocale(): java.util.Locale =
+    com.flaretune.client.data.AppLocale.current(LocalContext.current)
+
+internal fun listeningTime(playedAt: Long?, locale: java.util.Locale = java.util.Locale.getDefault()): String =
+    if (playedAt == null || playedAt <= 0) ""
+    else DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT, locale).format(Date(playedAt))
 
 @Composable
 internal fun ListeningSongSortRow(state: ClientUiState, actions: ClientActions) {
@@ -1565,7 +1573,7 @@ internal fun ListeningLibraryOverview(
                 LibraryRowModel(
                     key = playlist.id,
                     name = playlist.name,
-                    subtitle = stringResource(R.string.ft_listening_tracks_count, playlist.songCount),
+                    subtitle = pluralStringResource(R.plurals.ft_listening_tracks_count, playlist.songCount, playlist.songCount),
                     customCoverUrl = playlist.customCoverUrl,
                     previewCovers = playlist.previewCovers,
                     isFavorite = playlist.kind == "favorite",
@@ -1861,7 +1869,7 @@ private fun PlaylistListRow(
 
 @Composable
 private fun pluralStringResourceText(count: Int): String =
-    stringResource(R.string.ft_listening_tracks_count, count)
+    pluralStringResource(R.plurals.ft_listening_tracks_count, count, count)
 
 @Composable
 private fun PlaylistGridCard(
@@ -2008,7 +2016,7 @@ private fun ListeningShelfOrderSheet(
         Column(Modifier.fillMaxWidth().heightIn(max = 640.dp).navigationBarsPadding().nestedScroll(absorbBottom)) {
             FlareSheetHeader(
                 title = stringResource(R.string.ft_listening_shelf_order),
-                subtitle = stringResource(R.string.ft_listening_tracks_count, draft.size),
+                subtitle = pluralStringResource(R.plurals.ft_listening_tracks_count, draft.size, draft.size),
                 onClose = close,
                 closeEnabled = !state.libraryMutationBusy,
             )
@@ -2174,7 +2182,7 @@ internal fun ListeningPlaylistDetailPage(state: ClientUiState, actions: ClientAc
         kindLabel = stringResource(R.string.ft_playlist_label),
         title = playlist.name,
         subtitle = playlist.description.takeIf { it.isNotBlank() },
-        metaLine = stringResource(R.string.ft_listening_tracks_count, playlist.songCount),
+        metaLine = pluralStringResource(R.plurals.ft_listening_tracks_count, playlist.songCount, playlist.songCount),
         coverUrl = playlist.customCoverUrl ?: previewCovers.firstOrNull()?.takeIf { previewCovers.size < 4 },
         previewCovers = previewCovers,
         isFavorite = isFav,

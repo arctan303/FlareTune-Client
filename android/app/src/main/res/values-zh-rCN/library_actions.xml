@@ -23,7 +23,9 @@
     <string name="ft_library_saving">正在保存…</string>
     <string name="ft_library_choose_playlists">选择歌单</string>
     <string name="ft_library_target_count">已选 %1$d 项 · 最多 %2$d 个歌单</string>
-    <string name="ft_library_song_count">%1$d 首歌曲</string>
+    <plurals name="ft_library_song_count">
+        <item quantity="other">%1$d 首歌曲</item>
+    </plurals>
     <string name="ft_library_invalid_song_count">请选择 1 至 100 首歌曲后添加。</string>
     <string name="ft_library_no_playlists">暂无可选歌单，可以先新建歌单。</string>
     <string name="ft_library_add_selected">加入所选歌单</string>

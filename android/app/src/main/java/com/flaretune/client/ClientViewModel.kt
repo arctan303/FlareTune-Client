@@ -37,6 +37,7 @@ class ClientViewModel(
     private val appUpdater: AppUpdateRepository? = null,
     private val appUpdateInstaller: AppUpdateInstaller? = null,
     private val appVersionName: String = BuildConfig.VERSION_NAME,
+    private val appLanguagePreferences: AppLanguagePreferences? = null,
 ) : ViewModel(), ClientActions {
     private val navigation = ClientNavigationState(savedStateHandle)
     private var preferredVolume = runCatching { translationPreferences?.readVolume() ?: 1f }
@@ -47,6 +48,9 @@ class ClientViewModel(
     private var translationEnabled = runCatching { translationPreferences?.read() ?: false }.getOrDefault(false)
     private var keepScreenOnEnabled = runCatching { translationPreferences?.readKeepScreenOn() ?: true }.getOrDefault(true)
     private var themeMode = runCatching { translationPreferences?.readThemeMode() ?: AppThemeMode.SYSTEM }.getOrDefault(AppThemeMode.SYSTEM)
+    private var appLanguage = runCatching { appLanguagePreferences?.read() ?: AppLanguage.SYSTEM }.getOrDefault(AppLanguage.SYSTEM)
+    private var appLanguageRevision = 0L
+    private var languageChangeToken = 0L
     private var bluetoothLyricsMode = runCatching { translationPreferences?.readBluetoothLyricsMode() ?: BluetoothLyricsMode.OFF }.getOrDefault(BluetoothLyricsMode.OFF)
     private var includePrereleaseUpdates = runCatching { translationPreferences?.readIncludePrereleases() ?: false }.getOrDefault(false)
     private val preferenceMutex = Mutex()
@@ -189,6 +193,8 @@ class ClientViewModel(
             splashNonce = splashNonce,
             keepScreenOnEnabled = keepScreenOnEnabled,
             themeMode = themeMode,
+            appLanguage = appLanguage,
+            languageChangeToken = languageChangeToken,
             bluetoothLyricsMode = bluetoothLyricsMode,
             appUpdate = appUpdateState,
             connectStep = connectStep,
@@ -943,6 +949,25 @@ class ClientViewModel(
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 if (revision == themeModeRevision) mutable.value = mutable.value.copy(notice = ClientNotice.STORAGE_FAILED)
+            }
+        }
+    }
+
+    override fun setAppLanguage(language: AppLanguage) {
+        val revision = ++appLanguageRevision
+        viewModelScope.launch {
+            try {
+                withContext(ioDispatcher) { preferenceMutex.withLock {
+                    if (revision == appLanguageRevision) appLanguagePreferences?.write(language)
+                } }
+                if (revision == appLanguageRevision) {
+                    appLanguage = language
+                    languageChangeToken += 1
+                    mutable.value = mutable.value.copy(appLanguage = language, languageChangeToken = languageChangeToken)
+                }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (revision == appLanguageRevision) mutable.value = mutable.value.copy(notice = ClientNotice.STORAGE_FAILED)
             }
         }
     }

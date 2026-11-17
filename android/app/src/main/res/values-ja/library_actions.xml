@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ft_library_favorite">お気に入りに追加</string>
+    <string name="ft_library_unfavorite">お気に入りから削除</string>
+    <string name="ft_library_play_next">次に再生</string>
+    <string name="ft_library_enqueue">キューに追加</string>
+    <string name="ft_library_add_to_playlist">プレイリストに追加</string>
+    <string name="ft_library_quick_next">次の曲</string>
+    <string name="ft_library_quick_playlist">プレイリストに追加</string>
+    <string name="ft_library_quick_favorite">お気に入りに追加</string>
+    <string name="ft_library_quick_favorited">お気に入り済み</string>
+    <string name="ft_library_view_artist">アーティストを表示</string>
+    <string name="ft_library_view_album">アルバムを表示</string>
+    <string name="ft_library_remove_song">このプレイリストから削除</string>
+    <string name="ft_library_copy_song_info">曲情報をコピー</string>
+    <string name="ft_library_create_playlist">新規プレイリスト</string>
+    <string name="ft_library_edit_playlist">プレイリストを編集</string>
+    <string name="ft_library_playlist_name">名前</string>
+    <string name="ft_library_playlist_description">説明</string>
+    <string name="ft_library_character_count">%1$d / %2$d文字</string>
+    <string name="ft_library_save">保存</string>
+    <string name="ft_library_cancel">キャンセル</string>
+    <string name="ft_library_saving">保存中…</string>
+    <string name="ft_library_choose_playlists">プレイリストを選択</string>
+    <string name="ft_library_target_count">%1$d件選択中・最大%2$d件のプレイリスト</string>
+    <plurals name="ft_library_song_count">
+        <item quantity="other">%1$d曲</item>
+    </plurals>
+    <string name="ft_library_invalid_song_count">追加する曲は1〜100曲の範囲で選択してください。</string>
+    <string name="ft_library_no_playlists">利用できるプレイリストがありません。作成して始めましょう。</string>
+    <string name="ft_library_add_selected">選択したプレイリストに追加</string>
+    <string name="ft_library_order_title">%1$sの順番を変更</string>
+    <string name="ft_library_position">%1$d / %2$d</string>
+    <string name="ft_library_move_up">%1$sを上へ移動</string>
+    <string name="ft_library_move_down">%1$sを下へ移動</string>
+    <string name="ft_library_empty_playlist">このプレイリストには曲がありません。</string>
+    <string name="ft_library_unavailable_member">利用不可・このプレイリストに保持</string>
+    <string name="ft_library_conflict">プレイリストが変更されました。このエディターを閉じ、プレイリストを更新してから開き直して保存してください。</string>
+    <string name="ft_library_favorite_protected">「お気に入り」の名前と説明は編集できません。</string>
+    <string name="ft_library_invalid_membership">曲リストを確認できませんでした。エディターを閉じてプレイリストを更新してください。</string>
+    <string name="ft_library_unknown_playlist">プレイリスト</string>
+    <string name="ft_library_target_applied">%1$s：追加しました</string>
+    <string name="ft_library_target_noop">%1$s：曲はすでに含まれています</string>
+    <string name="ft_library_target_conflict">%1$s：別の場所で変更されました。更新してから再試行してください</string>
+    <string name="ft_library_target_full">%1$s：500曲の上限を超えます</string>
+    <string name="ft_library_target_missing">%1$s：利用できなくなりました</string>
+    <string name="ft_library_target_failed">%1$s：曲を追加できませんでした。再試行してください</string>
+    <string name="ft_library_drag_song">長押ししてドラッグし、%1$sの順番を変更</string>
+</resources>

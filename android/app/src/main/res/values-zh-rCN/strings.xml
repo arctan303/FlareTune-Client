@@ -158,7 +158,9 @@
     <string name="ft_sleep_timer_title">定时休眠</string>
     <string name="ft_sleep_timer_subtitle">计时结束后会先渐弱音量再自动暂停播放。</string>
     <string name="ft_sleep_timer_off">不开启</string>
-    <string name="ft_sleep_timer_minutes">%1$d 分钟</string>
+    <plurals name="ft_sleep_timer_minutes">
+        <item quantity="other">%1$d 分钟</item>
+    </plurals>
     <string name="ft_sleep_timer_custom">自定义时长</string>
     <string name="ft_sleep_timer_custom_hint">输入分钟数（1-480）</string>
     <string name="ft_sleep_timer_custom_start">开始</string>
@@ -230,7 +232,9 @@
     <string name="ft_history_snapshot_source_named">%1$s · %2$s</string>
     <string name="ft_feedback_track_unavailable">该歌曲暂不可播</string>
     <string name="ft_feedback_queue_restore_unavailable">该历史队列中的歌曲均已失效，无法恢复</string>
-    <string name="ft_history_queue_restored_partial">已恢复历史队列（跳过 %1$d 首失效曲目）</string>
+    <plurals name="ft_history_queue_restored_partial">
+        <item quantity="other">已恢复历史队列（跳过 %1$d 首失效曲目）</item>
+    </plurals>
     <string name="ft_history_clear_artists_title">清空歌手历史</string>
     <string name="ft_history_clear_artists_message">确定清空当前账号下记录的所有访问过的歌手吗？该操作无法撤销。</string>
     <string name="ft_history_clear_collections_title">清空专辑与歌单历史</string>

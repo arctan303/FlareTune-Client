@@ -778,7 +778,7 @@ class ListeningFeaturesUiTest {
         }
         rule.waitForIdle()
         rule.onNodeWithTag("action_feedback_toast").assertIsDisplayed()
-        rule.onNodeWithText(rule.activity.getString(com.flaretune.client.R.string.ft_history_queue_restored_partial, 2)).assertIsDisplayed()
+        rule.onNodeWithText(rule.activity.resources.getQuantityString(com.flaretune.client.R.plurals.ft_history_queue_restored_partial, 2, 2)).assertIsDisplayed()
         rule.runOnIdle { assertNull(controller.state.value.playbackFeedback) }
     }
 
