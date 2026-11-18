@@ -8,7 +8,7 @@ FlareTune Client 连接到你自己的 HTTPS [FlareTune](https://github.com/arct
 
 [使用前提与边界](#使用前提与边界) · [现有体验](#现有体验) · [平台路线](#平台路线) · [本地构建](#本地构建) · [参与协作](#参与协作)
 
-> **当前阶段说明**：Android 客户端目前处于开发阶段（尚未发布正式 Release）。代码库内的调试构建、单元测试与静态检查已就绪，但真实机型、蓝牙车机固件、锁屏及各厂商后台保活策略仍在持续验证中。
+> **Android 1.0.0** 提供正式签名 APK。真实机型、蓝牙车机固件、锁屏及各厂商后台保活策略仍在持续验证中。[安装包与更新日志](https://github.com/arctan303/FlareTune-Client/releases/tag/v1.0.0)
 
 ## 现有体验
 
@@ -23,7 +23,7 @@ FlareTune Client 连接到你自己的 HTTPS [FlareTune](https://github.com/arct
 
 | 平台 | 当前状态 | 说明 |
 | --- | --- | --- |
-| **Android** | 开发中（可本地构建） | 使用 Kotlin、Jetpack Compose 与 Media3，支持 `minSdk 23`（Android 6.0+），`compileSdk` / `targetSdk 36` |
+| **Android** | 1.0.0 | 使用 Kotlin、Jetpack Compose 与 Media3，支持 `minSdk 23`（Android 6.0+），`compileSdk` / `targetSdk 36` |
 | **Windows** | 规划中 | 已确认的后续官方桌面端方向，尚未创建工程 |
 | **iOS** | 暂留社区空间 | 目前没有官方工程与排期 |
 

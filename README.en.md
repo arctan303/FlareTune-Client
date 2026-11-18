@@ -8,7 +8,7 @@ FlareTune Client connects to your self-hosted HTTPS [FlareTune](https://github.c
 
 [Requirements and scope](#requirements-and-scope) · [Current features](#current-features) · [Platform roadmap](#platform-roadmap) · [Local build](#local-build) · [Contributing](#contributing)
 
-> **Current status**: The Android client is under active development and has no formal release yet. Unit tests, Lint, and debug builds pass in CI, while real-device behavior across different Android devices, Bluetooth car kits, lock screens, and OEM background policies remains under ongoing verification.
+> **Android 1.0.0** is available as a signed APK. Real-device verification continues across Android devices, Bluetooth car kits, lock screens, and OEM background policies. [APK and release notes](https://github.com/arctan303/FlareTune-Client/releases/tag/v1.0.0)
 
 ## Current features
 
@@ -23,7 +23,7 @@ FlareTune Client connects to your self-hosted HTTPS [FlareTune](https://github.c
 
 | Platform | Status | Notes |
 | --- | --- | --- |
-| **Android** | In development (buildable) | Built with Kotlin, Jetpack Compose, and Media3 (`minSdk 23` / Android 6.0+, `compileSdk` & `targetSdk 36`) |
+| **Android** | 1.0.0 | Built with Kotlin, Jetpack Compose, and Media3 (`minSdk 23` / Android 6.0+, `compileSdk` & `targetSdk 36`) |
 | **Windows** | Planned | Confirmed future official desktop direction; no project created yet |
 | **iOS** | Open to community | No official project or schedule at this time |
 
