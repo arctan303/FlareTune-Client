@@ -47,4 +47,5 @@
     <string name="ft_library_target_missing">%1$s: no longer available</string>
     <string name="ft_library_target_failed">%1$s: could not add songs; please try again</string>
     <string name="ft_library_drag_song">Hold and drag to reorder %1$s</string>
+    <string name="ft_queue_remove_song">Remove from queue</string>
 </resources>

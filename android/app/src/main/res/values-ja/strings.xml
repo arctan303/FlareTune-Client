@@ -182,6 +182,7 @@
     <string name="ft_profile_avatar_saved">アバターをギャラリーに保存しました</string>
     <string name="ft_profile_avatar_save_failed">アバターを保存できませんでした</string>
     <string name="ft_settings_section_accounts">アカウントとインスタンス</string>
+    <string name="ft_settings_section_general">全般</string>
     <string name="ft_settings_section_appearance">外観</string>
     <string name="ft_settings_theme_title">テーマ</string>
     <string name="ft_settings_theme_light">ライト</string>
@@ -199,7 +200,7 @@
     <string name="ft_settings_keep_screen_on_title">再生中は画面をオフにしない</string>
     <string name="ft_settings_keep_screen_on_desc">全画面プレーヤーで画面のスリープを防止します。</string>
     <string name="ft_settings_sleep_fade_note">スリープタイマーは停止前に再生を徐々にフェードアウトします。</string>
-    <string name="ft_settings_section_storage">ストレージとデータ</string>
+    <string name="ft_settings_section_storage">ストレージとツール</string>
     <string name="ft_settings_clear_cover_cache">キャッシュしたカバー画像を削除</string>
     <string name="ft_settings_clear_cover_cache_desc">ローカルに保存されたカバー画像のキャッシュを削除します。</string>
     <string name="ft_settings_clear_cover_cache_clearing">カバーキャッシュを削除中…</string>

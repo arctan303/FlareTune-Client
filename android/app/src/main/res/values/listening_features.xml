@@ -96,4 +96,5 @@
     <string name="ft_quick_play_all">Play all</string>
     <string name="ft_quick_shuffle">Shuffle</string>
     <string name="ft_quick_enqueue">Enqueue</string>
+    <string name="ft_random_change_batch">Shuffle recommendations</string>
 </resources>

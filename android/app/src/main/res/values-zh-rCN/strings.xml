@@ -182,6 +182,7 @@
     <string name="ft_profile_avatar_saved">头像已保存到相册</string>
     <string name="ft_profile_avatar_save_failed">保存头像失败</string>
     <string name="ft_settings_section_accounts">账号与多实例</string>
+    <string name="ft_settings_section_general">通用</string>
     <string name="ft_settings_section_appearance">外观与主题</string>
     <string name="ft_settings_theme_title">主题模式</string>
     <string name="ft_settings_theme_light">明亮</string>
@@ -199,7 +200,7 @@
     <string name="ft_settings_keep_screen_on_title">全屏播歌时防息屏</string>
     <string name="ft_settings_keep_screen_on_desc">在全屏播放页播放音乐期间保持屏幕常亮。</string>
     <string name="ft_settings_sleep_fade_note">定时休眠倒计时结束时，会先平缓降音再自动暂停。</string>
-    <string name="ft_settings_section_storage">存储与清理</string>
+    <string name="ft_settings_section_storage">存储与工具</string>
     <string name="ft_settings_clear_cover_cache">清理本地封面缓存</string>
     <string name="ft_settings_clear_cover_cache_desc">释放本地缓存的专辑与歌曲封面图片。</string>
     <string name="ft_settings_clear_cover_cache_clearing">正在清理封面缓存…</string>

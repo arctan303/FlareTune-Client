@@ -93,4 +93,5 @@
     <string name="ft_quick_play_all">播放全部</string>
     <string name="ft_quick_shuffle">随机播放</string>
     <string name="ft_quick_enqueue">加入队列</string>
+    <string name="ft_random_change_batch">换一批</string>
 </resources>

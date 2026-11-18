@@ -182,6 +182,7 @@
     <string name="ft_profile_avatar_saved">頭像已儲存到相簿</string>
     <string name="ft_profile_avatar_save_failed">儲存頭像失敗</string>
     <string name="ft_settings_section_accounts">帳號與執行個體</string>
+    <string name="ft_settings_section_general">一般</string>
     <string name="ft_settings_section_appearance">外觀</string>
     <string name="ft_settings_theme_title">主題</string>
     <string name="ft_settings_theme_light">淺色</string>
@@ -199,7 +200,7 @@
     <string name="ft_settings_keep_screen_on_title">播放時保持螢幕開啟</string>
     <string name="ft_settings_keep_screen_on_desc">在全螢幕播放器中避免螢幕休眠。</string>
     <string name="ft_settings_sleep_fade_note">睡眠定時器結束前會先將播放音量漸弱，再暫停。</string>
-    <string name="ft_settings_section_storage">儲存空間與資料</string>
+    <string name="ft_settings_section_storage">儲存空間與工具</string>
     <string name="ft_settings_clear_cover_cache">清除封面快取</string>
     <string name="ft_settings_clear_cover_cache_desc">釋放本機快取的專輯封面圖片。</string>
     <string name="ft_settings_clear_cover_cache_clearing">正在清除封面快取…</string>

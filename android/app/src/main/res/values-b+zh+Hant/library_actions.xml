@@ -46,4 +46,5 @@
     <string name="ft_library_target_missing">%1$s：已無法使用</string>
     <string name="ft_library_target_failed">%1$s：加入失敗，請重試</string>
     <string name="ft_library_drag_song">長按並拖曳以調整「%1$s」的順序</string>
+    <string name="ft_queue_remove_song">從佇列移除</string>
 </resources>

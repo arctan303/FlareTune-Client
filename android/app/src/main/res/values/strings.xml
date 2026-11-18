@@ -185,6 +185,7 @@
     <string name="ft_profile_avatar_saved">Avatar saved to gallery</string>
     <string name="ft_profile_avatar_save_failed">Could not save avatar</string>
     <string name="ft_settings_section_accounts">Accounts &amp; instances</string>
+    <string name="ft_settings_section_general">General</string>
     <string name="ft_settings_section_appearance">Appearance</string>
     <string name="ft_settings_theme_title">Theme</string>
     <string name="ft_settings_theme_light">Light</string>
@@ -202,7 +203,7 @@
     <string name="ft_settings_keep_screen_on_title">Keep screen on while playing</string>
     <string name="ft_settings_keep_screen_on_desc">Prevent display sleep in the full-screen player.</string>
     <string name="ft_settings_sleep_fade_note">Sleep timer gently fades playback out before pausing.</string>
-    <string name="ft_settings_section_storage">Storage &amp; data</string>
+    <string name="ft_settings_section_storage">Storage &amp; tools</string>
     <string name="ft_settings_clear_cover_cache">Clear cached cover images</string>
     <string name="ft_settings_clear_cover_cache_desc">Frees cached album artwork stored locally.</string>
     <string name="ft_settings_clear_cover_cache_clearing">Clearing cover cache…</string>

@@ -39,9 +39,9 @@ if ($LASTEXITCODE -ne 0) {
     throw $failure
 }
 # Updating the same package preserves app data; restarting does reset the current in-memory screen/queue.
-& $adb @deviceArgs shell am force-stop com.flaretune.client
+& $adb @deviceArgs shell am force-stop com.arcinks.flaretune
 if ($LASTEXITCODE -ne 0) { throw 'Could not stop the previous app process.' }
-$targetActivity = if ($Preview) { "com.flaretune.client/.preview.PreviewActivity" } else { "com.flaretune.client/.MainActivity" }
+$targetActivity = if ($Preview) { "com.arcinks.flaretune/.preview.PreviewActivity" } else { "com.arcinks.flaretune/.MainActivity" }
 & $adb @deviceArgs shell am start -W -n $targetActivity
 if ($LASTEXITCODE -ne 0) { throw 'Could not launch FlareTune.' }
 Write-Output 'FlareTune updated. App data preserved; app process restarted.'

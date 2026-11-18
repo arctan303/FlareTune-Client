@@ -46,4 +46,5 @@
     <string name="ft_library_target_missing">%1$s：利用できなくなりました</string>
     <string name="ft_library_target_failed">%1$s：曲を追加できませんでした。再試行してください</string>
     <string name="ft_library_drag_song">長押ししてドラッグし、%1$sの順番を変更</string>
+    <string name="ft_queue_remove_song">キューから削除</string>
 </resources>
