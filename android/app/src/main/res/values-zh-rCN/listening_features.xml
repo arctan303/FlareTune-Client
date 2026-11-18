@@ -21,12 +21,16 @@
     <string name="ft_listening_empty_artists">暂无匹配歌手。</string>
     <string name="ft_listening_search_albums">搜索专辑</string>
     <string name="ft_listening_empty_albums">暂无匹配专辑。</string>
-    <string name="ft_listening_tracks_count">%1$d 首歌曲</string>
+    <plurals name="ft_listening_tracks_count">
+        <item quantity="other">%1$d 首歌曲</item>
+    </plurals>
     <string name="ft_listening_enqueue">加入队尾</string>
     <string name="ft_listening_add_to_playlist">加入歌单</string>
     <string name="ft_listening_statistics">收听统计</string>
     <string name="ft_listening_empty_stats">继续听歌，累积你的常听记录。</string>
-    <string name="ft_listening_play_count">播放 %1$d 次</string>
+    <plurals name="ft_listening_play_count">
+        <item quantity="other">播放 %1$d 次</item>
+    </plurals>
     <string name="ft_listening_song_actions">歌曲操作</string>
     <string name="ft_listening_create_playlist">创建歌单</string>
     <string name="ft_listening_shelf_order">调整歌单库顺序</string>
@@ -79,7 +83,9 @@
     <string name="ft_batch_add_to_playlist">加入歌单</string>
     <string name="ft_batch_favorite">收藏</string>
     <string name="ft_batch_remove">移出歌单</string>
-    <string name="ft_listening_remove_songs_message">确定从此歌单移除所选 %1$d 首歌曲？</string>
+    <plurals name="ft_listening_remove_songs_message">
+        <item quantity="other">确定从此歌单移除所选 %1$d 首歌曲？</item>
+    </plurals>
     <string name="ft_feedback_play_batch_next">已添加到下一首播放</string>
     <string name="ft_feedback_enqueued_batch">已加入播放队列</string>
     <string name="ft_feedback_favorited_batch">已批量添加到收藏</string>
@@ -87,4 +93,5 @@
     <string name="ft_quick_play_all">播放全部</string>
     <string name="ft_quick_shuffle">随机播放</string>
     <string name="ft_quick_enqueue">加入队列</string>
+    <string name="ft_random_change_batch">换一批</string>
 </resources>

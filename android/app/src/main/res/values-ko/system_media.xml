@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ft_system_order_sequential">순서대로 재생. 재생 순서 변경</string>
+    <string name="ft_system_order_repeat_all">목록 반복. 재생 순서 변경</string>
+    <string name="ft_system_order_repeat_one">한 곡 반복. 재생 순서 변경</string>
+    <string name="ft_system_order_shuffle">셔플. 재생 순서 변경</string>
+    <string name="ft_system_favorite_add">즐겨찾기에 추가</string>
+    <string name="ft_system_favorite_remove">즐겨찾기에서 제거</string>
+    <string name="ft_system_favorite_loading">즐겨찾기 상태 불러오는 중</string>
+    <string name="ft_system_favorite_saving">즐겨찾기 업데이트 중</string>
+    <string name="ft_system_favorite_retry_load">즐겨찾기 상태 다시 불러오기</string>
+    <string name="ft_system_favorite_retry">즐겨찾기 업데이트 재시도</string>
+    <string name="ft_system_favorite_failed">즐겨찾기를 업데이트하지 못했습니다. 다시 시도하세요.</string>
+</resources>

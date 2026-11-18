@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ft_library_favorite">加入我的收藏</string>
+    <string name="ft_library_unfavorite">移出我的收藏</string>
+    <string name="ft_library_play_next">下一首播放</string>
+    <string name="ft_library_enqueue">加入佇列</string>
+    <string name="ft_library_add_to_playlist">加入播放清單</string>
+    <string name="ft_library_quick_next">下一首播放</string>
+    <string name="ft_library_quick_playlist">加入播放清單</string>
+    <string name="ft_library_quick_favorite">加入我的收藏</string>
+    <string name="ft_library_quick_favorited">已收藏</string>
+    <string name="ft_library_view_artist">查看歌手</string>
+    <string name="ft_library_view_album">查看專輯</string>
+    <string name="ft_library_remove_song">從此播放清單移除</string>
+    <string name="ft_library_copy_song_info">複製歌曲資訊</string>
+    <string name="ft_library_create_playlist">建立播放清單</string>
+    <string name="ft_library_edit_playlist">編輯播放清單</string>
+    <string name="ft_library_playlist_name">名稱</string>
+    <string name="ft_library_playlist_description">簡介</string>
+    <string name="ft_library_character_count">%1$d / %2$d 字元</string>
+    <string name="ft_library_save">儲存</string>
+    <string name="ft_library_cancel">取消</string>
+    <string name="ft_library_saving">正在儲存…</string>
+    <string name="ft_library_choose_playlists">選擇播放清單</string>
+    <string name="ft_library_target_count">已選 %1$d 項 · 最多 %2$d 個播放清單</string>
+    <plurals name="ft_library_song_count">
+        <item quantity="other">%1$d 首歌曲</item>
+    </plurals>
+    <string name="ft_library_invalid_song_count">請選擇 1 到 100 首歌曲後再加入。</string>
+    <string name="ft_library_no_playlists">目前沒有可用的播放清單，先建立一個開始使用吧。</string>
+    <string name="ft_library_add_selected">加入所選播放清單</string>
+    <string name="ft_library_order_title">調整「%1$s」的順序</string>
+    <string name="ft_library_position">第 %1$d 項，共 %2$d 項</string>
+    <string name="ft_library_move_up">上移「%1$s」</string>
+    <string name="ft_library_move_down">下移「%1$s」</string>
+    <string name="ft_library_empty_playlist">此播放清單還沒有歌曲。</string>
+    <string name="ft_library_unavailable_member">暫無法播放 · 仍保留在播放清單中</string>
+    <string name="ft_library_conflict">播放清單已變更。請關閉此編輯器、重新整理播放清單後重新開啟，再儲存你的變更。</string>
+    <string name="ft_library_favorite_protected">「我的收藏」的名稱與簡介不可修改。</string>
+    <string name="ft_library_invalid_membership">無法確認歌曲清單，請關閉此編輯器並重新整理播放清單。</string>
+    <string name="ft_library_unknown_playlist">播放清單</string>
+    <string name="ft_library_target_applied">%1$s：已成功加入</string>
+    <string name="ft_library_target_noop">%1$s：已包含所選歌曲</string>
+    <string name="ft_library_target_conflict">%1$s：已在其他位置變更，請重新整理後再試</string>
+    <string name="ft_library_target_full">%1$s：加入後將超過 500 首上限</string>
+    <string name="ft_library_target_missing">%1$s：已無法使用</string>
+    <string name="ft_library_target_failed">%1$s：加入失敗，請重試</string>
+    <string name="ft_library_drag_song">長按並拖曳以調整「%1$s」的順序</string>
+    <string name="ft_queue_remove_song">從佇列移除</string>
+</resources>

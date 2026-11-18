@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ft_settings_language_title">言語</string>
+    <string name="ft_settings_language_desc">アプリの言語を選択します。既定ではシステムの言語に従います。</string>
+    <string name="ft_settings_language_system">システムの言語に従う</string>
+</resources>

@@ -21,12 +21,18 @@
     <string name="ft_listening_empty_artists">No matching artists.</string>
     <string name="ft_listening_search_albums">Search albums</string>
     <string name="ft_listening_empty_albums">No matching albums.</string>
-    <string name="ft_listening_tracks_count">%1$d tracks</string>
+    <plurals name="ft_listening_tracks_count">
+        <item quantity="one">%1$d track</item>
+        <item quantity="other">%1$d tracks</item>
+    </plurals>
     <string name="ft_listening_enqueue">Play later</string>
     <string name="ft_listening_add_to_playlist">Add to playlist</string>
     <string name="ft_listening_statistics">Listening statistics</string>
     <string name="ft_listening_empty_stats">Listen to music to build your most-played list.</string>
-    <string name="ft_listening_play_count">%1$d plays</string>
+    <plurals name="ft_listening_play_count">
+        <item quantity="one">%1$d play</item>
+        <item quantity="other">%1$d plays</item>
+    </plurals>
     <string name="ft_listening_song_actions">Song actions</string>
     <string name="ft_listening_create_playlist">Create playlist</string>
     <string name="ft_listening_shelf_order">Arrange library</string>
@@ -79,7 +85,10 @@
     <string name="ft_batch_add_to_playlist">Add to playlist</string>
     <string name="ft_batch_favorite">Favorite</string>
     <string name="ft_batch_remove">Remove</string>
-    <string name="ft_listening_remove_songs_message">Remove %1$d selected tracks from this playlist?</string>
+    <plurals name="ft_listening_remove_songs_message">
+        <item quantity="one">Remove %1$d selected track from this playlist?</item>
+        <item quantity="other">Remove %1$d selected tracks from this playlist?</item>
+    </plurals>
     <string name="ft_feedback_play_batch_next">Added to play next</string>
     <string name="ft_feedback_enqueued_batch">Added to queue</string>
     <string name="ft_feedback_favorited_batch">Added to favorites</string>
@@ -87,4 +96,5 @@
     <string name="ft_quick_play_all">Play all</string>
     <string name="ft_quick_shuffle">Shuffle</string>
     <string name="ft_quick_enqueue">Enqueue</string>
+    <string name="ft_random_change_batch">Shuffle recommendations</string>
 </resources>
